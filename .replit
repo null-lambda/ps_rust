@@ -1,0 +1,2 @@
+run = "cargo run < input.txt | tee output.txt"
+entrypoint = "src/main.rs"
