@@ -87,7 +87,6 @@ fn stdin() -> Vec<u8> {
 }
 
 fn count_quad_nodes(grid: &Vec<Vec<u32>>, width: usize) -> (u32, u32) {
-    // Returns (count of quad nodes, value)
     fn dfs(grid: &Vec<Vec<u32>>, width: usize, x: usize, y: usize) -> (u32, u32) {
         if width == 1 {
             match grid[x][y] {

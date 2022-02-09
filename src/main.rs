@@ -88,7 +88,13 @@ fn stdin() -> Vec<u8> {
 
 fn count_quad_nodes(output_buf: &mut Vec<u8>, grid: &Vec<Vec<u32>>, width: usize) -> (u32, u32) {
     // Returns (count of quad nodes, value)
-    fn dfs(output_buf: &mut Vec<u8>, grid: &Vec<Vec<u32>>, width: usize, x: usize, y: usize) -> (u32, u32) {
+    fn dfs(
+        output_buf: &mut Vec<u8>,
+        grid: &Vec<Vec<u32>>,
+        width: usize,
+        x: usize,
+        y: usize,
+    ) -> (u32, u32) {
         if width == 1 {
             match grid[x][y] {
                 0 => (1, 0),
@@ -104,7 +110,7 @@ fn count_quad_nodes(output_buf: &mut Vec<u8>, grid: &Vec<Vec<u32>>, width: usize
             match result {
                 (_, 0) => (1, 0),
                 (0, _) => (0, 1),
-                x => x
+                x => x,
             }
         }
     }
@@ -123,7 +129,7 @@ fn main() {
     let n = input.value();
     input.skip_line();
     let grid: Vec<Vec<_>> = (0..n)
-        .map(|_| input.line()[0..n].iter().map(|&x| x as u32).collect() )
+        .map(|_| input.line()[0..n].iter().map(|&x| x as u32).collect())
         .collect();
 
     let result = count_quad_nodes(&mut output_buf, &grid, n);
