@@ -158,46 +158,38 @@ fn main() {
 
     let mut output_buf = Vec::<u8>::new();
 
-    // infinity
-    const INF: u32 = u32::MAX;
+    let (n, m, k): (_, usize, usize) = (input.value(), input.value(), input.value());
+
+    const p: u64 = 1_000_000_007;
 
     #[derive(Clone, Copy)]
-    struct MinMax {
-        min: u32,
-        max: u32,
-    }
+    struct MulInt(u64);
 
-    impl MinMax {
-        fn new(value: u32) -> Self {
-            Self {
-                min: value,
-                max: value,
-            }
-        }
-    }
-
-    impl Monoid for MinMax {
+    impl Monoid for MulInt {
         fn id() -> Self {
-            Self { min: INF, max: 0 }
+            Self(1)
         }
         fn op(self, rhs: Self) -> Self {
-            Self {
-                min: self.min.min(rhs.min),
-                max: self.max.max(rhs.max),
-            }
+            Self((self.0 * rhs.0) % p)
         }
         fn op_assign(&mut self, rhs: Self) {
             *self = self.op(rhs);
         }
     }
 
-    let (n, m) = (input.value(), input.value());
-    let tree = SegmentTree::from_sized_iter((0..n).map(|_| MinMax::new(input.value())));
+    let mut tree = SegmentTree::from_sized_iter((0..n).map(|_| MulInt(input.value())));
 
-    for _ in 0..m {
-        let (a, b): (usize, usize) = (input.value(), input.value());
-        let MinMax { min, max } = tree.query_sum(a - 1..b);
-        writeln!(output_buf, "{} {}", min, max).unwrap();
+    for _ in 0..m + k {
+        match input.value::<i32>() {
+            1 => {
+                let (b, c): (usize, u64) = (input.value(), input.value());
+                tree.update(b - 1, MulInt(c));
+            }
+            _ => {
+                let (b, c): (usize, usize) = (input.value(), input.value());
+                writeln!(output_buf, "{}", tree.query_sum(b - 1..c).0).unwrap();
+            }
+        }
     }
 
     //writeln!(output_buf, "{}", result).unwrap();

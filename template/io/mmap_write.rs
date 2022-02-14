@@ -145,8 +145,6 @@ fn stdin() -> &'static str {
     unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(buffer, stat[6])) }
 }
 
-fn stdin() -> 
-
 fn main() {
     use io::*;
     use std::io::{BufReader, BufWriter, Read, Write};
