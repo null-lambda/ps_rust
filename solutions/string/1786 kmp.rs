@@ -43,32 +43,33 @@ mod io {
 
     impl InputStream for &[u8] {
         fn token(&mut self) -> &[u8] {
-            let i = self.iter().position(|&c| !is_whitespace(c)).unwrap();
+            let idx = self.iter().position(|&c| !is_whitespace(c)).unwrap();
             //.expect("no available tokens left");
-            *self = &self[i..];
-            let i = self
+            *self = &self[idx..];
+            let idx = self
                 .iter()
                 .position(|&c| is_whitespace(c))
                 .unwrap_or_else(|| self.len());
-            let (token, buf_new) = self.split_at(i);
+            let (token, buf_new) = self.split_at(idx);
             *self = buf_new;
             token
         }
 
         fn line(&mut self) -> &[u8] {
-            let i = self
+            let idx = self
                 .iter()
                 .position(|&c| c == b'\n')
-                .map(|i| i + 1)
+                .map(|idx| idx + 1)
                 .unwrap_or_else(|| self.len());
-            let (line, buf_new) = self.split_at(i);
+            let (line, buf_new) = self.split_at(idx);
             *self = buf_new;
             trim_newline(line)
         }
     }
 }
 
-use std::io::{BufReader, Read, Write};
+use std::io::Write;
+use std::io::{BufReader, Read};
 
 fn stdin() -> Vec<u8> {
     let stdin = std::io::stdin();
@@ -79,23 +80,50 @@ fn stdin() -> Vec<u8> {
     input_buf
 }
 
-#[derive(Debug)]
-struct TrieNode<T> {
-    value: T
-    children: [Option<Box<TrieNode<T>>>; 26]
-}
-
-impl<T> TrieNode<T> {
-    
-}
-
 fn main() {
     use io::InputStream;
     let input_buf = stdin();
     let mut input: &[u8] = &input_buf[..];
 
     let mut output_buf = Vec::<u8>::new();
-ㅇ
+
+    let s = input.line().to_vec();
+    let pattern = input.line().to_vec();
+    assert!(!s.is_empty());
+    assert!(!pattern.is_empty());
+
+    // build jump function
+    let mut jump_table = vec![0];
+    let mut i_prev = 0;
+    for i in 1..pattern.len() {
+        while i_prev > 0 && pattern[i] != pattern[i_prev]  {
+            i_prev = jump_table[i_prev - 1];
+        }
+        if pattern[i] == pattern[i_prev] {
+            i_prev += 1;
+        }
+        jump_table.push(i_prev);
+    }
+
+    // search patterns 
+    let mut result = Vec::new();
+    let mut j = 0;
+    for (i, c) in s.into_iter().enumerate() {
+        while j == pattern.len() || j > 0 && pattern[j] != c {
+            j = jump_table[j - 1];
+        }
+        if pattern[j] == c {
+            j += 1;
+        }
+        if j == pattern.len() {
+            result.push(1 + i - pattern.len());
+        }
+    }
+
+    writeln!(output_buf, "{}", result.len()).unwrap();
+    for i in result {
+        write!(output_buf, "{} ", i + 1).unwrap();
+    }
 
     std::io::stdout().write_all(&output_buf[..]).unwrap();
 }

@@ -43,32 +43,33 @@ mod io {
 
     impl InputStream for &[u8] {
         fn token(&mut self) -> &[u8] {
-            let i = self.iter().position(|&c| !is_whitespace(c)).unwrap();
+            let idx = self.iter().position(|&c| !is_whitespace(c)).unwrap();
             //.expect("no available tokens left");
-            *self = &self[i..];
-            let i = self
+            *self = &self[idx..];
+            let idx = self
                 .iter()
                 .position(|&c| is_whitespace(c))
                 .unwrap_or_else(|| self.len());
-            let (token, buf_new) = self.split_at(i);
+            let (token, buf_new) = self.split_at(idx);
             *self = buf_new;
             token
         }
 
         fn line(&mut self) -> &[u8] {
-            let i = self
+            let idx = self
                 .iter()
                 .position(|&c| c == b'\n')
-                .map(|i| i + 1)
+                .map(|idx| idx + 1)
                 .unwrap_or_else(|| self.len());
-            let (line, buf_new) = self.split_at(i);
+            let (line, buf_new) = self.split_at(idx);
             *self = buf_new;
             trim_newline(line)
         }
     }
 }
 
-use std::io::{BufReader, Read, Write};
+use std::io::Write;
+use std::io::{BufReader, Read};
 
 fn stdin() -> Vec<u8> {
     let stdin = std::io::stdin();
@@ -79,14 +80,22 @@ fn stdin() -> Vec<u8> {
     input_buf
 }
 
-#[derive(Debug)]
-struct TrieNode<T> {
-    value: T
-    children: [Option<Box<TrieNode<T>>>; 26]
-}
+use std::collections::BTreeMap;
 
-impl<T> TrieNode<T> {
-    
+#[derive(Clone, Debug)]
+struct Trie(BTreeMap<String, Trie>);
+
+impl Trie {
+    fn new() -> Self {
+        Self(BTreeMap::new())
+    }
+
+    fn insert<I: IntoIterator<Item = String>>(&mut self, path: I) {
+        let mut current = self;
+        for s in path {
+            current = current.0.entry(s).or_insert_with(|| Trie::new())
+        }
+    }
 }
 
 fn main() {
@@ -95,7 +104,28 @@ fn main() {
     let mut input: &[u8] = &input_buf[..];
 
     let mut output_buf = Vec::<u8>::new();
-ㅇ
+
+    let n = input.value();
+    let mut trie = Trie::new();
+    for _ in 0..n {
+        let k = input.value();
+        trie.insert((0..k).map(|_| String::from_utf8(input.token().to_vec()).unwrap()));
+    }
+
+    fn print_trie(output_buf: &mut Vec<u8>, trie: &Trie) {
+        fn dfs(output_buf: &mut Vec<u8>, trie: &Trie, depth: usize) {
+            for (k, v) in trie.0.iter() {
+                for _ in 0..depth * 2 {
+                    output_buf.push(b'-');
+                }
+                writeln!(output_buf, "{}", k).unwrap();
+                dfs(output_buf, &v, depth + 1);
+            }
+        }
+        dfs(output_buf, trie, 0);
+    }
+
+    print_trie(&mut output_buf, &trie);
 
     std::io::stdout().write_all(&output_buf[..]).unwrap();
 }

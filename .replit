@@ -1,4 +1,4 @@
-run = "cargo run < input.txt | tee output.txt"
+run = "cargo run --offline < input.txt | tee output.txt"
 entrypoint = "src/main.rs"
 language = "nix"
 
@@ -11,5 +11,5 @@ packageSearch = true
 [languages.rust]
 pattern = "**/*.rs"
 
-[languages.rust.languageServer]
-start = "rust-analyzer"
+# [languages.rust.languageServer]
+# start = "rust-analyzer"

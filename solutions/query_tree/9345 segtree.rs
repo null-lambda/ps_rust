@@ -79,48 +79,34 @@ fn stdin() -> Vec<u8> {
     input_buf
 }
 
-use std::ops::Range;
-
-// binary operation with identity and associative property
-// axioms:
-//    op(op(a, b), c) = op(a, op(b, c))
-//    op(a, id) = id
-//    op(id, a) = a
-trait Monoid {
+// commutative monoid
+trait CommMonoid {
     fn id() -> Self;
     fn op(self, rhs: Self) -> Self;
-    fn op_assign(&mut self, rhs: Self);
 }
 
-struct SegmentTree<T: Monoid> {
+struct SegmentTree<T: CommMonoid> {
     n: usize,
     data: Vec<T>,
 }
 
-impl<T: Monoid + Copy> SegmentTree<T> {
-    fn from_sized_iter<I>(iter: I) -> Self
+impl<T: CommMonoid + Copy> SegmentTree<T> {
+    fn from_iter<I>(n: usize, iter: I) -> Self
     where
         T: Clone,
-        I: IntoIterator<Item = T> + ExactSizeIterator,
+        I: Iterator<Item = T>,
     {
-        let n = iter.len();
-        let mut data = Vec::with_capacity(2 * n);
-        data.resize(n, T::id());
-        data.extend(iter);
+        use std::iter::repeat;
+        let mut data: Vec<T> = repeat(T::id()).take(n).chain(iter).collect();
 
-        let mut tree = Self { n, data };
-        tree.init();
-        tree
-    }
-
-    fn init(&mut self) {
-        for i in (1..self.n).rev() {
-            self.data[i] = T::op(self.data[i << 1], self.data[i << 1 | 1]);
+        for i in (1..n).rev() {
+            data[i] = data[i << 1].op(data[i << 1 | 1]);
         }
+        Self { n, data }
     }
 
     // sum on interval [left, right)
-    fn query_sum(&self, Range { mut start, mut end }: Range<usize>) -> T {
+    fn query_sum(&self, mut start: usize, mut end:usize) -> T {
         debug_assert!(end <= self.n);
         start += self.n;
         end += self.n;
@@ -128,15 +114,13 @@ impl<T: Monoid + Copy> SegmentTree<T> {
         let mut result = T::id();
         while start < end {
             if start & 1 != 0 {
-                result.op_assign(self.data[start]);
-                start += 1;
+                result = result.op(self.data[start]);
             }
             if end & 1 != 0 {
-                result.op_assign(self.data[end - 1]);
-                end -= 1;
+                result = result.op(self.data[end - 1]);
             }
-            start >>= 1;
-            end >>= 1;
+            start = (start + 1) >> 1;
+            end = end >> 1;
         }
         result
     }
@@ -145,12 +129,17 @@ impl<T: Monoid + Copy> SegmentTree<T> {
         idx += self.n;
         self.data[idx] = value;
         while idx > 1 {
-            self.data[idx >> 1] = T::op(self.data[idx], self.data[idx ^ 1]);
             idx >>= 1;
+            self.data[idx] = self.data[idx << 1].op(self.data[idx << 1 | 1]);
         }
+    }
+
+    fn get(&self, idx: usize) -> T {
+        self.data[idx + self.n]
     }
 }
 
+#[allow(dead_code)]
 fn main() {
     use io::InputStream;
     let input_buf = stdin();
@@ -158,41 +147,50 @@ fn main() {
 
     let mut output_buf = Vec::<u8>::new();
 
-    let (n, m, k): (_, usize, usize) = (input.value(), input.value(), input.value());
+    let test_cases = input.value();
+    for _ in 0..test_cases {
+        let n: usize = input.value();
+        let k: usize = input.value();
 
-    const p: u64 = 1_000_000_007;
+        #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+        struct MinMax<T>(T, T);
 
-    #[derive(Clone, Copy)]
-    struct MulInt(u64);
-
-    impl Monoid for MulInt {
-        fn id() -> Self {
-            Self(1)
-        }
-        fn op(self, rhs: Self) -> Self {
-            Self((self.0 * rhs.0) % p)
-        }ㅎㅎㅍㅎ
-        fn op_assign(&mut self, rhs: Self) {
-            *self = self.op(rhs);
-        }
-    }
-
-    let mut tree = SegmentTree::from_sized_iter((0..n).map(|_| MulInt(input.value())));
-
-    for _ in 0..m + k {
-        match input.value::<i32>() {
-            1 => {
-                let (b, c): (usize, u64) = (input.value(), input.value());
-                tree.update(b - 1, MulInt(c));
+        impl CommMonoid for MinMax<usize> {
+            fn id() -> Self {
+                Self(usize::MAX, 0)
             }
-            _ => {
-                let (b, c): (usize, usize) = (input.value(), input.value());
-                writeln!(output_buf, "{}", tree.query_sum(b - 1..c).0).unwrap();
+            fn op(self, other: Self) -> Self {
+                Self(self.0.min(other.0), self.1.max(other.1))
             }
         }
-    }
 
-    //writeln!(output_buf, "{}", result).unwrap();
+        let mut segtree = SegmentTree::from_iter(n, (0..n).map(|i| MinMax(i, i)));
+
+        for _ in 0..k {
+            let q = input.value();
+            let mut a = input.value();
+            let mut b = input.value();
+            if a > b {
+                std::mem::swap(&mut a, &mut b);
+            }
+            match q {
+                0 => {
+                    // swap a, b
+                    let temp = segtree.get(a);
+                    segtree.update(a, segtree.get(b));
+                    segtree.update(b, temp);
+                }
+                1 => {
+                    if segtree.query_sum(a, b + 1) == MinMax(a, b) {
+                        writeln!(output_buf, "YES").unwrap();
+                    } else {
+                        writeln!(output_buf, "NO").unwrap();
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
 
     std::io::stdout().write_all(&output_buf[..]).unwrap();
 }
