@@ -127,7 +127,7 @@ pub mod segtree {
         }
 
         #[inline]
-        pub fn get(&self, idx: usize) -> T {
+        pub fn get(&mut self, idx: usize) -> T {
             self.sum[idx + self.n]
         }
 
@@ -158,54 +158,100 @@ fn main() {
     let input_buf = stdin();
     let mut input: &[u8] = &input_buf[..];
 
-    let mut output_buf = Vec::<u8>::new();
+    // let mut output_buf = Vec::<u8>::new();
 
-    let n: usize = input.value();
-    let mut orders = vec![[0u32; 3]; n];
-    for j in 0..3 {
-        for i in 0..n {
-            orders[input.value::<usize>() - 1][j] = i as u32
+    let n = input.value();
+    let mut mines: Vec<_> = (0..n)
+        .map(|_| {
+            let x: u32 = input.value();
+            let y: u32 = input.value();
+            let w: i64 = input.value();
+            (x, y, w)
+        })
+        .collect();
+    mines.sort_unstable_by_key(|&(x, y, ..)| (x, y));
+
+    let mut ys: Vec<_> = mines
+        .iter()
+        .enumerate()
+        .map(|(i, &(_, y, _))| (i as u32, y))
+        .collect();
+    ys.sort_unstable_by_key(|&(_, y)| y);
+
+    let mut y_count = 0;
+    for i in 0..ys.len() {
+        mines[ys[i].0 as usize].1 = y_count as u32;
+        if i == ys.len() - 1 || ys[i].1 != ys[i + 1].1 {
+            y_count += 1;
         }
     }
-    orders.sort_unstable_by_key(|&[x, ..]| x);
 
     use segtree::{Monoid, SegTree};
-    use std::iter::empty;
 
-    #[derive(Copy, Clone, PartialEq, Eq)]
-    struct Min(u32);
-    impl Monoid for Min {
+    impl Monoid for i64 {
         fn id() -> Self {
-            Self(u32::MAX)
+            0
         }
         fn op(self, other: Self) -> Self {
-            Self(self.0.min(other.0))
+            self + other
         }
     }
 
-    let mut segtree = SegTree::from_iter(n + 1, empty::<Min>());
-    let result = orders
-        .into_iter()
-        .filter(|&[_x, y, z]| {
-            let is_current_minimal = z < segtree.query_range(0, y as usize).0;
-            /*
-            println!(
-                "{:?}",
-                (
-                    _x,
-                    y,
-                    z,
-                    segtree.query_range(0, y as usize).0,
-                    is_current_minimal
-                )
-            );
-            */
-            segtree.set(y as usize, Min(z));
-            is_current_minimal
-        })
-        .count();
+    #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+    struct MaximalSubSum<T: Monoid + Ord> {
+        sum: T,
+        full: T,
+        left: T,
+        right: T,
+    }
+
+    impl Monoid for MaximalSubSum<i64> {
+        fn id() -> Self {
+            MaximalSubSum {
+                sum: 0,
+                full: 0,
+                left: 0,
+                right: 0,
+            }
+        }
+        fn op(self, other: Self) -> Self {
+            MaximalSubSum {
+                sum: self.sum.max(other.sum).max(self.right.op(other.left)),
+                full: self.full.op(other.full),
+                left: self.left.max(self.full.op(other.left)),
+                right: other.right.max(self.right.op(other.full)),
+            }
+        }
+    }
+
+    let mut result: i64 = 0;
+    for i in 0..n {
+        if i == 0 || mines[i - 1].0 != mines[i].0 {
+            use std::iter::repeat;
+            let mut segtree = SegTree::from_iter(n, repeat(MaximalSubSum::id()).take(n));
+            for j in 0..mines[i..].len() {
+                let (x, y, w) = mines[i..][j];
+
+                let value = segtree.get(y as usize).sum + w;
+                segtree.set(
+                    y as usize,
+                    MaximalSubSum {
+                        sum: value,
+                        full: value,
+                        left: value,
+                        right: value,
+                    },
+                );
+
+                if j == mines[i..].len() - 1 || x != mines[i..][j + 1].0 {
+                    let value: i64 = segtree.query_range(0, n).sum;
+                    result = result.max(value);
+                }
+            }
+        }
+    }
 
     println!("{:?}", result);
 
-    std::io::stdout().write_all(&output_buf[..]).unwrap();
+    // std::io::stdout().write_all(&output_buf[..]).unwrap();
 }
