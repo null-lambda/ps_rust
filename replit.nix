@@ -5,6 +5,6 @@
 		pkgs.cargo
 		pkgs.cargo-edit
         pkgs.clippy
-        pkgs.rust-analyzer
+        # pkgs.rust-analyzer
 	];
 }

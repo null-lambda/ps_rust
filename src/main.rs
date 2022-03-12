@@ -79,77 +79,46 @@ fn stdin() -> Vec<u8> {
     input_buf
 }
 
-pub mod segtree {
-    // monoid, not necesserily commutative
-    pub trait Monoid {
-        fn id() -> Self;
-        fn op(self, rhs: Self) -> Self;
+use std::cell::Cell;
+struct DisjointSet {
+    pub parent: Vec<Cell<usize>>,
+    pub size: Vec<usize>,
+}
+
+impl DisjointSet {
+    fn new(n: usize) -> Self {
+        Self {
+            parent: (0..n).map(|i| Cell::new(i)).collect(),
+            size: vec![1; n],
+        }
     }
 
-    #[derive(Debug)]
-    pub struct SegTree<T> {
-        n: usize,
-        sum: Vec<T>,
+    fn find_root(&self, u: usize) -> usize {
+        if u == self.parent[u].get() {
+            u
+        } else {
+            self.parent[u].set(self.find_root(self.parent[u].get()));
+            self.parent[u].get()
+        }
     }
 
-    impl<T> SegTree<T>
-    where
-        T: Monoid + Copy + Eq,
-    {
-        pub fn from_iter<I>(n: usize, iter: I) -> Self
-        where
-            T: Clone,
-            I: Iterator<Item = T>,
-        {
-            use std::iter::repeat;
-            // let n = n.next_power_of_two();
-            let n = n * 2;
-            let mut sum: Vec<T> = repeat(T::id())
-                .take(n)
-                .chain(iter)
-                .chain(repeat(T::id()))
-                .take(2 * n)
-                .collect();
-            for i in (0..n).rev() {
-                sum[i] = sum[i << 1].op(sum[i << 1 | 1]);
-            }
-            Self { n, sum }
-        }
+    fn get_size(&self, u: usize) -> usize {
+        self.size[self.find_root(u)]
+    }
 
-        pub fn set(&mut self, mut idx: usize, value: T) {
-            debug_assert!(idx < self.n);
-            idx += self.n;
-            self.sum[idx] = value;
-            while idx > 1 {
-                idx >>= 1;
-                self.sum[idx] = self.sum[idx << 1].op(self.sum[idx << 1 | 1]);
-            }
+    // returns whether two set were different
+    fn merge(&mut self, mut u: usize, mut v: usize) -> bool {
+        u = self.find_root(u);
+        v = self.find_root(v);
+        if u == v {
+            return false;
         }
-
-        #[inline]
-        pub fn get(&self, idx: usize) -> T {
-            self.sum[idx + self.n]
+        if self.size[u] > self.size[v] {
+            std::mem::swap(&mut u, &mut v);
         }
-
-        // sum on interval [left, right)
-        pub fn query_range(&self, mut start: usize, mut end: usize) -> T {
-            debug_assert!(start < self.n && end <= self.n);
-            start += self.n;
-            end += self.n;
-            let (mut result_left, mut result_right) = (T::id(), T::id());
-            while start < end {
-                if start & 1 != 0 {
-                    result_left = result_left.op(self.sum[start]);
-                }
-                if end & 1 != 0 {
-                    result_right = self.sum[end - 1].op(result_right);
-                }
-                start = (start + 1) >> 1;
-                end >>= 1;
-            }
-
-            result_left.op(result_right)
-        }
+        self.parent[v].set(u);
+        self.size[u] += self.size[v];
+        true
     }
 }
 
@@ -160,52 +129,88 @@ fn main() {
 
     let mut output_buf = Vec::<u8>::new();
 
-    let n: usize = input.value();
-    let mut orders = vec![[0u32; 3]; n];
-    for j in 0..3 {
-        for i in 0..n {
-            orders[input.value::<usize>() - 1][j] = i as u32
-        }
-    }
-    orders.sort_unstable_by_key(|&[x, ..]| x);
+    use std::iter::once;
+    use std::collections::HashMap;
 
-    use segtree::{Monoid, SegTree};
-    use std::iter::empty;
+    let m: u32 = input.value();
+    let n: u32 = input.value();
+    let n_queries: usize = input.value();
+    let n_verts = (m * n) as usize;
 
-    #[derive(Copy, Clone, PartialEq, Eq)]
-    struct Min(u32);
-    impl Monoid for Min {
-        fn id() -> Self {
-            Self(u32::MAX)
-        }
-        fn op(self, other: Self) -> Self {
-            Self(self.0.min(other.0))
-        }
-    }
-
-    let mut segtree = SegTree::from_iter(n + 1, empty::<Min>());
-    let result = orders
-        .into_iter()
-        .filter(|&[_x, y, z]| {
-            let is_current_minimal = z < segtree.query_range(0, y as usize).0;
-            /*
-            println!(
-                "{:?}",
-                (
-                    _x,
-                    y,
-                    z,
-                    segtree.query_range(0, y as usize).0,
-                    is_current_minimal
-                )
-            );
-            */
-            segtree.set(y as usize, Min(z));
-            is_current_minimal
+    let hs: Vec<u32> = (0..n_verts).map(|_| input.value()).collect();
+    let hs: &Vec<_> = hs.as_ref();
+    let mut coord_to_idx = |x1: u32, x2: u32| x1 * n as u32 + x2;
+    let mut edges: Vec<_> = (0..m - 1)
+        .flat_map(|i| {
+            (0..n).flat_map(move |j| {
+                let u = coord_to_idx(i, j);
+                let v = coord_to_idx(i + 1, j);
+                let weight = hs[u as usize].max(hs[v as usize]);
+                once((u, v, weight)).chain(once((v, u, weight)))
+            })
         })
-        .count();
+        .chain((0..m).flat_map(|i| {
+            (0..n - 1).flat_map(move |j| {
+                let u = coord_to_idx(i, j);
+                let v = coord_to_idx(i, j + 1);
+                let weight = hs[u as usize].max(hs[v as usize]);
+                once((u, v, weight)).chain(once((v, u, weight)))
+            })
+        }))
+        .collect();
+    edges.sort_unstable_by_key(|&(.., weight)| weight);
+    let n_edges = edges.len();
 
-    println!("{:?}", result);
+    let queries: Vec<[_; 2]> = (0..n_queries)
+        .map(|_| {
+            let x1: u32 = input.value();
+            let y1: u32 = input.value();
+            let x2: u32 = input.value();
+            let y2: u32 = input.value();
+            [coord_to_idx(x1, y1), coord_to_idx(x2, y2)]
+        })
+        .collect();
+
+    const H_MAX: u32 = 1_000_000;
+    let mut bound: Vec<[u32; 2]> = (0..n_queries).map(|_| [1, H_MAX + 1]).collect();
+    let mut finished: Vec<bool> = vec![false; n_queries];
+    let mut result: Vec<Option<(u32, u32)>> = vec![None; n_queries];
+    loop {
+        let mut mid_indices = HashMap::<u32, Vec<usize>>::new();
+        for (i, &[left, right]) in bound.iter().enumerate() {
+            if !finished[i] {
+                mid_indices.entry((left + right) / 2).or_default().push(i);
+            }
+        }
+        if mid_indices.is_empty() {
+            break;
+        }
+
+        let mut dset = DisjointSet::new(n_verts);
+        for (mid, &(u, v, w)) in edges.iter().enumerate() {
+            dset.merge(u as usize, v as usize);
+            for &j in mid_indices
+                .get(&(mid as u32))
+                .into_iter()
+                .flat_map(|indices| indices.iter())
+            {
+                let [left, right] = queries[j];
+                if dset.find_root(left as usize) == dset.find_root(right as usize) {
+                    bound[j][1] = mid as u32;
+                    result[j] = Some(w);
+                } else {
+                    bound[j][0] = mid as u32 + 1;
+                }
+                if bound[j][0] == bound[j][1] {
+                    finished[j] = true;
+                }
+            }
+        }
+    }
+
+    for w in result.iter() {
+            writeln!(output_buf, "{}", w.unwrap()).unwrap();
+    }
 
     std::io::stdout().write_all(&output_buf[..]).unwrap();
 }
