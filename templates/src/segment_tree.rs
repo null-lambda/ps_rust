@@ -15,14 +15,18 @@ pub mod segtree {
     where
         T: Monoid + Copy + Eq,
     {
+         pub fn with_size(n: usize) -> Self {
+            Self {
+                n,
+                sum: vec![T::id(); 2 * n],
+            }
+        }
+        
         pub fn from_iter<I>(n: usize, iter: I) -> Self
         where
-            T: Clone,
             I: Iterator<Item = T>,
         {
             use std::iter::repeat;
-            // let n = n.next_power_of_two();
-            let n = n * 2;
             let mut sum: Vec<T> = repeat(T::id())
                 .take(n)
                 .chain(iter)
@@ -95,20 +99,34 @@ pub mod segtree {
         pub lazy: Vec<F>,
     }
 
+
     impl<T, F> LazySegTree<T, F>
     where
         T: Monoid + Copy + Eq,
         F: MonoidAction<T> + Copy + Eq,
     {
+        pub fn with_size(n: usize) -> Self {
+            let n = n.next_power_of_two();
+            Self {
+                n,
+                max_height: usize::BITS - n.leading_zeros(),
+                sum: vec![T::id(); 2 * n],
+                lazy: vec![F::id(); n],
+            }
+        }
+
         pub fn from_iter<I>(n: usize, iter: I) -> Self
         where
-            T: Clone,
-            I: Iterator<Item = T>,
+            I: IntoIterator<Item = T>,
         {
             use std::iter::repeat;
             let n = n.next_power_of_two();
-            let mut sum: Vec<T> = repeat(T::id()).take(n).chain(iter).collect();
-            sum.resize(2 * n, T::id());
+            let mut sum: Vec<T> = repeat(T::id())
+                .take(n)
+                .chain(iter.into_iter())
+                .chain(repeat(T::id()))
+                .take(2 * n)
+                .collect();
             for i in (0..n).rev() {
                 sum[i] = sum[i << 1].op(sum[i << 1 | 1]);
             }
