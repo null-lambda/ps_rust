@@ -1,34 +1,43 @@
+use std::cell::Cell;
+
 struct DisjointSet {
-    parent: Vec<usize>,
-    size: Vec<usize>,
+    parent: Vec<Cell<usize>>,
+    size: Vec<u32>,
 }
 
 impl DisjointSet {
     fn new(n: usize) -> Self {
         Self {
-            parent: (0..n).collect(),
-            size: std::iter::repeat(1).take(n).collect(),
+            parent: (0..n).map(|i| Cell::new(i)).collect(),
+            size: vec![1; n],
         }
     }
 
-    fn find_root(&mut self, u: usize) -> usize {
-        if u == self.parent[u] {
+    fn find_root(&self, u: usize) -> usize {
+        if u == self.parent[u].get() {
             u
         } else {
-            self.parent[u] = self.find_root(self.parent[u]);
-            self.parent[u]
+            self.parent[u].set(self.find_root(self.parent[u].get()));
+            self.parent[u].get()
         }
     }
 
-    fn merge(&mut self, mut u: usize, mut v: usize) {
+    fn get_size(&self, u: usize) -> u32 {
+        self.size[self.find_root(u)]
+    }
+
+    // returns whether two set were different
+    fn merge(&mut self, mut u: usize, mut v: usize) -> bool {
         u = self.find_root(u);
         v = self.find_root(v);
-        if u != v {
-            if self.size[u] > self.size[v] {
-                std::mem::swap(&mut u, &mut v);
-            }
-            self.parent[v] = u;
-            self.size[u] += self.size[v];
+        if u == v {
+            return false;
         }
+        if self.size[u] > self.size[v] {
+            std::mem::swap(&mut u, &mut v);
+        }
+        self.parent[v].set(u);
+        self.size[u] += self.size[v];
+        true
     }
 }

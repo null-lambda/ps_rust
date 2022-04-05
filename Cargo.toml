@@ -7,6 +7,9 @@ edition = "2018"
 [workspace]
 members = ["templates"]
 
+[dependencies]
+# rand = "0.8.5"
+
 [dev-dependencies]
 # clippy = "0.0.302"
 
