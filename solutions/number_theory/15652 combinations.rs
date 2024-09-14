@@ -76,7 +76,7 @@ mod io {
     }
 }
 
-use std::io::{*, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write, *};
 
 fn stdin() -> Vec<u8> {
     let stdin = std::io::stdin();
@@ -88,7 +88,14 @@ fn stdin() -> Vec<u8> {
 
 const N_MAX: usize = 8;
 
-fn print_combinations(output_buf: &mut Vec<u8>, stack: &mut [u8; N_MAX], depth: u8, start: u8, n: u8, m: u8) {
+fn print_combinations(
+    output_buf: &mut Vec<u8>,
+    stack: &mut [u8; N_MAX],
+    depth: u8,
+    start: u8,
+    n: u8,
+    m: u8,
+) {
     if depth == m {
         for i in 0..m {
             output_buf.push(stack[i as usize] + b'0');

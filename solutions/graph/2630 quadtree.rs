@@ -103,7 +103,7 @@ fn count_quad_nodes(grid: &Vec<Vec<u32>>, width: usize) -> (u32, u32) {
             match result {
                 (_, 0) => (1, 0),
                 (0, _) => (0, 1),
-                x => x
+                x => x,
             }
         }
     }

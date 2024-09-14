@@ -11,5 +11,7 @@ fn main() {
 
     // do reading and writing
     writer.write_all(b"hello world\n").unwrap();
-    writer.write_fmt(format_args!("hello {}\n", "world")).unwrap();
+    writer
+        .write_fmt(format_args!("hello {}\n", "world"))
+        .unwrap();
 }

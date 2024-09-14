@@ -83,7 +83,6 @@ fn stdin() -> Vec<u8> {
     input_buf
 }
 
-
 fn main() {
     use io::*;
 

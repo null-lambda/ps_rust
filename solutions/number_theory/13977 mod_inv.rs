@@ -131,7 +131,7 @@ fn main() {
                 as u64)
             % P;
         writeln!(output_buf, "{}", result).unwrap();
-    } 
+    }
 
     std::io::stdout().write(&output_buf[..]).unwrap();
 }

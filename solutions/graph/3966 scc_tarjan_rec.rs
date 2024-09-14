@@ -155,7 +155,9 @@ fn main() {
             }
         }
 
-        let DfsState { scc_index, mut scc, .. } = state;
+        let DfsState {
+            scc_index, mut scc, ..
+        } = state;
         let mut has_parent = vec![false; scc.len()];
         for u in 0..n {
             for &v in &neighbors[u] {
@@ -166,9 +168,7 @@ fn main() {
             }
         }
 
-        let starting_area: Vec<_> = (0..scc.len())
-            .filter(|&i| !has_parent[i])
-            .collect();
+        let starting_area: Vec<_> = (0..scc.len()).filter(|&i| !has_parent[i]).collect();
 
         if let [i] = *starting_area.as_slice() {
             let component = &mut scc[i];

@@ -207,7 +207,7 @@ fn main() {
     // println!("{:?}", state.dp[0]);
 
     let mut state = DnCState {
-        dp: [[(0, 0); N_MAX + 1]; 2]
+        dp: [[(0, 0); N_MAX + 1]; 2],
     };
     for i in 1..=b {
         state.dp[1][i].0 = (i as u64 - 1) * cost_acc[i];

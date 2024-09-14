@@ -152,7 +152,7 @@ fn main() {
         }
     }
 
-    // should be optimized 
+    // should be optimized
     /*
     for start in 0..n {
         if state.order[start] == NOT_VISITED {
@@ -160,10 +160,14 @@ fn main() {
         }
     }*/
     dfs(start, &neighbors, &mut state);
-    
 
     // contract each scc into a point
-    let DfsState { scc_index, scc, order, .. } = state;
+    let DfsState {
+        scc_index,
+        scc,
+        order,
+        ..
+    } = state;
     let n_scc = scc.len();
     let mut scc_parents: Vec<Vec<usize>> = (0..n_scc).map(|_| Vec::new()).collect();
     for u in 0..n {
@@ -176,7 +180,7 @@ fn main() {
             }
         }
     }
-    
+
     for i in 0..n_scc {
         scc_parents[i].sort_unstable();
         scc_parents[i].dedup();

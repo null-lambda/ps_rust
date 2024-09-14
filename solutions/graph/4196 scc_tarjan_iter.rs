@@ -117,7 +117,7 @@ fn main() {
             low_link: vec![100_000_000; n],
             scc_index: vec![100_000_000; n],
             finished: vec![false; n],
-            scc_count: 0
+            scc_count: 0,
         };
 
         fn dfs_iterative(start: usize, neighbors: &Vec<Vec<usize>>, state: &mut DfsState) {
@@ -179,7 +179,11 @@ fn main() {
             }
         }
 
-        let DfsState { scc_index, scc_count, .. } = state;
+        let DfsState {
+            scc_index,
+            scc_count,
+            ..
+        } = state;
         let mut has_parent = vec![false; scc_count];
         for u in 0..n {
             for &v in &neighbors[u] {

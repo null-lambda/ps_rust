@@ -156,7 +156,7 @@ fn main() {
     let mut planar_visited = [[[false; 10]; 10]; 10];
     let cell_start = OrientedCell([1, 2, 3, 4]);
     cell_visited.insert(cell_start.0[0]);
-    
+
     let [x0, y0, z0] = (1..=nx)
         .flat_map(|x| (1..=ny).flat_map(move |y| (1..=nz).map(move |z| [x, y, z])))
         .find(|&[x, y, z]| grid[x][y][z])
@@ -174,12 +174,11 @@ fn main() {
             let cell_next = dir.rotate(cell_position);
             let planar_next = dir.translate_planar(planar_position);
             let [nx, ny, nz] = planar_next;
-            if grid[nx][ny][nz] && !planar_visited[nx][ny][nz] 
-            {
+            if grid[nx][ny][nz] && !planar_visited[nx][ny][nz] {
                 if cell_visited.contains(&cell_next.0[0]) {
                     return false;
                 }
-                
+
                 cell_visited.insert(cell_next.0[0]);
                 planar_visited[nx][ny][nz] = true;
 

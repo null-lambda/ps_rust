@@ -79,7 +79,7 @@ fn stdin() -> Vec<u8> {
     input_buf
 }
 
-fn two_satisfiability()
+// fn two_satisfiability()
 
 fn main() {
     use io::InputStream;
@@ -107,11 +107,11 @@ fn main() {
     let idx_to_prop = |i: usize| -> i32 {
         if i < n_props {
             i as i32 + 1
-        } else  {
+        } else {
             n_props as i32 - 1 - i as i32
         }
     };
-    
+
     for _ in 0..n_edges {
         let p: i32 = input.value();
         let q: i32 = input.value();
@@ -177,21 +177,17 @@ fn main() {
         }
     }
 
-    let DfsState {
-        scc_index,
-        scc,
-        ..
-    } = state;
+    let DfsState { scc_index, scc, .. } = state;
     // let n_scc = scc.len();
 
     let satisfiable =
         (1..=(n_props as i32)).all(|p| scc_index[prop_to_idx(p)] != scc_index[prop_to_idx(-p)]);
     if satisfiable {
         writeln!(output_buf, "1");
-        
+
         // variable assignment function
         let mut interpretation = vec![None; n_props];
-    
+
         // sccs are ordered in reverse topological order
         for component in &scc {
             for &i in component.iter() {
@@ -209,7 +205,6 @@ fn main() {
     } else {
         writeln!(output_buf, "0");
     }
-
 
     // println!("{:?}", neighbors.iter().enumerate().collect::<Vec<_>>());
     // println!("{:?}", scc);

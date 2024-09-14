@@ -100,8 +100,8 @@ fn move_upward(parent: &Vec<usize>, u: usize, n: usize) -> usize {
 fn least_common_ancestor(parent: &Vec<usize>, mut u: usize, mut v: usize) -> usize {
     if u == v {
         return u;
-    }  
-    
+    }
+
     let (ru, rv) = (rank(&parent, u), rank(&parent, v));
     if ru < rv {
         v = move_upward(&parent, v, rv - ru);

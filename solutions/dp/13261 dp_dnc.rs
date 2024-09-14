@@ -90,7 +90,7 @@ fn main() {
 
     let n: usize = input.value();
     let g_bound: usize = input.value();
-    let g_bound= n.min(g_bound);
+    let g_bound = n.min(g_bound);
     let sum: Vec<u64> = once(0)
         .chain((0..n).map(|_| input.value::<u32>()).scan(0, |state, x| {
             *state += x as u64;

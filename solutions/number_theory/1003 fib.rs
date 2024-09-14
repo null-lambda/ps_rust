@@ -92,7 +92,7 @@ fn main() {
     let input_buf = stdin();
     let mut input: &[u8] = &input_buf;
 
-    let mut output_buf =  Vec::<u8>::new();
+    let mut output_buf = Vec::<u8>::new();
 
     // fibbonacci sequence with initial value a0 = 1, a1 = 0
     const N_MAX: usize = 40;

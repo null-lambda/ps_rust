@@ -155,7 +155,7 @@ fn main() {
     }
     println!("{:?}", z_ordering);
     */
-    
+
     let mut dx_prev = 0.0f64;
     let mut dy_prev = 0.0f64;
     let mut z_prev = lines[LineType::XL as usize][0].1;
@@ -185,8 +185,7 @@ fn main() {
 
         let dz = z - z_prev;
         if dz != 0 {
-            let d_vol = (dz as f64)
-                * (dx * (2.0 * dy + dy_prev) + dx_prev * (2.0 * dy_prev + dy));
+            let d_vol = (dz as f64) * (dx * (2.0 * dy + dy_prev) + dx_prev * (2.0 * dy_prev + dy));
             total += d_vol;
 
             /* println!(

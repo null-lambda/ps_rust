@@ -131,7 +131,7 @@ fn main() {
     }
     //println!("{:?}", max_dist);
     println!("{}", max_dist[end]);
-    
+
     let mut visited = vec![false; n];
     let mut dfs_stack = vec![end];
     let mut count_max_path = 0;
@@ -150,7 +150,6 @@ fn main() {
         }
     }
     println!("{:?}", count_max_path);
-
 
     std::io::stdout().write(&output_buf[..]).unwrap();
 }

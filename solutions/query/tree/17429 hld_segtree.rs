@@ -388,7 +388,10 @@ fn main() {
             AffineTrans(0, 1)
         }
         fn op(self, other: Self) -> Self {
-            AffineTrans((self.0 + (self.1 * other.0) % P) % P, (self.1 * other.1) % P)
+            AffineTrans(
+                (self.0 + (self.1 * other.0) % P) % P,
+                (self.1 * other.1) % P,
+            )
         }
     }
     impl MonoidAction<Add> for AffineTrans {

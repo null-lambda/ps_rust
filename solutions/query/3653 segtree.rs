@@ -78,8 +78,8 @@ fn stdin() -> Vec<u8> {
 }
 
 pub mod segtree {
-    use std::ops::Range ;
-    
+    use std::ops::Range;
+
     pub trait Monoid {
         fn id() -> Self;
         fn op(self, rhs: Self) -> Self;
@@ -135,8 +135,8 @@ pub mod segtree {
         }
 
         // sum on interval [left, right)
-        pub fn query_range(&self,range: Range<usize>) -> T {
-            let Range { mut start, mut end} = range;
+        pub fn query_range(&self, range: Range<usize>) -> T {
+            let Range { mut start, mut end } = range;
             debug_assert!(start < self.n && end <= self.n);
             start += self.n;
             end += self.n;
@@ -180,7 +180,7 @@ fn main() {
                 self + other
             }
         }
-        
+
         let mut position: Vec<u32> = (0..n as u32).rev().collect();
         let mut top = n;
         let mut segtree = SegTree::from_iter(m + n, (0..m + n).map(|_| 1i32));

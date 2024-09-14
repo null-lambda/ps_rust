@@ -103,7 +103,7 @@ impl<T: CommMonoid + Copy> SegmentTree<T> {
     }
 
     // sum on interval [left, right)
-    fn apply_range(&mut self, mut start: usize, mut end: usize, value: T)  {
+    fn apply_range(&mut self, mut start: usize, mut end: usize, value: T) {
         debug_assert!(end <= self.n);
         start += self.n;
         end += self.n;

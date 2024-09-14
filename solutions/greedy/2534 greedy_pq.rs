@@ -105,8 +105,10 @@ fn main() {
     use std::cmp::Reverse;
     use std::collections::BinaryHeap;
     let min_path = {
-        let mut queue: BinaryHeap<Reverse<usize>> = (0..k).filter(|&u| indegree[u] == 0)
-            .map(|u| Reverse(u)).collect();
+        let mut queue: BinaryHeap<Reverse<usize>> = (0..k)
+            .filter(|&u| indegree[u] == 0)
+            .map(|u| Reverse(u))
+            .collect();
 
         let mut result = vec![0; k];
         for i in (0..k as i32).rev() {
@@ -121,9 +123,10 @@ fn main() {
         }
         result.into_iter()
     };
-    
+
     let max_path = {
-        let mut queue: BinaryHeap<Reverse<usize>> = (0..k).filter(|&u| indegree_rev[u] == 0)
+        let mut queue: BinaryHeap<Reverse<usize>> = (0..k)
+            .filter(|&u| indegree_rev[u] == 0)
             .map(|u| Reverse(u))
             .collect();
 
@@ -145,7 +148,10 @@ fn main() {
     // println!("{:?}", max_path.clone().collect::<Vec<_>>());
 
     let p: i64 = 1_000_000_007;
-    let result = min_path.rev().zip(max_path.rev()).map(|(u1, u2)| (u2 - u1) as i64)
+    let result = min_path
+        .rev()
+        .zip(max_path.rev())
+        .map(|(u1, u2)| (u2 - u1) as i64)
         .fold(0, |acc, u| (acc * n + u) % p);
     println!("{:?}", result);
 

@@ -205,7 +205,8 @@ fn main() {
     let mut total: u64 = 0;
     let mut i_group_start = 0;
     for (i, &(x, _)) in points.iter().enumerate() {
-        total += seg_tree.query_sum(0..x as usize).0 * seg_tree.query_sum((x + 1) as usize..x_bound).0;
+        total +=
+            seg_tree.query_sum(0..x as usize).0 * seg_tree.query_sum((x + 1) as usize..x_bound).0;
         total %= 1_000_000_007;
 
         let group_key = |&(_, y)| y;

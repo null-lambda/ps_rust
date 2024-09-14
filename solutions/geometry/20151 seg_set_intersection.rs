@@ -204,8 +204,8 @@ fn segment_intersects<T: Scalar + Ord + std::fmt::Debug + std::fmt::Display>(
     println!("{} {} {} , {:?}={:?}", det, mul_det_t, mul_det_s, i1, i2);
     */
 
-    let is_endpoint = (T::zero() == mul_det_t || mul_det_t == det) 
-        &&(T::zero() == mul_det_s || mul_det_s == det);
+    let is_endpoint = (T::zero() == mul_det_t || mul_det_t == det)
+        && (T::zero() == mul_det_s || mul_det_s == det);
     if is_endpoint {
         return false;
     }

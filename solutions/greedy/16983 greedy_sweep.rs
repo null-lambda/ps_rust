@@ -99,25 +99,27 @@ fn main() {
         count[x2 as usize][y2 as usize] += 1;
     }
 
-    // treat -1 as negative coin. 
-    // sweep all coins from left to right, to eliminate all blank or exceeding cells. 
-    result += count.into_iter().scan([0i32; 2], |state, count| {
-        let mut moves = state[0].abs() + state[1].abs();
-        state[0] += count[0];
-        state[1] += count[1];
-        if state[0].signum() * state[1].signum() == -1 {
-            if state[0].abs() <= state[1].abs() {
-                moves += state[0].abs();
-                *state = [0, state[1] + state[0]];
-            } else {
-                moves += state[1].abs();
-                *state = [state[1] + state[0], 0];
+    // treat -1 as negative coin.
+    // sweep all coins from left to right, to eliminate all blank or exceeding cells.
+    result += count
+        .into_iter()
+        .scan([0i32; 2], |state, count| {
+            let mut moves = state[0].abs() + state[1].abs();
+            state[0] += count[0];
+            state[1] += count[1];
+            if state[0].signum() * state[1].signum() == -1 {
+                if state[0].abs() <= state[1].abs() {
+                    moves += state[0].abs();
+                    *state = [0, state[1] + state[0]];
+                } else {
+                    moves += state[1].abs();
+                    *state = [state[1] + state[0], 0];
+                }
             }
-        }
-        Some(moves as u64)
-    }).sum::<u64>();
-    
-    
+            Some(moves as u64)
+        })
+        .sum::<u64>();
+
     println!("{}", result);
 
     std::io::stdout().write(&output_buf[..]).unwrap();

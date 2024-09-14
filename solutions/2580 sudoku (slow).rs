@@ -145,7 +145,7 @@ mod sudoku {
                 .min_by_key(|(_, n)| n.clone())
             {
                 None => true,
-                Some((_, 0)) => { false },
+                Some((_, 0)) => false,
                 Some((target_cell, _)) => {
                     for val in 1..=9 {
                         if env.candidate_buf[target_cell][val as usize] {

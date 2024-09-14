@@ -3,6 +3,7 @@ use std::collections::HashSet;
 #[allow(dead_code)]
 mod fast_io {
     use std::fmt::Debug;
+    use std::io::{BufRead, BufReader, BufWriter, Read, Stdin, StdinLock, Stdout};
     use std::str::*;
 
     pub trait InputStream {
@@ -42,8 +43,6 @@ mod fast_io {
         }
         s
     }
-
-    use std::io::{BufRead, BufReader, BufWriter, Read, Stdin, Stdout};
 
     pub struct InputAtOnce {
         buf: Box<[u8]>,
@@ -169,9 +168,9 @@ mod fast_io {
         InputAtOnce::new(buf)
     }
 
-    // pub fn stdin_buf() -> LineSyncedInput<BufReader<StdinLock<'static>>> {
-    //     LineSyncedInput::new(BufReader::new(std::io::stdin().lock()))
-    // }
+    pub fn stdin_buf_locked() -> LineSyncedInput<BufReader<StdinLock<'static>>> {
+        LineSyncedInput::new(BufReader::new(std::io::stdin().lock()))
+    }
 
     // no lock
     pub fn stdin_buf() -> LineSyncedInput<BufReader<Stdin>> {

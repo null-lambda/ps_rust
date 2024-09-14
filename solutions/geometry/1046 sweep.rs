@@ -71,7 +71,7 @@ mod io {
 use std::io::{BufReader, Read /*, Write*/};
 use std::ops::*;
 
-fn cross<T: Mul<Output=T> + Sub<Output=T> + Copy>((x1, y1): (T, T), (x2, y2): (T, T)) -> T {
+fn cross<T: Mul<Output = T> + Sub<Output = T> + Copy>((x1, y1): (T, T), (x2, y2): (T, T)) -> T {
     x1 * y2 - x2 * y1
 }
 

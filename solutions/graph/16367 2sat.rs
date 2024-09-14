@@ -145,8 +145,7 @@ fn main() {
             low_link: vec![100_000_000; n],
             finished: vec![false; n],
             scc_index: vec![100_000_000; n],
-            scc_count: 0
-            // scc: vec![],
+            scc_count: 0, // scc: vec![],
         };
 
         fn dfs(u: usize, neighbors: &[Vec<usize>], state: &mut DfsState) {
@@ -190,13 +189,14 @@ fn main() {
 
         use std::cmp::Ordering;
         // variable assignment function
-        let interpretation: Option<Vec<_>> =
-            (0..n_props).map(|i| match scc_index[i].cmp(&scc_index[neg_idx(i)]) {
+        let interpretation: Option<Vec<_>> = (0..n_props)
+            .map(|i| match scc_index[i].cmp(&scc_index[neg_idx(i)]) {
                 Ordering::Equal => None,
                 Ordering::Greater => Some(false),
                 Ordering::Less => Some(true),
-            }).collect();
-        
+            })
+            .collect();
+
         match interpretation {
             Some(interpretation) => {
                 for p_value in interpretation {

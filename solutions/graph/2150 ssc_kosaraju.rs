@@ -109,7 +109,7 @@ fn main() {
             while let Some((u, fin)) = dfs_stack.pop() {
                 if fin {
                     kosaraju_stack.push(u);
-                } else if !visited[u]  {
+                } else if !visited[u] {
                     visited[u] = true;
                     dfs_stack.push((u, true));
                     for &v in neighbors[u].iter().rev() {
@@ -117,7 +117,7 @@ fn main() {
                             dfs_stack.push((v, false));
                         }
                     }
-                } 
+                }
             }
         }
     }

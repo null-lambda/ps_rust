@@ -96,7 +96,7 @@ fn main() {
     let mut jump_table = vec![0];
     let mut i_prev = 0;
     for i in 1..pattern.len() {
-        while i_prev > 0 && pattern[i] != pattern[i_prev]  {
+        while i_prev > 0 && pattern[i] != pattern[i_prev] {
             i_prev = jump_table[i_prev - 1];
         }
         if pattern[i] == pattern[i_prev] {
@@ -105,7 +105,7 @@ fn main() {
         jump_table.push(i_prev);
     }
 
-    // search patterns 
+    // search patterns
     let mut result = Vec::new();
     let mut j = 0;
     for (i, c) in s.into_iter().enumerate() {

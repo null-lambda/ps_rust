@@ -92,7 +92,7 @@ fn main() {
     let mut cost = vec![0];
 
     /*
-    // O( n^2 ) 
+    // O( n^2 )
     {
         let mut cost = vec![0];
         for i in 1..n {
@@ -118,7 +118,7 @@ fn main() {
             cvhull.pop();
         }
         cvhull.push((x, line));
-    
+
         let (_, line) = cvhull[cvhull.partition_point(|&(x, ..)| x <= a_list[i] as f32) - 1];
         let y = line.0 + a_list[i] as u64 * line.1 as u64;
         cost.push(y);

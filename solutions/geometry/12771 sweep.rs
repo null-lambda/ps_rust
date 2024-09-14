@@ -125,15 +125,16 @@ fn main() {
             };
             events.sort_by(cmp);
 
-            base_score + events
-                .iter()
-                .map(|&[.., score]| score)
-                .scan(0, |acc, score| {
-                    *acc += score;
-                    Some(*acc)
-                })
-                .max()
-                .unwrap_or(0)
+            base_score
+                + events
+                    .iter()
+                    .map(|&[.., score]| score)
+                    .scan(0, |acc, score| {
+                        *acc += score;
+                        Some(*acc)
+                    })
+                    .max()
+                    .unwrap_or(0)
         })
         .max()
         .unwrap();

@@ -249,11 +249,11 @@ fn main() {
         fn id() -> Self {
             Max(i32::MIN)
         }
-        fn op(self, other: Self) -> Self{
+        fn op(self, other: Self) -> Self {
             Max(self.0.max(other.0))
         }
     }
-    
+
     impl Monoid for i32 {
         fn id() -> Self {
             0
@@ -278,8 +278,8 @@ fn main() {
             let _x2: i32 = input.value();
             let y1: i32 = input.value();
             debug_assert!(y2 > y1);
-            ys.push((2 * y1 , 2 * i));
-            ys.push((2 * y2 + 1,  2 * i + 1));
+            ys.push((2 * y1, 2 * i));
+            ys.push((2 * y2 + 1, 2 * i + 1));
             [y1, y2]
         })
         .collect::<Vec<_>>();

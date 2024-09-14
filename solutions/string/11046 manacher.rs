@@ -126,7 +126,7 @@ fn main() {
         xs.push(input.value());
     }
     xs.push(0);
-    
+
     let radii = palindrome_radius(xs);
     let idx = |s: usize| 2 * s - 1;
     let m = input.value();

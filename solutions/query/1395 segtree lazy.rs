@@ -213,8 +213,7 @@ pub mod segtree {
             }
         }
 
-        pub fn query_range(&mut self, mut start: usize, mut end: usize) -> T
-        {
+        pub fn query_range(&mut self, mut start: usize, mut end: usize) -> T {
             self.propagate_lazy(start);
             self.propagate_lazy(end - 1);
             start += self.n;

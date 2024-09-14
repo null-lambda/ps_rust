@@ -84,9 +84,7 @@ pub trait Monoid {
     fn op(self, rhs: Self) -> Self;
 }
 
-pub trait CommMonoid: Monoid {
-    
-}
+pub trait CommMonoid: Monoid {}
 
 #[derive(Debug)]
 pub struct SegTree<T> {
@@ -283,7 +281,8 @@ fn main() {
                     std::mem::swap(&mut u, &mut v);
                 }
                 result = result
-                    .op(segtree.query_range(self.euler_idx[self.chain_top[u]], self.euler_idx[u] + 1));
+                    .op(segtree
+                        .query_range(self.euler_idx[self.chain_top[u]], self.euler_idx[u] + 1));
                 u = self.parent[self.chain_top[u]];
             }
             if self.euler_idx[u] > self.euler_idx[v] {

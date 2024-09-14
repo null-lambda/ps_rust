@@ -100,7 +100,7 @@ fn main() {
         } else {
             // update connected component
             total += end_current - start_current;
-            start_current =  start;
+            start_current = start;
             end_current = end;
         }
     }

@@ -376,10 +376,7 @@ fn test_radiation_2() {
                 let b = a + j as f64 / 10.0 * 20.0;
                 let d = k as f64 / 10.0 * 10.0;
                 let result = minimal_radiation_2(a, b, d, -d);
-                assert!(
-                    result.abs() <= 35.0,
-                    "{:?}", (a, b, d, result)
-                );
+                assert!(result.abs() <= 35.0, "{:?}", (a, b, d, result));
             }
         }
     }

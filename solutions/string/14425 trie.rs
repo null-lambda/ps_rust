@@ -113,8 +113,12 @@ impl Trie {
         let mut current = self;
         for c in word.iter().map(|&c| Trie::ascii_index(c)) {
             match current.children[c].as_ref() {
-                Some(child) => { current = child; }
-                None => { return false; }
+                Some(child) => {
+                    current = child;
+                }
+                None => {
+                    return false;
+                }
             }
         }
         current.terminal
@@ -133,8 +137,6 @@ fn main() {
     for _ in 0..n {
         trie.insert(input.line());
     }
-    let result: u32 = (0..m).map(|_| {
-        trie.find(input.line()) as u32        
-    }).sum();
+    let result: u32 = (0..m).map(|_| trie.find(input.line()) as u32).sum();
     println!("{}", result);
 }

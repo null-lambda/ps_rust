@@ -140,10 +140,12 @@ impl<T: Ord + Copy + std::fmt::Debug> MergeSortTree<T> {
         let mut result = 0;
         while start < end {
             if start % 2 == 1 {
-                result += self.data[start].len() - self.data[start].partition_point(|&x| !(x > cutoff));
+                result +=
+                    self.data[start].len() - self.data[start].partition_point(|&x| !(x > cutoff));
             }
             if end % 2 == 1 {
-                result += self.data[end - 1].len() - self.data[end - 1].partition_point(|&x| !(x > cutoff));
+                result += self.data[end - 1].len()
+                    - self.data[end - 1].partition_point(|&x| !(x > cutoff));
             }
             start = (start + 1) >> 1;
             end >>= 1;
@@ -167,7 +169,7 @@ fn main() {
         let i: usize = input.value();
         let j: usize = input.value();
         let k: u32 = input.value();
-        writeln!(output_buf, "{}", xs.count_gt(i-1..j, k)).unwrap();
+        writeln!(output_buf, "{}", xs.count_gt(i - 1..j, k)).unwrap();
     }
 
     std::io::stdout().write_all(&output_buf[..]).unwrap();

@@ -102,7 +102,10 @@ fn main() {
     // sparce table
     // stores next 2^j-th node
     let next_table: Vec<Vec<u32>> = successors(Some(next), |prev_row| {
-        prev_row.iter().map(|&u| Some(prev_row[u as usize])).collect()
+        prev_row
+            .iter()
+            .map(|&u| Some(prev_row[u as usize]))
+            .collect()
     })
     .take(log2n_bound + 1)
     .collect();

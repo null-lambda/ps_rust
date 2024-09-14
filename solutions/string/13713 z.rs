@@ -85,7 +85,7 @@ fn z_array<T: Eq>(text: Vec<T>) -> Vec<usize> {
     assert!(n >= 1);
     let (mut left, mut right) = (0, 0);
     let mut z = vec![n];
-    for i in 1..n {    
+    for i in 1..n {
         z.push(if i <= right && z[i - left] < right + 1 - i {
             z[i - left]
         } else {

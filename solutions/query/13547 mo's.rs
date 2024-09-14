@@ -96,11 +96,13 @@ fn main() {
 
     type Query = (u32, u32, u32);
     let m = input.value();
-    let mut queries: Vec<Query> = (0..m as u32).map(|i| {
-        let start: u32 = input.value();
-        let end: u32 = input.value();
-        (start - 1, end - 1, i)
-    }).collect();
+    let mut queries: Vec<Query> = (0..m as u32)
+        .map(|i| {
+            let start: u32 = input.value();
+            let end: u32 = input.value();
+            (start - 1, end - 1, i)
+        })
+        .collect();
     queries.sort_unstable_by_key(|&(start, end, _)| (end / bucket_size as u32, start));
 
     const X_MAX: usize = 1_000_000;
@@ -120,7 +122,7 @@ fn main() {
         }
         while end > end_current {
             end_current += 1;
-            if count[xs[end_current] as usize] == 0{
+            if count[xs[end_current] as usize] == 0 {
                 count_current += 1;
             }
             count[xs[end_current] as usize] += 1;
@@ -133,7 +135,7 @@ fn main() {
             start_current += 1;
         }
         while end < end_current {
-              count[xs[end_current] as usize] -= 1;
+            count[xs[end_current] as usize] -= 1;
             if count[xs[end_current] as usize] == 0 {
                 count_current -= 1;
             }
@@ -145,6 +147,6 @@ fn main() {
     for r in query_result {
         writeln!(output_buf, "{}", r);
     }
-    
+
     std::io::stdout().write(&output_buf[..]).unwrap();
 }

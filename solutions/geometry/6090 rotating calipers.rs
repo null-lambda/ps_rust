@@ -133,7 +133,7 @@ fn main() {
             if n <= 2 {
                 return (poly.len() * (poly.len() - 1) / 2) as u64;
             }
-            
+
             // rotating calipers
             // find number of antipodal pairs
             use std::cmp::Ordering;
@@ -197,7 +197,7 @@ fn main() {
 
             count
         })();
-        
+
         println!("{:?}", count);
     }
 

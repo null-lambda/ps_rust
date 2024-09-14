@@ -106,7 +106,7 @@ impl<T: CommMonoid + Copy> SegmentTree<T> {
     }
 
     // sum on interval [left, right)
-    fn query_sum(&self, mut start: usize, mut end:usize) -> T {
+    fn query_sum(&self, mut start: usize, mut end: usize) -> T {
         debug_assert!(end <= self.n);
         start += self.n;
         end += self.n;

@@ -117,7 +117,7 @@ fn main() {
             }
         }
     }
-    
+
     println!("{}", result);
     std::io::stdout().write_all(&output_buf[..]).unwrap();
 }

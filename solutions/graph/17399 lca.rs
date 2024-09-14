@@ -108,12 +108,7 @@ fn main() {
             let mut parent = vec![0; n + 1];
             let mut depth = vec![0; n + 1];
             {
-                fn dfs(
-                    neighbors: &[Vec<usize>],
-                    parent: &mut [u32],
-                    depth: &mut [u32],
-                    u: usize,
-                ) {
+                fn dfs(neighbors: &[Vec<usize>], parent: &mut [u32], depth: &mut [u32], u: usize) {
                     for &v in &neighbors[u] {
                         if parent[v] == 0 {
                             parent[v] = u as u32;
@@ -130,7 +125,10 @@ fn main() {
 
             let log2n_bound = (n as f64).log2().ceil() as usize;
             let parent_table = successors(Some(parent), |prev_row| {
-                prev_row.iter().map(|&u| Some(prev_row[u as usize])).collect()
+                prev_row
+                    .iter()
+                    .map(|&u| Some(prev_row[u as usize]))
+                    .collect()
             })
             .take(log2n_bound)
             .collect();
@@ -206,18 +204,13 @@ fn main() {
                     lca.parent_nth(c, duc - h / 2)
                 }
             })
-        } else if  dua == duc && dua < dub {
+        } else if dua == duc && dua < dub {
             let h = dub - dua;
-            (h % 2 == 0).then(|| {
-                lca.parent_nth(b, dub - h / 2)
-            })
+            (h % 2 == 0).then(|| lca.parent_nth(b, dub - h / 2))
         } else if dub == duc && dub < dua {
-            let h=  dua - dub; 
-            (h % 2 == 0).then(|| {
-                lca.parent_nth(a, dua - h / 2)
-            })
-        }
-        else {
+            let h = dua - dub;
+            (h % 2 == 0).then(|| lca.parent_nth(a, dua - h / 2))
+        } else {
             None
         };
         writeln!(output_buf, "{}", result.map(|x| x as i32).unwrap_or(-1)).unwrap();

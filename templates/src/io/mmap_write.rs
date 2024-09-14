@@ -148,7 +148,7 @@ fn stdin() -> &'static str {
 fn main() {
     use io::*;
     use std::io::{BufReader, BufWriter, Read, Write};
-    
+
     /*
     let stdin = std::io::stdin();
     let stdin = stdin.lock();
@@ -169,7 +169,7 @@ fn main() {
     let mut output_buf: Vec<u8> = vec![];
 
     // main algorithm
-    let t: usize = input.value(); 
+    let t: usize = input.value();
     for _ in 0..t {
         let (a, b): (u32, u32) = input.tuple();
         write_num(&mut output_buf, a + b);
@@ -177,8 +177,7 @@ fn main() {
     }
     unsafe { write(1, &output_buf[0], output_buf.len()) };
     //writer.write(&output_buf).unwrap();
-    
+
     //let _ = reader.into_inner().into_raw_fd();
     //let _ = writer.into_inner().unwrap().into_raw_fd();
 }
-

@@ -11,8 +11,10 @@ mod fast_io {
             self.line();
         }
 
-        fn value<T: FromStr>(&mut self) -> T 
-        where <T as FromStr>::Err: Debug {
+        fn value<T: FromStr>(&mut self) -> T
+        where
+            <T as FromStr>::Err: Debug,
+        {
             let token = self.token();
             let token = unsafe { from_utf8_unchecked(token) };
             token.parse::<T>().unwrap()
@@ -61,41 +63,44 @@ mod fast_io {
 
     impl<'a> InputStream for InputAtOnce {
         fn token(&mut self) -> &[u8] {
-            self.take(self.buf[self.cursor..]
-                .iter()
-                .position(|&c| !is_whitespace(c))
-                .expect("no available tokens left")
+            self.take(
+                self.buf[self.cursor..]
+                    .iter()
+                    .position(|&c| !is_whitespace(c))
+                    .expect("no available tokens left"),
             );
-            self.take(self.buf[self.cursor..]
-                .iter()
-                .position(|&c| is_whitespace(c))
-                .unwrap_or_else(|| self.buf.len() - self.cursor)
+            self.take(
+                self.buf[self.cursor..]
+                    .iter()
+                    .position(|&c| is_whitespace(c))
+                    .unwrap_or_else(|| self.buf.len() - self.cursor),
             )
         }
 
         fn line(&mut self) -> &[u8] {
-            let line = self.take(self.buf[self.cursor..]
-                .iter()
-                .position(|&c| c == b'\n')
-                .map(|idx| idx + 1)
-                .unwrap_or_else(|| self.buf.len() - self.cursor)
+            let line = self.take(
+                self.buf[self.cursor..]
+                    .iter()
+                    .position(|&c| c == b'\n')
+                    .map(|idx| idx + 1)
+                    .unwrap_or_else(|| self.buf.len() - self.cursor),
             );
             trim_newline(line)
         }
     }
 
     pub struct LineSyncedInput<R: BufRead> {
-        line_buf: Vec<u8>, 
+        line_buf: Vec<u8>,
         line_cursor: usize,
-        inner: R
+        inner: R,
     }
-    
+
     impl<R: BufRead> LineSyncedInput<R> {
         pub fn new(r: R) -> Self {
             Self {
                 line_buf: Vec::new(),
                 line_cursor: 0,
-                inner: r 
+                inner: r,
             }
         }
 
@@ -114,8 +119,11 @@ mod fast_io {
             self.line_buf.clear();
             self.line_cursor = 0;
             let result = self.inner.read_until(b'\n', &mut self.line_buf).is_ok();
-            println!("refill: {}", String::from_utf8(self.line_buf.clone()).unwrap());
-            result 
+            println!(
+                "refill: {}",
+                String::from_utf8(self.line_buf.clone()).unwrap()
+            );
+            result
         }
     }
 
@@ -128,10 +136,11 @@ mod fast_io {
                         panic!(); // EOF
                     }
                 }
-                self.take(self.line_buf[self.line_cursor..]
-                    .iter()
-                    .position(|&c| !is_whitespace(c))
-                    .unwrap_or_else(|| self.line_buf.len() - self.line_cursor)
+                self.take(
+                    self.line_buf[self.line_cursor..]
+                        .iter()
+                        .position(|&c| !is_whitespace(c))
+                        .unwrap_or_else(|| self.line_buf.len() - self.line_cursor),
                 );
 
                 let idx = self.line_buf[self.line_cursor..]
@@ -143,7 +152,7 @@ mod fast_io {
                 }
             }
         }
-    
+
         fn line(&mut self) -> &[u8] {
             if self.eol() {
                 self.refill_line_buf();
