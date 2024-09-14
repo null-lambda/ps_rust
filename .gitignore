@@ -1,3 +1,6 @@
+.vscode/
+
 debug/
 target/
 **/*.rs.bk
+test_cases/**/*.txt
