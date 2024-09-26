@@ -41,7 +41,7 @@ mod fast_io {
         s
     }
 
-    use std::io::{BufRead, BufReader, BufWriter, Read, Stdin, StdinLock, Stdout};
+    use std::io::{BufRead, BufReader, BufWriter, Read, Stdin, Stdout};
 
     pub struct InputAtOnce {
         buf: Box<[u8]>,
@@ -119,10 +119,6 @@ mod fast_io {
             self.line_buf.clear();
             self.line_cursor = 0;
             let result = self.inner.read_until(b'\n', &mut self.line_buf).is_ok();
-            println!(
-                "refill: {}",
-                String::from_utf8(self.line_buf.clone()).unwrap()
-            );
             result
         }
     }
@@ -171,11 +167,6 @@ mod fast_io {
         InputAtOnce::new(buf)
     }
 
-    // pub fn stdin_buf() -> LineSyncedInput<BufReader<StdinLock<'static>>> {
-    //     LineSyncedInput::new(BufReader::new(std::io::stdin().lock()))
-    // }
-
-    // no lock
     pub fn stdin_buf() -> LineSyncedInput<BufReader<Stdin>> {
         LineSyncedInput::new(BufReader::new(std::io::stdin()))
     }
@@ -185,75 +176,167 @@ mod fast_io {
     }
 }
 
-mod cmp {
-    use std::cmp::Ordering;
+mod trie {
+    // trie for 'A-Z'
+    pub const N_ALPHABET: usize = 26;
+    pub const UNSET: usize = std::usize::MAX;
 
-    #[derive(Debug, Copy, Clone, Default)]
-    pub struct Trivial<T>(pub T);
-
-    impl<T> PartialEq for Trivial<T> {
-        #[inline]
-        fn eq(&self, _other: &Self) -> bool {
-            true
-        }
-    }
-    impl<T> Eq for Trivial<T> {}
-
-    impl<T> PartialOrd for Trivial<T> {
-        #[inline]
-        fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
-            Some(Ordering::Equal)
-        }
+    #[derive(Debug, Clone)]
+    pub struct Node {
+        pub children: [usize; N_ALPHABET],
+        pub word_idx: usize,
     }
 
-    impl<T> Ord for Trivial<T> {
-        #[inline]
-        fn cmp(&self, _other: &Self) -> Ordering {
-            Ordering::Equal
+    impl Node {
+        fn new() -> Self {
+            Self {
+                children: [UNSET; N_ALPHABET],
+                word_idx: UNSET,
+            }
+        }
+
+        pub fn terminal(&self) -> bool {
+            self.word_idx != UNSET
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct Trie {
+        pub nodes: Vec<Node>,
+    }
+
+    impl Trie {
+        pub fn new() -> Self {
+            Self {
+                nodes: vec![Node::new()],
+            }
+        }
+
+        pub fn insert(&mut self, s: &[u8], idx: usize) {
+            let mut current = 0;
+            for &c in s {
+                let c = (c - b'A') as usize;
+                if self.nodes[current].children[c] == UNSET {
+                    self.nodes.push(Node::new());
+                    self.nodes[current].children[c] = self.nodes.len() - 1;
+                }
+                current = self.nodes[current].children[c];
+            }
+            self.nodes[current].word_idx = idx;
         }
     }
 }
 
 fn main() {
     use fast_io::InputStream;
+    use std::cmp::Reverse;
+    use std::collections::*;
     use std::io::Write;
-    use std::{cmp::Ordering, collections::*, iter::*};
+    use std::iter;
 
-    let mut input = fast_io::stdin_at_once();
+    let mut input = fast_io::stdin_buf();
     let mut output = fast_io::stdout_buf();
-    // let mut output = std::io::stdout();
 
     let n: usize = input.value();
-    let required_memory: i32 = input.value();
 
-    let memory: Vec<i32> = once(0).chain((0..n).map(|_| input.value())).collect();
-    let cost: Vec<i32> = once(0).chain((0..n).map(|_| input.value())).collect();
+    let mut trie = trie::Trie::new();
+    let mut words: Vec<Box<[u8]>> = (0..n).map(|_| input.token().into()).collect();
+    words.sort_unstable_by(|s, t| s.len().cmp(&t.len()).then_with(|| s.cmp(t).reverse()));
 
-    let max_cost = cost.iter().sum::<i32>() as usize;
-
-    // dp[n_app][cost] := max memory
-    // dp[n_app][cost] = max { dp[n_app - 1][cost], dp[n_app - 1][cost - c] + m }
-    let mut dp = vec![vec![0; max_cost + 1]; 2];
-    for app in 1..=n {
-        let cost = cost[app] as usize;
-        let memory = memory[app];
-
-        let app = app % 2 as usize;
-        let app_prev = 1 - app;
-
-        for total_cost in 0..=max_cost {
-            dp[app][total_cost] = dp[app_prev][total_cost];
-            if total_cost >= cost {
-                dp[app][total_cost] =
-                    dp[app][total_cost].max(dp[app_prev][total_cost - cost] + memory);
-            }
-        }
+    let scores: Vec<u32> = words
+        .iter()
+        .map(|s| match s.len() {
+            1 | 2 => 0,
+            3 | 4 => 1,
+            5 => 2,
+            6 => 3,
+            7 => 5,
+            8 => 11,
+            _ => panic!(),
+        })
+        .collect();
+    for (i, word) in words.iter().enumerate() {
+        trie.insert(word, i);
     }
 
-    let result = (0..=max_cost)
-        .find(|&c| dp[n % 2][c] >= required_memory)
-        .unwrap();
-    writeln!(output, "{}", result).unwrap();
+    let b: usize = input.value();
+    for _ in 0..b {
+        let board: Vec<_> = (0..4).flat_map(|_| input.token()[..4].to_vec()).collect();
 
-    output.flush().unwrap();
+        fn dfs(
+            board: &[u8],
+            trie: &trie::Trie,
+            node: usize,
+            r: i32,
+            c: i32,
+            visited: &mut [bool],
+            word_acc: &mut Vec<u8>,
+            on_yield: &mut impl FnMut(usize),
+        ) {
+            let pos = (r * 4 + c) as usize;
+            if visited[pos] {
+                return;
+            }
+            if word_acc.len() > 8 {
+                return;
+            }
+            let k = (board[pos] - b'A') as usize;
+            let node_next = trie.nodes[node].children[k];
+            if node_next == trie::UNSET {
+                return;
+            }
+
+            visited[pos] = true;
+            word_acc.push(board[pos]);
+
+            if trie.nodes[node_next].terminal() {
+                on_yield(trie.nodes[node_next].word_idx);
+            }
+
+            for (dr, dc) in [
+                (-1, -1),
+                (-1, 0),
+                (-1, 1),
+                (0, -1),
+                (0, 1),
+                (1, -1),
+                (1, 0),
+                (1, 1),
+            ] {
+                let (r_next, c_next) = (r + dr, c + dc);
+                if !((0..4).contains(&r_next) && (0..4).contains(&c_next)) {
+                    continue;
+                }
+
+                dfs(
+                    board, trie, node_next, r_next, c_next, visited, word_acc, on_yield,
+                );
+            }
+
+            visited[pos] = false;
+            word_acc.pop();
+        }
+
+        let mut found = HashSet::new();
+        for r0 in 0..4 {
+            for c0 in 0..4 {
+                dfs(
+                    &board,
+                    &trie,
+                    0,
+                    r0 as i32,
+                    c0 as i32,
+                    &mut vec![false; 16],
+                    &mut vec![],
+                    &mut |word_idx| {
+                        found.insert(word_idx);
+                    },
+                );
+            }
+        }
+        let max_idx = found.iter().copied().max().unwrap();
+        let score = found.iter().map(|&idx| scores[idx]).sum::<u32>();
+        let s = unsafe { std::str::from_utf8_unchecked(&words[max_idx]) };
+        writeln!(output, "{} {} {}", score, s, found.len()).unwrap();
+    }
 }

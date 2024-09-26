@@ -4,3 +4,7 @@ debug/
 target/
 **/*.rs.bk
 test_cases/**/*.txt
+
+input.txt
+output.txt
+main.rs
