@@ -320,7 +320,8 @@ pub mod parser {
         PF: Parser<S, F>,
         F: Fn(A) -> A + 'a,
     {
-        (many(p_op), p).map(move |(cs, e): (Vec<F>, A)| cs.into_iter().fold(e, |acc, c| c(acc)))
+        (many(p_op), p)
+            .map(move |(cs, e): (Vec<F>, A)| cs.into_iter().rev().fold(e, |acc, c| c(acc)))
     }
 
     pub fn unary_suffix<'a, S: Stream, A, F, PF, P>(p_op: PF, p: P) -> impl Parser<S, A>
