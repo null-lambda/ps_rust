@@ -119,10 +119,6 @@ mod fast_io {
             self.line_buf.clear();
             self.line_cursor = 0;
             let result = self.inner.read_until(b'\n', &mut self.line_buf).is_ok();
-            println!(
-                "refill: {}",
-                String::from_utf8(self.line_buf.clone()).unwrap()
-            );
             result
         }
     }
