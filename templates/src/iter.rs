@@ -21,6 +21,20 @@ pub trait IteratorExt: Iterator {
     }
 }
 
+pub mod iter {
+    pub fn product<I, J>(i: I, j: J) -> impl Iterator<Item = (I::Item, J::Item)>
+    where
+        I: IntoIterator,
+        I::Item: Clone,
+        J: IntoIterator,
+        J::IntoIter: Clone,
+    {
+        let j = j.into_iter();
+        i.into_iter()
+            .flat_map(move |x| j.clone().map(move |y| (x.clone(), y)))
+    }
+}
+
 impl<T: Iterator> IteratorExt for T {}
 
 #[cfg(test)]
