@@ -1,6 +1,5 @@
 use std::cmp::Ordering;
 
-// adoption from std crate
 fn binary_search_by<F>(mut left: u32, mut right: u32, mut f: F) -> Result<u32, u32>
 where
     F: FnMut(u32) -> Ordering,
@@ -26,7 +25,6 @@ where
     Err(left)
 }
 
-// adoption from std crate
 fn partition_point<P>(left: u32, right: u32, mut pred: P) -> u32
 where
     P: FnMut(u32) -> bool,

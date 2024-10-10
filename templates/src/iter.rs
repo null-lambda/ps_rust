@@ -1,27 +1,21 @@
-pub trait IteratorExt: Iterator {
-    fn for_each_group_by<P, F>(self, mut pred: P, mut f: F)
+#[allow(dead_code)]
+pub mod iter {
+    fn group_by<T, P, F>(xs: &[T], mut pred: P, mut f: F)
     where
-        Self: Sized,
-        P: FnMut(&Self::Item, &Self::Item) -> bool,
-        F: FnMut(&[Self::Item]),
+        P: FnMut(&T, &T) -> bool,
+        F: FnMut(&[T]),
     {
-        let mut group = Vec::new();
-        let mut it = self.peekable();
-        while let Some(x) = it.next() {
-            let group_closed = match it.peek() {
-                Some(y) => !pred(&x, &y),
-                None => true,
-            };
-            group.push(x);
-            if group_closed {
-                f(&group[..]);
-                group.clear();
+        let mut i = 0;
+        while i < xs.len() {
+            let mut j = i + 1;
+            while j < xs.len() && pred(&xs[j - 1], &xs[j]) {
+                j += 1;
             }
+            f(&xs[i..j]);
+            i = j;
         }
     }
-}
 
-pub mod iter {
     pub fn product<I, J>(i: I, j: J) -> impl Iterator<Item = (I::Item, J::Item)>
     where
         I: IntoIterator,
@@ -32,16 +26,5 @@ pub mod iter {
         let j = j.into_iter();
         i.into_iter()
             .flat_map(move |x| j.clone().map(move |y| (x.clone(), y)))
-    }
-}
-
-impl<T: Iterator> IteratorExt for T {}
-
-#[cfg(test)]
-mod test {
-    use crate::iter::IteratorExt;
-    #[test]
-    fn tests() {
-        (0..7).for_each_group_by(|x, y| x / 3 == y / 3, |group| {});
     }
 }
