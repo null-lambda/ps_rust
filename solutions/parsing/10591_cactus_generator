@@ -1,0 +1,994 @@
+use std::{
+    cmp::Reverse,
+    collections::{HashMap, HashSet},
+    fmt::Display,
+    io::Write,
+    iter::once,
+    ops::{Index, IndexMut},
+};
+
+#[allow(dead_code)]
+mod simple_io {
+    pub struct InputAtOnce(std::str::SplitAsciiWhitespace<'static>);
+
+    impl InputAtOnce {
+        pub fn token(&mut self) -> &str {
+            self.0.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin_at_once() -> InputAtOnce {
+        let buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let buf = Box::leak(buf.into_boxed_str());
+        InputAtOnce(buf.split_ascii_whitespace())
+    }
+
+    pub fn stdout_buf() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Grid<T> {
+    w: usize,
+    data: Vec<T>,
+}
+
+impl<T> Grid<T> {
+    pub fn with_shape(self, w: usize) -> Self {
+        debug_assert_eq!(self.data.len() % w, 0);
+        Grid { w, data: self.data }
+    }
+}
+
+impl<T> FromIterator<T> for Grid<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        Self {
+            w: 1,
+            data: iter.into_iter().collect(),
+        }
+    }
+}
+
+impl<T: Clone> Grid<T> {
+    pub fn sized(fill: T, h: usize, w: usize) -> Self {
+        Grid {
+            w,
+            data: vec![fill; w * h],
+        }
+    }
+}
+
+impl<T: Display> Display for Grid<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for row in self.data.chunks(self.w) {
+            for cell in row {
+                cell.fmt(f)?;
+                write!(f, " ")?;
+            }
+            writeln!(f)?;
+        }
+        writeln!(f)?;
+        Ok(())
+    }
+}
+
+impl<T> Index<(usize, usize)> for Grid<T> {
+    type Output = T;
+    fn index(&self, (i, j): (usize, usize)) -> &Self::Output {
+        debug_assert!(i < self.data.len() / self.w && j < self.w);
+        &self.data[i * self.w + j]
+    }
+}
+
+impl<T> IndexMut<(usize, usize)> for Grid<T> {
+    fn index_mut(&mut self, (i, j): (usize, usize)) -> &mut Self::Output {
+        debug_assert!(i < self.data.len() / self.w && j < self.w);
+        &mut self.data[i * self.w + j]
+    }
+}
+
+struct PrettyColored<'a>(&'a Grid<u8>);
+
+impl Display for PrettyColored<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let colors = (once(37).chain(31..=36))
+            .map(|i| (format!("\x1b[{}m", i), format!("\x1b[0m")))
+            .collect::<Vec<_>>();
+
+        let mut freq = HashMap::new();
+        for c in self.0.data.iter() {
+            *freq.entry(c).or_insert(0) += 1;
+        }
+        let mut freq = freq.into_iter().collect::<Vec<_>>();
+        freq.sort_unstable_by_key(|(_, f)| Reverse(*f));
+
+        let mut color_map = HashMap::new();
+        let mut idx = 0;
+        for (c, _) in freq {
+            color_map.insert(c, &colors[idx % colors.len()]);
+            idx += 1;
+        }
+
+        for row in self.0.data.chunks(self.0.w) {
+            for cell in row {
+                let (pre, suff) = color_map[&cell];
+                write!(f, "{}{}{}", pre, *cell as char, suff)?;
+            }
+            writeln!(f)?;
+        }
+        Ok(())
+    }
+}
+
+impl Grid<u8> {
+    fn colored(&self) -> PrettyColored {
+        PrettyColored(&self)
+    }
+}
+
+#[allow(dead_code)]
+#[macro_use]
+pub mod parser {
+    pub type ParseResult<S, A> = Option<(A, S)>;
+    pub trait Stream<'a>: Sized + Clone + std::fmt::Debug + 'a {
+        type Item;
+
+        fn zero() -> Self;
+        fn next(self) -> ParseResult<Self, Self::Item>;
+
+        fn take_while(
+            self,
+            pred: impl Fn(&Self::Item) -> bool,
+        ) -> ParseResult<Self, &'a [Self::Item]>;
+
+        fn skip_while(self, pred: impl Fn(&Self::Item) -> bool) -> ParseResult<Self, ()> {
+            self.take_while(pred).map(|(_, s)| ((), s))
+        }
+    }
+
+    pub trait U8Stream<'a>: Stream<'a, Item = u8> {}
+
+    impl<'a> Stream<'a> for &'a [u8] {
+        type Item = u8;
+
+        fn zero() -> Self {
+            &[]
+        }
+
+        fn next(self) -> ParseResult<Self, u8> {
+            self.split_first().map(|(b, s)| (*b, s))
+        }
+
+        fn take_while(self, pred: impl Fn(&u8) -> bool) -> ParseResult<Self, &'a [u8]> {
+            let mut i = 0;
+            while i < self.len() && pred(&self[i]) {
+                i += 1;
+            }
+            Some(self.split_at(i))
+        }
+    }
+
+    impl<'a> U8Stream<'a> for &'a [u8] {}
+
+    pub trait Parser<'a, S: Stream<'a>, A>: Sized {
+        fn run(&self, s: S) -> ParseResult<S, A>;
+
+        fn map<B, F>(self, f: F) -> Map<Self, F, A>
+        where
+            F: Fn(A) -> B,
+        {
+            Map(self, f, Default::default())
+        }
+
+        fn and_then<B, PB, F>(self, p: F) -> AndThen<Self, F, A>
+        where
+            PB: Parser<'a, S, B>,
+            F: Fn(A) -> PB,
+        {
+            AndThen(self, p, Default::default())
+        }
+
+        fn map_option<B, F>(self, f: F) -> MapOption<Self, F, A>
+        where
+            F: Fn(A) -> Option<B>,
+        {
+            MapOption(self, f, Default::default())
+        }
+
+        fn filter<F>(self, f: F) -> Filter<Self, F>
+        where
+            F: Fn(&A) -> bool,
+        {
+            Filter(self, f)
+        }
+
+        fn or_else<P>(self, p: P) -> OrElse<Self, P>
+        where
+            P: Parser<'a, S, A>,
+        {
+            OrElse(self, p)
+        }
+    }
+
+    // Can be replaced with impl trait on method return types (rust >= 1.75)
+    pub struct Map<PA, F, A>(PA, F, std::marker::PhantomData<A>);
+    impl<'a, S, A, B, PA, F> Parser<'a, S, B> for Map<PA, F, A>
+    where
+        S: Stream<'a>,
+        PA: Parser<'a, S, A>,
+        F: Fn(A) -> B,
+    {
+        fn run(&self, s: S) -> ParseResult<S, B> {
+            self.0.run(s).map(|(a, s)| (self.1(a), s))
+        }
+    }
+
+    pub struct AndThen<PA, F, A>(PA, F, std::marker::PhantomData<A>);
+    impl<'a, S, A, B, PA, PB, F> Parser<'a, S, B> for AndThen<PA, F, A>
+    where
+        S: Stream<'a>,
+        PA: Parser<'a, S, A>,
+        PB: Parser<'a, S, B>,
+        F: Fn(A) -> PB,
+    {
+        fn run(&self, s: S) -> ParseResult<S, B> {
+            self.0.run(s).and_then(|(a, s)| self.1(a).run(s))
+        }
+    }
+
+    pub struct MapOption<PA, F, A>(PA, F, std::marker::PhantomData<A>);
+    impl<'a, S, A, B, PA, F> Parser<'a, S, B> for MapOption<PA, F, A>
+    where
+        S: Stream<'a>,
+        PA: Parser<'a, S, A>,
+        F: Fn(A) -> Option<B>,
+    {
+        fn run(&self, s: S) -> ParseResult<S, B> {
+            self.0.run(s).and_then(|(a, s)| self.1(a).map(|b| (b, s)))
+        }
+    }
+
+    pub struct Filter<PA, F>(PA, F);
+    impl<'a, S, A, PA, F> Parser<'a, S, A> for Filter<PA, F>
+    where
+        S: Stream<'a>,
+        PA: Parser<'a, S, A>,
+        F: Fn(&A) -> bool,
+    {
+        fn run(&self, s: S) -> ParseResult<S, A> {
+            self.0.run(s).filter(|(a, _)| (self.1)(a))
+        }
+    }
+
+    pub struct OrElse<P, Q>(P, Q);
+
+    impl<'a, S, A, P, Q> Parser<'a, S, A> for OrElse<P, Q>
+    where
+        S: Stream<'a>,
+        P: Parser<'a, S, A>,
+        Q: Parser<'a, S, A>,
+    {
+        fn run(&self, s: S) -> ParseResult<S, A> {
+            self.0.run(s.clone()).or_else(|| self.1.run(s))
+        }
+    }
+
+    impl<'a, S, A, F> Parser<'a, S, A> for F
+    where
+        S: Stream<'a>,
+        F: Fn(S) -> ParseResult<S, A>,
+    {
+        fn run(&self, s: S) -> ParseResult<S, A> {
+            self(s)
+        }
+    }
+
+    macro_rules! gen_tuple_parser {
+        ($($A:tt $PA:tt $a:tt $i:tt),+) => {
+            impl<'a,S:Stream<'a>,$($A,)+$($PA,)+> Parser<'a,S,($($A,)+)> for ($($PA,)+)
+            where $($PA: Parser<'a,S,$A>,)+
+            {
+                fn run(&self, s: S) -> ParseResult<S, ($($A,)+)> {
+                    $(let ($a, s):($A,S) = self.$i.run(s)?;)+
+                    Some((($($a,)+),s))
+                }
+            }
+        }
+    }
+    gen_tuple_parser!(A0 PA0 a0 0, A1 PA1 a1 1);
+    gen_tuple_parser!(A0 PA0 a0 0, A1 PA1 a1 1, A2 PA2 a2 2);
+    gen_tuple_parser!(A0 PA0 a0 0, A1 PA1 a1 1, A2 PA2 a2 2, A3 PA3 a3 3);
+    gen_tuple_parser!(A0 PA0 a0 0, A1 PA1 a1 1, A2 PA2 a2 2, A3 PA3 a3 3, A4 PA4 a4 4);
+    gen_tuple_parser!(A0 PA0 a0 0, A1 PA1 a1 1, A2 PA2 a2 2, A3 PA3 a3 3, A4 PA4 a4 4, A5 PA5 a5 5);
+
+    fn fail<S, A>(_s: S) -> ParseResult<S, A> {
+        None
+    }
+
+    pub fn eof<'a, S: Stream<'a>>(s: S) -> ParseResult<S, ()> {
+        match s.next() {
+            Some(_) => None,
+            None => Some(((), S::zero())),
+        }
+    }
+
+    pub fn single<'a, S: Stream<'a>>(s: S) -> ParseResult<S, S::Item> {
+        s.next()
+    }
+
+    pub fn between<'a, S: Stream<'a>, A, O, E>(
+        p_open: impl Parser<'a, S, O>,
+        p: impl Parser<'a, S, A>,
+        p_close: impl Parser<'a, S, E>,
+    ) -> impl Parser<'a, S, A> {
+        (p_open, p, p_close).map(|(_, a, _)| a)
+    }
+
+    pub fn optional<'a, S: Stream<'a>, A>(
+        p: impl Parser<'a, S, A>,
+    ) -> impl Parser<'a, S, Option<A>> {
+        move |s: S| match p.run(s.clone()) {
+            Some((a, s_new)) => Some((Some(a), s_new)),
+            None => Some((None, s)),
+        }
+    }
+
+    pub fn fold<'a, S: Stream<'a>, A, F>(
+        init: impl Parser<'a, S, A>,
+        p: impl Parser<'a, S, F>,
+    ) -> impl Parser<'a, S, A>
+    where
+        F: Fn(A) -> A,
+    {
+        move |mut s: S| {
+            let (mut acc, s_new) = init.run(s)?;
+            s = s_new;
+            while let Some((f, s_new)) = p.run(s.clone()) {
+                acc = f(acc);
+                s = s_new;
+            }
+            Some((acc, s))
+        }
+    }
+
+    pub fn many<'a, S: Stream<'a>, A>(p: impl Parser<'a, S, A>) -> impl Parser<'a, S, Vec<A>> {
+        move |mut s: S| {
+            let mut result = Vec::new();
+            while let Some((e, s_new)) = p.run(s.clone()) {
+                result.push(e);
+                s = s_new;
+            }
+            Some((result, s))
+        }
+    }
+
+    pub fn many1<'a, S: Stream<'a>, A>(p: impl Parser<'a, S, A>) -> impl Parser<'a, S, Vec<A>> {
+        move |mut s: S| {
+            let mut result = Vec::new();
+            let (e, s_new) = p.run(s.clone())?;
+            result.push(e);
+            s = s_new;
+
+            while let Some((e, s_new)) = p.run(s.clone()) {
+                result.push(e);
+                s = s_new;
+            }
+            Some((result, s))
+        }
+    }
+
+    pub fn many_sep1<'a, S: Stream<'a>, A>(
+        p: impl Parser<'a, S, A>,
+        p_sep: impl Parser<'a, S, ()>,
+    ) -> impl Parser<'a, S, Vec<A>> {
+        move |mut s: S| -> ParseResult<S, Vec<A>> {
+            let mut result = Vec::new();
+            let (e, s_new) = p.run(s)?;
+            result.push(e);
+            s = s_new;
+
+            while let Some((_, s_new)) = p_sep.run(s.clone()) {
+                match p.run(s_new) {
+                    Some((e, s_new)) => {
+                        result.push(e);
+                        s = s_new;
+                    }
+                    None => break,
+                }
+            }
+
+            Some((result, s))
+        }
+    }
+
+    // chained unary operators
+    pub fn unary_prefix<'a, S: Stream<'a>, A, F, PF, P>(p_op: PF, p: P) -> impl Parser<'a, S, A>
+    where
+        P: Parser<'a, S, A>,
+        PF: Parser<'a, S, F>,
+        F: Fn(A) -> A + 'a,
+    {
+        (many(p_op), p)
+            .map(move |(cs, e): (Vec<F>, A)| cs.into_iter().rev().fold(e, |acc, c| c(acc)))
+    }
+
+    pub fn unary_postfix<'a, S: Stream<'a>, A, F, PF, P>(p_op: PF, p: P) -> impl Parser<'a, S, A>
+    where
+        P: Parser<'a, S, A>,
+        PF: Parser<'a, S, F>,
+        F: Fn(A) -> A + 'a,
+    {
+        (p, many(p_op)).map(move |(e, cs): (A, Vec<F>)| cs.into_iter().fold(e, |acc, c| c(acc)))
+    }
+
+    pub fn binary_lassoc<'a, S: Stream<'a>, A, F, PF, P>(p_op: PF, p: P) -> impl Parser<'a, S, A>
+    where
+        P: Parser<'a, S, A>,
+        PF: Parser<'a, S, F>,
+        F: Fn(A, A) -> A + 'a,
+    {
+        move |mut s: S| {
+            let (acc, s_new) = p.run(s)?;
+            let mut acc = acc;
+            s = s_new;
+
+            while let Some((f, s_new)) = p_op.run(s.clone()) {
+                let (b, s_new) = p.run(s_new)?;
+                acc = f(acc, b);
+                s = s_new;
+            }
+
+            Some((acc, s))
+        }
+    }
+
+    pub fn binary_rassoc<'a, S: Stream<'a>, A, F, PF, P>(p_op: PF, p: P) -> impl Parser<'a, S, A>
+    where
+        P: Parser<'a, S, A>,
+        PF: Parser<'a, S, F>,
+        F: Fn(A, A) -> A + 'a,
+    {
+        move |mut s: S| {
+            let (x0, s_new) = p.run(s)?;
+            s = s_new;
+            let mut xs: Vec<A> = vec![x0];
+            let mut fs: Vec<F> = vec![];
+
+            while let Some((f, s_new)) = p_op.run(s.clone()) {
+                let (b, s_new) = p.run(s_new)?;
+                fs.push(f);
+                xs.push(b);
+                s = s_new;
+            }
+
+            let acc = xs.pop().unwrap();
+            let acc = xs
+                .into_iter()
+                .zip(fs.into_iter())
+                .rev()
+                .fold(acc, |acc, (b, f)| f(b, acc));
+
+            Some((acc, s))
+        }
+    }
+
+    pub fn debug_print<'a, S, A>(p: impl Parser<'a, S, A>) -> impl Parser<'a, S, A>
+    where
+        S: Stream<'a>,
+        S::Item: std::fmt::Debug,
+        A: std::fmt::Debug,
+    {
+        move |s| {
+            let (a, s) = p.run(s)?;
+            Some((a, s))
+        }
+    }
+
+    pub mod u8 {
+        use super::*;
+
+        // macro to quick define a 0-ary parser
+        #[macro_export]
+        macro_rules! parser_fn {
+            (let $name:ident: $T:ty = $body:expr) => {
+                fn $name<'a, S: U8Stream<'a>>(s: S) -> ParseResult<S, $T> {
+                    $body.run(s)
+                }
+            };
+        }
+
+        pub fn satisfy<'a, S: U8Stream<'a>>(f: impl Fn(&u8) -> bool) -> impl Parser<'a, S, u8> {
+            move |s: S| s.next().filter(|(b, _)| f(b))
+        }
+
+        pub fn literal_byte<'a, S: U8Stream<'a>>(c: u8) -> impl Parser<'a, S, ()> {
+            satisfy(move |b| b == &c).map(|_| ())
+        }
+
+        pub fn literal<'a, S: U8Stream<'a>>(keyword: &'static [u8]) -> impl Parser<'a, S, ()> {
+            move |mut s: S| {
+                for &c in keyword {
+                    let (b, s_new) = s.next()?;
+                    if b != c {
+                        return None;
+                    }
+                    s = s_new;
+                }
+                Some(((), s))
+            }
+        }
+
+        pub fn spaces<'a, S: U8Stream<'a>>(s: S) -> ParseResult<S, ()> {
+            s.skip_while(|b| b.is_ascii_whitespace())
+        }
+
+        pub fn uint<'a, S: U8Stream<'a>>(s: S) -> ParseResult<S, i32> {
+            let mut s = s;
+            let (b, s_new) = satisfy(|b| b.is_ascii_digit()).run(s.clone())?;
+            let mut result = (b - b'0') as i32;
+            s = s_new;
+
+            while let Some((b, s_new)) = satisfy(|b| b.is_ascii_digit()).run(s.clone()) {
+                result = result * 10 + (b - b'0') as i32;
+                s = s_new;
+            }
+
+            Some((result, s))
+        }
+
+        pub fn int<'a, S: U8Stream<'a>>(s: S) -> ParseResult<S, i32> {
+            let mut s = s;
+            let mut sign = 1;
+            if let Some((_, s_new)) = satisfy(|&b| b == b'-').run(s.clone()) {
+                sign = -1;
+                s = s_new;
+            }
+
+            // at least one digit is required
+            let (b, s_new) = satisfy(|b| b.is_ascii_digit()).run(s.clone())?;
+            let mut result = (b - b'0') as i32;
+            s = s_new;
+
+            while let Some((b, s_new)) = satisfy(|b| b.is_ascii_digit()).run(s.clone()) {
+                result = result * 10 + (b - b'0') as i32;
+                s = s_new;
+            }
+
+            Some((result * sign, s))
+        }
+    }
+}
+
+pub mod iter {
+    pub fn product<I, J>(i: I, j: J) -> impl Iterator<Item = (I::Item, J::Item)>
+    where
+        I: IntoIterator,
+        I::Item: Clone,
+        J: IntoIterator,
+        J::IntoIter: Clone,
+    {
+        let j = j.into_iter();
+        i.into_iter()
+            .flat_map(move |x| j.clone().map(move |y| (x.clone(), y)))
+    }
+}
+
+mod ast {
+    use crate::parser_fn;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum Rule {
+        Chain1,
+        Chain(Arg),
+        Loop(Arg),
+        Tree(Arg),
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Copy)]
+    pub enum NumVar {
+        Num(u16),
+        Var(u8),
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum Arg {
+        Repeat(NumVar, Box<Rule>),
+        Range(u8, NumVar, NumVar, Box<Rule>),
+        List(Vec<Rule>),
+    }
+
+    #[derive(Debug, Default)]
+    pub struct Context {
+        vars: [u16; 26],
+    }
+
+    impl Context {
+        fn get_var(&self, var: u8) -> u16 {
+            self.vars[var as usize]
+        }
+
+        fn set_var(&mut self, var: u8, val: u16) {
+            self.vars[var as usize] = val;
+        }
+
+        fn get_numvar(&self, var: NumVar) -> u16 {
+            match var {
+                NumVar::Num(x) => x,
+                NumVar::Var(x) => self.get_var(x),
+            }
+        }
+    }
+
+    pub trait Visitor {
+        fn on_edge(&mut self, u: usize, v: usize);
+        fn on_merge(&mut self, u: usize, v: usize);
+    }
+
+    impl Rule {
+        pub fn optimized(self: Rule) -> Rule {
+            // (Chain|Tree)(Repeat(Num(1), x) = x
+            // (Chain|Tree)(List([x])) = x
+            match self {
+                Rule::Chain(Arg::Repeat(NumVar::Num(1), x)) => x.optimized(),
+                Rule::Chain(Arg::List(mut xs)) if xs.len() == 1 => xs.pop().unwrap().optimized(),
+                Rule::Tree(Arg::Repeat(NumVar::Num(1), x)) => x.optimized(),
+                Rule::Tree(Arg::List(mut xs)) if xs.len() == 1 => xs.pop().unwrap().optimized(),
+                Rule::Chain(x) => Rule::Chain(x.optimized()),
+                Rule::Loop(x) => Rule::Loop(x.optimized()),
+                Rule::Tree(x) => Rule::Tree(x.optimized()),
+                Rule::Chain1 => Rule::Chain1,
+            }
+        }
+
+        pub fn eval(&self, visit_edge: &mut impl Visitor) -> (usize) {
+            let mut pos = 0;
+            let mut n_verts = 1;
+            let mut ctx = Context::default();
+            self.eval_inner(&mut pos, &mut n_verts, &mut ctx, visit_edge);
+            pos
+        }
+
+        fn eval_inner(
+            &self,
+            pos: &mut usize,
+            n_verts: &mut usize,
+            ctx: &mut Context,
+            visitor: &mut impl Visitor,
+        ) {
+            match self {
+                Rule::Chain1 => {
+                    // visit_edge(*pos, *n_verts);
+                    visitor.on_edge(*pos, *n_verts);
+                    *pos = *n_verts;
+                    *n_verts += 1;
+                }
+                Rule::Chain(x) => {
+                    x.for_each_rev(ctx, &mut |rule, ctx, _| {
+                        rule.eval_inner(pos, n_verts, ctx, visitor);
+                    });
+                }
+                Rule::Loop(x) => {
+                    let init = *pos;
+                    let mut terminal = *pos;
+                    x.for_each_rev(ctx, &mut |rule, ctx, is_first| {
+                        rule.eval_inner(pos, n_verts, ctx, visitor);
+                        if is_first {
+                            terminal = *pos;
+                        }
+                    });
+                    visitor.on_merge(init, *pos);
+                    *pos = terminal;
+                }
+                Rule::Tree(x) => {
+                    let init = *pos;
+                    let mut terminal = *pos;
+                    x.for_each_rev(ctx, &mut |rule, ctx, is_first| {
+                        *pos = init;
+                        rule.eval_inner(pos, n_verts, ctx, visitor);
+                        if is_first {
+                            terminal = *pos;
+                        }
+                    });
+                    *pos = terminal;
+                }
+            }
+        }
+    }
+
+    impl Arg {
+        pub fn optimized(self: Arg) -> Arg {
+            match self {
+                Arg::Repeat(v, x) => Arg::Repeat(v, Box::new(x.optimized())),
+                Arg::Range(v, a, b, x) => Arg::Range(v, a, b, Box::new(x.optimized())),
+                Arg::List(xs) => Arg::List(xs.into_iter().map(|x| x.optimized()).collect()),
+            }
+        }
+
+        fn for_each_rev(&self, ctx: &mut Context, f: &mut impl FnMut(&Rule, &mut Context, bool)) {
+            match self {
+                Arg::Repeat(v, x) => {
+                    for i in 0..ctx.get_numvar(*v) {
+                        f(x, ctx, i == 0);
+                    }
+                }
+                Arg::Range(v, a, b, x) => {
+                    let a = ctx.get_numvar(*a);
+                    let b = ctx.get_numvar(*b);
+                    if a <= b {
+                        for i in a..=b {
+                            ctx.set_var(*v, i);
+                            f(x, ctx, i == a);
+                        }
+                    } else {
+                        for i in b..=a {
+                            ctx.set_var(*v, i);
+                            f(x, ctx, i == b);
+                        }
+                    }
+                }
+                Arg::List(xs) => {
+                    for (i, x) in xs.iter().enumerate() {
+                        f(x, ctx, i == 0)
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn parse(s: &[u8]) -> Rule {
+        use super::parser::u8::*;
+        use super::parser::*;
+
+        parser_fn!(let comma: () = literal_byte(b','));
+        parser_fn!(let varname: u8 = satisfy(|b| matches!(b, b'A'..=b'Z')).map(|b| b-b'A'));
+        parser_fn!(let num: u16 = uint.map(|x| x as u16));
+
+        parser_fn!(let numvar: NumVar = num.map(NumVar::Num).or_else(varname.map(NumVar::Var)));
+
+        parser_fn!(let range: Arg = (
+            literal(b"range("),
+            (varname, comma),
+            (numvar, comma, numvar, literal(b")")),
+            optional((comma, rule))
+        ).map(|(_,( v, _), (a, _, b, _), x)| {
+                Arg::Range(v, a, b, Box::new(x.map_or(Rule::Chain1, |(_, x)| x)))
+        }));
+        parser_fn!(let repeat: Arg = (numvar, optional((comma, rule)))
+            .map(|(v, x)| Arg::Repeat(v, Box::new(x.map_or(Rule::Chain1, |(_, x)| x)))));
+        parser_fn!(let list: Arg = many_sep1(rule, literal(b",")).map(Arg::List));
+        parser_fn!(let arg: Arg = repeat.or_else(range).or_else(list));
+        parser_fn!(let parens: Arg = between(literal(b"("), arg, literal(b")")));
+
+        parser_fn!(let chain: Rule = (literal(b"c"), optional(parens)).map(|(_, x)| x
+            .map_or_else(|| Rule::Chain1, Rule::Chain)));
+        parser_fn!(let loop_: Rule = (literal(b"loop"), parens).map(|(_, x)| Rule::Loop(x)));
+        parser_fn!(let tree: Rule = (literal(b"t"), parens).map(|(_, x)| Rule::Tree(x)));
+        parser_fn!(let rule: Rule =loop_.or_else(tree).or_else(chain));
+
+        rule.run(s).unwrap().0
+    }
+}
+
+#[allow(dead_code)]
+mod collections {
+    use std::cell::Cell;
+
+    pub struct DisjointSet {
+        parent: Vec<Cell<usize>>,
+        size: Vec<u32>,
+    }
+
+    impl DisjointSet {
+        pub fn new(n: usize) -> Self {
+            Self {
+                parent: (0..n).map(|i| Cell::new(i)).collect(),
+                size: vec![1; n],
+            }
+        }
+
+        pub fn find_root(&self, u: usize) -> usize {
+            if u == self.parent[u].get() {
+                u
+            } else {
+                self.parent[u].set(self.find_root(self.parent[u].get()));
+                self.parent[u].get()
+            }
+        }
+
+        pub fn get_size(&self, u: usize) -> u32 {
+            self.size[self.find_root(u)]
+        }
+
+        // returns whether two set were different
+        pub fn merge(&mut self, mut u: usize, mut v: usize) -> bool {
+            u = self.find_root(u);
+            v = self.find_root(v);
+            if u == v {
+                return false;
+            }
+            if self.size[u] > self.size[v] {
+                std::mem::swap(&mut u, &mut v);
+            }
+            self.parent[v].set(u);
+            self.size[u] += self.size[v];
+            true
+        }
+    }
+}
+
+struct Graph {
+    n_verts: usize,
+    edges: Vec<(usize, usize)>,
+    dset: collections::DisjointSet,
+}
+
+impl Graph {
+    fn new(n: usize) -> Self {
+        Self {
+            n_verts: 0,
+            edges: Vec::new(),
+            dset: collections::DisjointSet::new(n),
+        }
+    }
+
+    fn compress(&mut self, last_vert: usize) {
+        // dbg!(&self.edges);
+        // dbg!(last_vert);
+
+        let mut id_set: HashSet<usize> = Default::default();
+        for (u, v) in &mut self.edges {
+            *u = self.dset.find_root(*u);
+            *v = self.dset.find_root(*v);
+            id_set.insert(*u);
+            id_set.insert(*v);
+        }
+        self.n_verts = id_set.len();
+
+        // remap index to 0..n_verts
+        let mut id_map: HashMap<usize, usize> = Default::default();
+
+        id_map.insert(self.dset.find_root(0), 0);
+        id_map.insert(self.dset.find_root(last_vert), self.n_verts - 1);
+
+        let mut next_id = 1;
+        let mut get_id = |u: usize| {
+            *id_map.entry(u).or_insert_with(|| {
+                let id = next_id;
+                next_id += 1;
+                id
+            })
+        };
+        for (u, v) in &mut self.edges {
+            *u = get_id(*u);
+            *v = get_id(*v);
+        }
+
+        // dbg!(id_map);
+    }
+
+    fn find_euler_cover(&self, output: &mut impl std::io::Write) {
+        let n: usize = self.n_verts;
+
+        let mut edges = self.edges.clone();
+        let mut neighbors = vec![vec![]; n + 1];
+        for (i_edge, (u, v)) in edges.iter().enumerate() {
+            neighbors[*u].push(i_edge);
+            neighbors[*v].push(i_edge);
+        }
+
+        let mut odd_verts = (0..n)
+            .filter(|&u| neighbors[u].len() % 2 != 0)
+            .collect::<Vec<_>>()
+            .into_iter();
+        let n_paths = (odd_verts.len() / 2).max(1);
+
+        // Create temporary path for odd degree vertices
+        while odd_verts.len() >= 3 {
+            let u = odd_verts.next().unwrap();
+            let v = odd_verts.next().unwrap();
+            let i_edge = edges.len();
+            neighbors[u].push(i_edge);
+            neighbors[n].push(i_edge);
+            edges.push((u, n));
+            neighbors[v].push(i_edge + 1);
+            neighbors[n].push(i_edge + 1);
+            edges.push((v, n));
+        }
+
+        let mut erased = vec![false; edges.len()];
+
+        // Hierholzer's algorithm
+        // Find an euler path in a connected graph (if exists)
+        let mut stack = vec![odd_verts.next().unwrap_or(0)];
+        let mut path = vec![];
+        while let Some(&u) = stack.last() {
+            if let Some(&i_edge) = neighbors[u].last() {
+                // already erased the inv of i_edge
+                if erased[i_edge] {
+                    neighbors[u].pop();
+                    continue;
+                }
+                let (v, w) = &mut edges[i_edge];
+                neighbors[u].pop();
+                erased[i_edge] = true;
+                let v = if *v == u { *w } else { *v };
+                stack.push(v);
+            } else {
+                path.push(u);
+                stack.pop();
+            }
+        }
+
+        // Output
+        writeln!(output, "{} {}", self.n_verts, n_paths).unwrap();
+
+        // // Remove temporary edges
+
+        let mut i = 0;
+        while i < path.len() - 1 {
+            if path[i] == n || path[i + 1] == n {
+                i += 1;
+                continue;
+            } else {
+                let mut j = i + 1;
+                while j < path.len() - 1 && !(path[j] == n || path[j + 1] == n) {
+                    j += 1;
+                }
+
+                let n_path = j - i + 1;
+                write!(output, "{} ", n_path).unwrap();
+                for k in i..=j {
+                    write!(output, "{} ", path[k] + 1).unwrap();
+                }
+                writeln!(output).unwrap();
+
+                i = j + 1;
+                // for k in i..j {
+                //     writeln!(output, "{} -> {}", path[k] + 1, path[k + 1] + 1).unwrap();
+                // }
+            }
+        }
+    }
+}
+
+impl ast::Visitor for Graph {
+    fn on_edge(&mut self, u: usize, v: usize) {
+        self.edges.push((u, v));
+    }
+    fn on_merge(&mut self, u: usize, v: usize) {
+        self.dset.merge(u, v);
+    }
+}
+
+fn main() {
+    let mut input = simple_io::stdin_at_once();
+    let mut output = simple_io::stdout_buf();
+
+    let pattern = input.token();
+    let mut expr = ast::parse(pattern.as_bytes());
+    expr = expr.optimized();
+
+    const MAX_VERTS: usize = 50_000;
+    const MAX_EDGES: usize = 3 * (MAX_VERTS - 1) / 2;
+
+    let mut graph = Graph::new(MAX_EDGES * 2);
+    let last_vert = expr.eval(&mut graph);
+    graph.compress(last_vert);
+
+    graph.find_euler_cover(&mut output);
+
+    // writeln!(output, "{}", graph.n_verts).unwrap();
+    // for &(u, v) in &graph.edges {
+    //     writeln!(output, "{} -> {}", u + 1, v + 1).unwrap();
+    // }
+
+    // println!("{:?}", expr);
+}
