@@ -1,0 +1,3 @@
+[env]
+MIRIFLAGS = "-Zmiri-disable-isolation"
+
