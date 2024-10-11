@@ -1,5 +1,5 @@
 [package]
-name = "my-project"
+name = "ps_rust_main"
 version = "0.1.0"
 authors = ["runner"]
 edition = "2021"
@@ -10,11 +10,8 @@ members = ["templates"]
 [dependencies]
 # rand = "0.8.5"
 
-[dev-dependencies]
-# clippy = "0.0.302"
-
 [[bin]]
 name = "main"
 path = "main.rs"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.htm:
