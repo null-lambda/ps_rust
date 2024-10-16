@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::{io::Write, iter::once};
 
 mod simple_io {
     pub struct InputAtOnce<'a> {
@@ -86,7 +86,6 @@ mod geometry {
         + PartialOrd
         + PartialEq
         + Default
-        + std::fmt::Debug
     {
         fn zero() -> Self {
             Self::default()
@@ -268,8 +267,6 @@ mod geometry {
     }
 
     pub mod dim3 {
-        use std::collections::HashMap;
-
         use super::*;
 
         pub fn cross<T: Scalar>(p: Point3<T>, q: Point3<T>) -> Point3<T> {
@@ -348,121 +345,10 @@ mod geometry {
             }
             faces
         }
-
-        // points should be sorted randomly
-        // incremental convex hull, with conflict graph
-        // https://cw.fel.cvut.cz/b221/_media/courses/cg/lectures/05-convexhull-3d.pdf
-        pub fn convex_hull_fast<T: Scalar>(points: &mut [Point3<T>]) -> Vec<[usize; 3]> {
-            macro_rules! unwrap_or_return {
-                ($e:expr, $r: expr) => {
-                    match $e {
-                        Some(x) => x,
-                        None => return $r,
-                    }
-                };
-            }
-            use std::collections::HashSet;
-            use std::iter::once;
-
-            if points.len() <= 2 {
-                return vec![];
-            }
-
-            let [i, j] = [0, 1];
-            let k = 2 + unwrap_or_return!(
-                points[2..].iter().position(|&pk| {
-                    cross(points[j] - points[i], pk - points[i]) != Point3::default()
-                }),
-                vec![]
-            );
-
-            let l = k + unwrap_or_return!(
-                (k + 1 < points.len())
-                    .then(|| points[k..].iter().position(|&pl| signed_vol(
-                        points[i], points[j], points[k], pl
-                    ) != T::zero()))
-                    .flatten(),
-                (2..points.len()).map(|k| [0, 1, k]).collect()
-            );
-
-            points.swap(2, k);
-            points.swap(3, l);
-            if !(signed_vol(points[0], points[1], points[2], points[3]) > T::zero()) {
-                points.swap(2, 3)
-            }
-
-            let mut faces: HashSet<_> = [[0, 2, 1], [0, 3, 2], [0, 1, 3], [1, 2, 3]].into();
-            let mut face_left_to_edge: HashMap<[usize; 2], [usize; 3]> = HashMap::new();
-            for &f in &faces {
-                let [i, j, k] = f;
-                face_left_to_edge.insert([i, j], f);
-                face_left_to_edge.insert([j, k], f);
-                face_left_to_edge.insert([k, i], f);
-            }
-
-            // initialize conflict graph
-            let mut visible_faces: Vec<HashSet<[usize; 3]>> = vec![HashSet::new(); points.len()];
-            let mut visible_points: HashMap<[usize; 3], Vec<usize>> =
-                faces.iter().map(|&f| (f, vec![])).collect();
-
-            for p_idx in 4..points.len() {
-                for (_, &f) in faces.iter().enumerate() {
-                    let [i, j, k] = f;
-                    if signed_vol(points[p_idx], points[i], points[j], points[k]) < T::zero() {
-                        visible_faces[p_idx].insert(f);
-                        visible_points.entry(f).or_default().push(p_idx);
-                    }
-                }
-            }
-
-            for p_idx in 4..points.len() {
-                visible_faces[p_idx].retain(|&f| faces.contains(&f));
-
-                for &f in &visible_faces[p_idx] {
-                    faces.remove(&f);
-                }
-
-                let iter_boundary =
-                    |[i, j, k]: [usize; 3]| once([i, j]).chain(once([j, k])).chain(once([k, i]));
-                let visible_half_edges: HashSet<[usize; 2]> = visible_faces[p_idx]
-                    .iter()
-                    .flat_map(|&face| iter_boundary(face))
-                    .collect();
-                let boundary = visible_half_edges
-                    .iter()
-                    .copied()
-                    .filter(|&[i, j]| !visible_half_edges.contains(&[j, i]));
-
-                for [i, j] in boundary {
-                    let f_new = [i, j, p_idx];
-                    faces.insert(f_new);
-                    visible_points.insert(f_new, Default::default());
-
-                    let mut p_next: HashSet<usize> = Default::default();
-                    p_next.extend(visible_points[&face_left_to_edge[&[i, j]]].iter().cloned());
-                    p_next.extend(visible_points[&face_left_to_edge[&[j, i]]].iter().cloned());
-
-                    for &q in &p_next {
-                        if signed_vol(points[q], points[i], points[j], points[p_idx]) < T::zero() {
-                            visible_faces[q].insert(f_new);
-                            visible_points.get_mut(&f_new).unwrap().push(q);
-                        }
-                    }
-
-                    *face_left_to_edge.get_mut(&[i, j]).unwrap() = f_new;
-                    face_left_to_edge.insert([j, p_idx], f_new);
-                    face_left_to_edge.insert([p_idx, i], f_new);
-                }
-                for face in &visible_faces[p_idx] {
-                    visible_points.remove(face);
-                }
-            }
-
-            faces.into_iter().collect()
-        }
     }
 }
 
+use dim3::signed_vol;
 use geometry::*;
 
 #[test]
@@ -482,10 +368,8 @@ fn gen_test_cases() {
     let mut output_buf = Vec::<u8>::new();
 
     let n = 10000;
-    // let n = 10;
     let n_queries = 10;
     let mut pick = || rng.range_u64(0..4001) as i64 - 2000;
-    // let mut pick = || rng.range_u64(0..10) as i64;
     writeln!(output_buf, "{} {}", n, n_queries).unwrap();
     for _ in 0..n {
         let [x, y, z] = loop {
@@ -495,9 +379,10 @@ fn gen_test_cases() {
                 break [x, y, z];
             }
         };
-        writeln!(output_buf, "{} {} {}", x, y, z).unwrap();
+        writeln!(output_buf, "{} {} {}", x, y, z * 0 + 300).unwrap();
     }
     for _ in 0..n_queries {
+        // writeln!(output_buf, "{} {} {} {}", pick(), pick(), pick(), pick()).unwrap();
         let [a, b, c] = [pick(), pick(), pick()];
         let d = 0;
         writeln!(output_buf, "{} {} {} {}", a, b, c, d).unwrap();
@@ -509,17 +394,11 @@ fn main() {
     let mut input = simple_io::stdin_at_once();
 
     let n_points: usize = input.value();
-    let mut points_original = vec![];
-    let mut points_scaled: Vec<Point3<i64>> = (0..n_points)
+    let mut points: Vec<Point3<i64>> = (0..n_points)
         .map(|_| {
             {
-                let p: Point3<i64> = [input.value(), input.value(), input.value()].into();
-                points_original.push(p);
-                let mut p: Point3<f64> = [p[0] as f64, p[1] as f64, p[2] as f64].into();
-                let p_norm = p.dot(p).sqrt();
-                p = p * (1.0 / p_norm);
-                let factor = 1e6;
-                p = p * factor;
+                let p: Point3<f64> = [input.value(), input.value(), input.value()].into();
+                let p = p * (1e6 / p.dot(p).sqrt());
                 let p: Point3<i64> = [p[0] as i64, p[1] as i64, p[2] as i64].into();
                 p
             }
@@ -528,30 +407,26 @@ fn main() {
         .collect();
 
     let mut rng = cheap_rand::Rng::new(10905525723936348110);
-    rng.shuffle(&mut points_scaled);
+    rng.shuffle(&mut points);
 
-    let faces = dim3::convex_hull(&points_scaled);
+    let faces = dim3::convex_hull(&points);
     let normalization_factor = 2.0 / (4.0 * std::f64::consts::PI);
-    let mut vol_pos = 0.;
-    let mut vol_neg = 0.;
+    let spherical_vol = faces
+        .iter()
+        .filter_map(|&[i, j, k]| {
+            let [a, b, c] = [points[i], points[j], points[k]];
+            let numer = signed_vol(Point3::default(), a, b, c);
+            // dbg!(numer);
+            if numer <= 0 {
+                return None;
+            }
 
-    faces.iter().for_each(|&[i, j, k]| {
-        let [a, b, c] = [points_original[i], points_original[j], points_original[k]];
-        let numer = dim3::signed_vol(Point3::default(), a, b, c);
-        if numer == 0 {
-            return;
-        }
-        let [a, b, c] = [points_scaled[i], points_scaled[j], points_scaled[k]];
-
-        let denom = 1 + a.dot(b) + b.dot(c) + c.dot(a);
-        let area_half = (numer as f64 / denom as f64).atan();
-        if area_half > 0. {
-            vol_pos += area_half;
-        } else {
-            vol_neg += area_half;
-        }
-    });
-    let spherical_vol = vol_pos.max(-vol_neg) * normalization_factor;
+            let denom = 1 + a.dot(b) + b.dot(c) + c.dot(a);
+            let area_half = (numer as f64 / denom as f64).atan();
+            Some(area_half)
+        })
+        .sum::<f64>()
+        * normalization_factor;
     let result = 1. - spherical_vol;
     println!("{}", result);
 }
