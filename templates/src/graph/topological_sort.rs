@@ -1,6 +1,6 @@
 mod graph {
     // topological sort, with lazy evaluation
-    fn toposort<'a>(neighbors: &'a Vec<Vec<usize>>) -> impl Iterator<Item = usize> + 'a {
+    pub fn toposort<'a>(neighbors: &'a Vec<Vec<usize>>) -> impl Iterator<Item = usize> + 'a {
         let n = neighbors.len();
         let mut indegree: Vec<u32> = vec![0; n];
         for u in 0..n {

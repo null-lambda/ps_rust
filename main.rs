@@ -1,4 +1,5 @@
-use std::{io::Write, iter::once};
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::Write;
 
 mod simple_io {
     pub struct InputAtOnce<'a> {
@@ -27,647 +28,168 @@ mod simple_io {
     }
 }
 
-#[allow(dead_code)]
-mod cheap_rand {
-    // Written in 2015 by Sebastiano Vigna (vigna@acm.org)
-    // https://xoshiro.di.unimi.it/splitmix64.c
-    use std::ops::Range;
-    pub struct Rng(u64);
-
-    impl Rng {
-        pub fn new(seed: u64) -> Self {
-            assert_ne!(seed, 0);
-            Self(seed)
-        }
-
-        pub fn next_u64(&mut self) -> u64 {
-            self.0 = self.0.wrapping_add(0x9e3779b97f4a7c15);
-            let mut x = self.0;
-            x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-            x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
-            x ^ (x >> 31)
-        }
-
-        pub fn range_u64(&mut self, range: Range<u64>) -> u64 {
-            let Range { start, end } = range;
-            assert!(start < end);
-
-            let width = end - start;
-            let test = (u64::MAX - width) % width;
-            loop {
-                let value = self.next_u64();
-                if value >= test {
-                    return start + value % width;
-                }
-            }
-        }
-
-        pub fn shuffle<T>(&mut self, xs: &mut [T]) {
-            let n = xs.len();
-            for i in 0..n - 1 {
-                let j = self.range_u64(i as u64..n as u64) as usize;
-                xs.swap(i, j);
-            }
-        }
-    }
-}
-
-#[allow(dead_code)]
-#[macro_use]
-mod geometry {
-    use std::ops::{Add, Index, IndexMut, Mul, Neg, Sub};
-
-    pub trait Scalar:
-        Copy
-        + Add<Output = Self>
-        + Sub<Output = Self>
-        + Mul<Output = Self>
-        + Neg<Output = Self>
-        + PartialOrd
-        + PartialEq
-        + Default
-        + std::fmt::Debug
-    {
-        fn zero() -> Self {
-            Self::default()
-        }
-
-        fn abs(self) -> Self {
-            if self < Self::zero() {
-                -self
-            } else {
-                self
-            }
-        }
-    }
-
-    impl Scalar for f64 {}
-    impl Scalar for i64 {}
-    impl Scalar for i32 {}
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-    pub struct PointNd<const N: usize, T>(pub [T; N]);
-
-    pub type Point<T> = PointNd<2, T>;
-    pub type Point3<T> = PointNd<3, T>;
+#[allow(unused)]
+pub mod splay_tree {
+    use std::{cell::UnsafeCell, cmp::Ordering, mem};
 
     #[derive(Debug, Clone, Copy)]
-    pub struct Angle<T>(pub Point<T>);
-
-    impl<T: Scalar> Angle<T> {
-        pub fn circular_cmp(&self, other: &Self) -> std::cmp::Ordering {
-            T::zero().partial_cmp(&cross(self.0, other.0)).unwrap()
-        }
+    enum Branch {
+        Left = 0,
+        Right = 1,
     }
 
-    impl<T: Scalar> PartialEq for Angle<T> {
-        fn eq(&self, other: &Self) -> bool {
-            debug_assert!(self.0 != PointNd([T::zero(), T::zero()]));
-            debug_assert!(other.0 != PointNd([T::zero(), T::zero()]));
-            cross(self.0, other.0) == T::zero()
-        }
-    }
-
-    impl<T: Scalar> Eq for Angle<T> {}
-
-    impl<const N: usize, T: Scalar> PointNd<N, T> {
-        pub fn dot(self, other: Self) -> T {
-            self.0
-                .into_iter()
-                .zip(other.0)
-                .map(|(a, b)| a * b)
-                .fold(T::zero(), |acc, x| acc + x)
-        }
-
-        pub fn max_norm(self) -> T {
-            self.0
-                .into_iter()
-                .map(|a| a.abs())
-                .max_by(|a, b| a.partial_cmp(b).unwrap())
-                .unwrap()
-        }
-    }
-
-    impl<const N: usize, T: Scalar> From<[T; N]> for PointNd<N, T> {
-        fn from(p: [T; N]) -> Self {
-            Self(p)
-        }
-    }
-
-    impl<const N: usize, T: Scalar> Index<usize> for PointNd<N, T> {
-        type Output = T;
-        fn index(&self, i: usize) -> &Self::Output {
-            &self.0[i]
-        }
-    }
-
-    impl<const N: usize, T: Scalar> IndexMut<usize> for PointNd<N, T> {
-        fn index_mut(&mut self, i: usize) -> &mut Self::Output {
-            &mut self.0[i]
-        }
-    }
-
-    macro_rules! impl_binop_dims {
-        ($N:expr, $($idx:expr )+, $trait:ident, $fn:ident) => {
-            impl<T: Scalar> $trait for PointNd<$N, T> {
-                type Output = Self;
-                fn $fn(self, other: Self) -> Self::Output {
-                    PointNd([$(self[$idx].$fn(other[$idx])),+])
-                }
+    impl Branch {
+        fn inv(self) -> Self {
+            match self {
+                Branch::Left => Branch::Right,
+                Branch::Right => Branch::Left,
             }
-        };
-    }
-
-    macro_rules! impl_binop {
-        ($trait:ident, $fn:ident) => {
-            impl_binop_dims!(2, 0 1, $trait, $fn);
-            impl_binop_dims!(3, 0 1 2, $trait, $fn);
-        };
-    }
-
-    impl_binop!(Add, add);
-    impl_binop!(Sub, sub);
-    impl_binop!(Mul, mul);
-
-    impl<const N: usize, T: Scalar> Default for PointNd<N, T> {
-        fn default() -> Self {
-            PointNd([T::zero(); N])
         }
     }
 
-    impl<const N: usize, T: Scalar> Neg for PointNd<N, T> {
-        type Output = Self;
-        fn neg(self) -> Self::Output {
-            PointNd(self.0.map(|x| -x))
-        }
+    #[derive(Debug)]
+    struct Node<K> {
+        key: K,
+        children: [Option<Box<Node<K>>>; 2],
     }
 
-    impl<const N: usize, T: Scalar> Mul<T> for PointNd<N, T> {
-        type Output = Self;
-        fn mul(self, k: T) -> Self::Output {
-            PointNd(self.0.map(|x| x * k))
-        }
-    }
-
-    pub fn cross<T: Scalar>(p: Point<T>, q: Point<T>) -> T {
-        p[0] * q[1] - p[1] * q[0]
-    }
-
-    pub fn signed_area<T: Scalar>(p: Point<T>, q: Point<T>, r: Point<T>) -> T {
-        cross(q - p, r - p)
-    }
-
-    pub fn ccw<T: Scalar>(p: Point<T>, q: Point<T>, r: Point<T>) -> bool {
-        T::zero() < signed_area(p, q, r)
-    }
-
-    pub fn convex_hull<T: Scalar>(points: &mut [Point<T>]) -> Vec<Point<T>> {
-        // monotone chain algorithm
-        let n = points.len();
-        if n <= 1 {
-            return points.to_vec();
-        }
-        assert!(n >= 2);
-
-        points.sort_unstable_by(|&p, &q| p.partial_cmp(&q).unwrap());
-
-        let mut lower = Vec::new();
-        let mut upper = Vec::new();
-        for &p in points.iter() {
-            while matches!(lower.as_slice(), [.., l1, l2] if !ccw(*l1, *l2, p)) {
-                lower.pop();
+    impl<K: Ord> Node<K> {
+        fn new(key: K) -> Self {
+            Self {
+                key,
+                children: [None, None],
             }
-            lower.push(p);
-        }
-        for &p in points.iter().rev() {
-            while matches!(upper.as_slice(), [.., l1, l2] if !ccw(*l1, *l2, p)) {
-                upper.pop();
-            }
-            upper.push(p);
-        }
-        lower.pop();
-        upper.pop();
-
-        lower.extend(upper);
-        lower
-    }
-
-    pub fn convex_hull_area<I>(points: I) -> f64
-    where
-        I: IntoIterator<Item = Point<f64>>,
-        I::IntoIter: Clone,
-    {
-        let points = points.into_iter();
-        let points_shifted = points.clone().skip(1).chain(points.clone().next());
-        points
-            .zip(points_shifted)
-            .map(|(p, q)| cross(p, q))
-            .sum::<f64>()
-            .abs()
-            / 2.0
-    }
-
-    pub mod dim3 {
-        use std::collections::HashMap;
-
-        use super::*;
-
-        pub fn cross<T: Scalar>(p: Point3<T>, q: Point3<T>) -> Point3<T> {
-            PointNd([
-                p[1] * q[2] - p[2] * q[1],
-                p[2] * q[0] - p[0] * q[2],
-                p[0] * q[1] - p[1] * q[0],
-            ])
         }
 
-        pub fn signed_vol<T: Scalar>(a: Point3<T>, b: Point3<T>, c: Point3<T>, d: Point3<T>) -> T {
-            (b - a).dot(cross(c - a, d - a))
+        fn rotate(self: &mut Box<Self>, branch: Branch) {
+            let mut sub: Box<Self> = self.children[branch.inv() as usize].take().unwrap();
+            self.children[branch.inv() as usize] = sub.children[branch as usize].take();
+            std::mem::swap(self, &mut sub);
+            self.children[branch as usize] = Some(sub);
         }
-        // points should be sorted randomly
-        // incremental convex hull
-        pub fn convex_hull<T: Scalar>(points: &[Point3<T>]) -> Vec<[usize; 3]> {
-            macro_rules! unwrap_or_return {
-                ($e:expr, $r: expr) => {
-                    match $e {
-                        Some(x) => x,
-                        None => return $r,
-                    }
+
+        fn splay(self: &mut Box<Self>, key: K) {
+            let mut new_children = [None, None];
+            let mut cursors = unsafe {
+                [
+                    &mut *(&mut new_children[0] as *mut _),
+                    &mut *(&mut new_children[1] as *mut _),
+                ]
+            };
+
+            loop {
+                let branch = match key.cmp(&self.key) {
+                    Ordering::Equal => break,
+                    Ordering::Less => Branch::Left,
+                    Ordering::Greater => Branch::Right,
                 };
-            }
-            use std::collections::HashSet;
-            use std::iter::once;
 
-            if points.len() <= 2 {
-                return vec![];
-            }
-
-            let [i, j] = [0, 1];
-            let mut k = 2 + unwrap_or_return!(
-                points[2..].iter().position(|&pk| {
-                    cross(points[j] - points[i], pk - points[i]) != Point3::default()
-                }),
-                vec![]
-            );
-
-            let mut l = k + unwrap_or_return!(
-                (k + 1 < points.len())
-                    .then(|| points[k..].iter().position(|&pl| signed_vol(
-                        points[i], points[j], points[k], pl
-                    ) != T::zero()))
-                    .flatten(),
-                (2..points.len()).map(|k| [0, 1, k]).collect()
-            );
-
-            if signed_vol(points[i], points[j], points[k], points[l]) > T::zero() {
-                std::mem::swap(&mut k, &mut l)
-            }
-            let mut faces = vec![[i, j, k], [i, k, l], [i, l, j], [j, l, k]];
-
-            for (p_idx, &p) in points.iter().enumerate() {
-                let (visible_faces, invisible_faces) = faces.into_iter().partition(|&[i, j, k]| {
-                    signed_vol(p, points[i], points[j], points[k]) > T::zero()
-                });
-                faces = visible_faces;
-
-                // point is inside of convex hull
-                if invisible_faces.is_empty() {
-                    continue;
+                let (mut cursor, mut cursor_inv) = cursors.split_at_mut(1);
+                if matches!(branch, Branch::Left) {
+                    mem::swap(&mut cursor, &mut cursor_inv);
                 }
+                let (mut cursor, mut cursor_inv) = (&mut cursor[0], &mut cursor_inv[0]);
 
-                let iter_boundary =
-                    |[i, j, k]: [usize; 3]| once([i, j]).chain(once([j, k])).chain(once([k, i]));
-                let invisible_half_edges: HashSet<[usize; 2]> = invisible_faces
-                    .iter()
-                    .flat_map(|&face| iter_boundary(face))
-                    .collect();
-                let boundary = invisible_half_edges
-                    .iter()
-                    .copied()
-                    .filter(|&[i, j]| !invisible_half_edges.contains(&[j, i]));
-                faces.extend(boundary.map(|[i, j]| [i, j, p_idx]));
-            }
-            faces
-        }
-
-        // points should be sorted randomly
-        // incremental convex hull, with conflict graph
-        // https://cw.fel.cvut.cz/b221/_media/courses/cg/lectures/05-convexhull-3d.pdf
-        pub fn convex_hull_fast<T: Scalar>(points: &mut [Point3<T>]) -> Vec<[usize; 3]> {
-            macro_rules! unwrap_or_return {
-                ($e:expr, $r: expr) => {
-                    match $e {
-                        Some(x) => x,
-                        None => return $r,
-                    }
-                };
-            }
-            use std::collections::HashSet;
-            use std::iter::once;
-
-            if points.len() <= 2 {
-                return vec![];
-            }
-
-            let [i, j] = [0, 1];
-            let k = 2 + unwrap_or_return!(
-                points[2..].iter().position(|&pk| {
-                    cross(points[j] - points[i], pk - points[i]) != Point3::default()
-                }),
-                vec![]
-            );
-
-            let l = k + unwrap_or_return!(
-                (k + 1 < points.len())
-                    .then(|| points[k..].iter().position(|&pl| signed_vol(
-                        points[i], points[j], points[k], pl
-                    ) != T::zero()))
-                    .flatten(),
-                (2..points.len()).map(|k| [0, 1, k]).collect()
-            );
-
-            points.swap(2, k);
-            points.swap(3, l);
-            if !(signed_vol(points[0], points[1], points[2], points[3]) > T::zero()) {
-                points.swap(2, 3)
-            }
-
-            #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-            struct HalfEdge {
-                inv: usize,
-                face: [usize; 3],
-            }
-
-            let mut faces: HashSet<_> = [[0, 2, 1], [0, 3, 2], [0, 1, 3], [1, 2, 3]].into();
-            let mut face_left_to_edge: HashMap<[usize; 2], [usize; 3]> = HashMap::new();
-            for &f in &faces {
-                let [i, j, k] = f;
-                face_left_to_edge.insert([i, j], f);
-                face_left_to_edge.insert([j, k], f);
-                face_left_to_edge.insert([k, i], f);
-            }
-
-            println!("{:?}", points);
-            // initialize conflict graph
-            let mut visible_faces: HashMap<usize, HashSet<[usize; 3]>> =
-                (4..points.len()).map(|i| (i, HashSet::new())).collect();
-            let mut visible_points: HashMap<[usize; 3], HashSet<usize>> =
-                faces.iter().map(|&f| (f, HashSet::new())).collect();
-
-            for p_idx in 4..points.len() {
-                for (_, &f) in faces.iter().enumerate() {
-                    let [i, j, k] = f;
-                    if signed_vol(points[p_idx], points[i], points[j], points[k]) < T::zero() {
-                        visible_faces.entry(p_idx).or_default().insert(f);
-                        visible_points.entry(f).or_default().insert(p_idx);
-                    }
-                }
-            }
-
-            for p_idx in 4..points.len() {
-                println!("p_idx: {:?}", p_idx);
-                println!("faces: {:?}", faces);
-                println!("visible_points: {:?}", visible_points);
-                println!("visible_faces: {:?}", visible_faces);
-                println!("face_right_to_edge: {:?}", face_left_to_edge);
-
-                if visible_faces[&p_idx].is_empty() {
-                    continue;
-                }
-
-                for &f in &visible_faces[&p_idx] {
-                    faces.remove(&f);
-                }
-
-                let iter_boundary =
-                    |[i, j, k]: [usize; 3]| once([i, j]).chain(once([j, k])).chain(once([k, i]));
-                let visible_half_edges: HashSet<[usize; 2]> = visible_faces[&p_idx]
-                    .iter()
-                    .flat_map(|&face| iter_boundary(face))
-                    .collect();
-                let boundary = || {
-                    visible_half_edges
-                        .iter()
-                        .copied()
-                        .filter(|&[i, j]| !visible_half_edges.contains(&[j, i]))
-                };
-                for [i, j] in boundary() {
-                    let f_new = [i, j, p_idx];
-                    faces.insert(f_new);
-                    visible_points.insert(f_new, Default::default());
-
-                    print!("boundary he {:?}, ", [i, j]);
-                    let mut p_next: HashSet<usize> = Default::default();
-                    p_next.extend(visible_points[&face_left_to_edge[&[i, j]]].iter().cloned());
-                    p_next.extend(visible_points[&face_left_to_edge[&[j, i]]].iter().cloned());
-                    p_next.extend(p_idx..points.len());
-                    println!(" p_next {:?}", p_next);
-
-                    for &q in &p_next {
-                        if signed_vol(points[q], points[i], points[j], points[p_idx]) < T::zero() {
-                            visible_faces.get_mut(&q).unwrap().insert(f_new);
-                            visible_points.get_mut(&f_new).unwrap().insert(q);
+                match self.children[branch as usize].take() {
+                    None => break,
+                    Some(child) => {
+                        if key.cmp(&child.key) == Ordering::Less {
+                            self.rotate(branch.inv());
+                            if self.children[branch as usize].is_none() {
+                                break;
+                            }
                         }
-                    }
 
-                    *face_left_to_edge.get_mut(&[i, j]).unwrap() = f_new;
-                    face_left_to_edge.insert([j, p_idx], f_new);
-                    face_left_to_edge.insert([p_idx, i], f_new);
-                }
-                for face in visible_faces[&p_idx].clone() {
-                    for p in &visible_points[&face] {
-                        visible_faces.get_mut(p).unwrap().remove(&face);
+                        **cursor_inv = Some(mem::replace(self, child));
+                        *cursor_inv = &mut cursor_inv.as_mut().unwrap().children[branch as usize];
                     }
-                    visible_points.remove(&face);
-                }
-                visible_faces.remove(&p_idx);
-
-                for [i, j] in boundary() {
-                    println!("{:?}", ([i, j], face_left_to_edge[&[i, j]]));
-                    debug_assert!(faces.contains(&face_left_to_edge[&[i, j]]));
-                    let (i, j) = (j, i);
-                    println!("{:?}", ([i, j], face_left_to_edge[&[i, j]]));
-                    debug_assert!(faces.contains(&face_left_to_edge[&[i, j]]));
                 }
             }
 
-            //             for (p_idx, &p) in points.iter().enumerate() {
-            //                 let (visible_faces, invisible_faces) = faces.into_iter().partition(|&[i, j, k]| {
-            //                     signed_vol(p, points[i], points[j], points[k]) > T::zero()
-            //                 });
-            //                 faces = visible_faces;
-
-            //                 // point is inside of convex hull
-            //                 if invisible_faces.is_empty() {
-            //                     continue;
-            //                 }
-
-            //                 let iter_boundary =
-            //                     |[i, j, k]: [usize; 3]| once([i, j]).chain(once([j, k])).chain(once([k, i]));
-            //                 let invisible_half_edges: HashSet<[usize; 2]> = invisible_faces
-            //                     .iter()
-            //                     .flat_map(|&face| iter_boundary(face))
-            //                     .collect();
-            //                 let boundary = invisible_half_edges
-            //                     .iter()
-            //                     .copied()
-            //                     .filter(|&[i, j]| !invisible_half_edges.contains(&[j, i]));
-            //                 faces.extend(boundary.map(|[i, j]| [i, j, p_idx]));
-            //             }
-            faces.into_iter().collect()
+            mem::swap(cursors[0], &mut self.children[0]);
+            mem::swap(cursors[1], &mut self.children[1]);
+            self.children = new_children;
         }
-    }
-}
+        /*
+                splay* Splay(int key, splay* root)
+        {
+            if(!root)
+                return NULL;
+            splay header;
+            /* header.rchild points to L tree; header.lchild points to R Tree */
+            header.lchild = header.rchild = NULL;
+            splay* LeftTreeMax = &header;
+            splay* RightTreeMin = &header;
 
-use geometry::*;
-
-#[test]
-fn en_test_cases() {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let mut rng = cheap_rand::Rng::new(loop {
-        let seed = (SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-            % u64::MAX as u128) as u64;
-        if seed != 0 {
-            break seed;
-        }
-    });
-
-    let mut output_buf = Vec::<u8>::new();
-
-    // let n = 10000;
-    let n = 10;
-    let n_queries = 10;
-    // let mut pick = || rng.range_u64(0..4001) as i64 - 2000;
-    let mut pick = || rng.range_u64(0..=10) as i64;
-    writeln!(output_buf, "{} {}", n, n_queries).unwrap();
-    for _ in 0..n {
-        let [x, y, z] = loop {
-            let [x, y, z] = [pick(), pick(), pick()];
-            let [dx, dy, dz] = [x, y, z];
-            if dx * dx + dy * dy + dz * dz <= 1000 * 1000 {
-                break [x, y, z];
+            /* loop until root->lchild == NULL || root->rchild == NULL; then break!
+               (or when find the key, break too.)
+             The zig/zag mode would only happen when cannot find key and will reach
+             null on one side after RR or LL Rotation.
+             */
+            while(1)
+            {
+                if(key < root->key)
+                {
+                    if(!root->lchild)
+                        break;
+                    if(key < root->lchild->key)
+                    {
+                        root = RR_Rotate(root); /* only zig-zig mode need to rotate once,
+                                                   because zig-zag mode is handled as zig
+                                                   mode, which doesn't require rotate,
+                                                   just linking it to R Tree */
+                        if(!root->lchild)
+                            break;
+                    }
+                    /* Link to R Tree */
+                    RightTreeMin->lchild = root;
+                    RightTreeMin = RightTreeMin->lchild;
+                    root = root->lchild;
+                    RightTreeMin->lchild = NULL;
+                }
+                else if(key > root->key)
+                {
+                    if(!root->rchild)
+                        break;
+                    if(key > root->rchild->key)
+                    {
+                        root = LL_Rotate(root);/* only zag-zag mode need to rotate once,
+                                                  because zag-zig mode is handled as zag
+                                                  mode, which doesn't require rotate,
+                                                  just linking it to L Tree */
+                        if(!root->rchild)
+                            break;
+                    }
+                    /* Link to L Tree */
+                    LeftTreeMax->rchild = root;
+                    LeftTreeMax = LeftTreeMax->rchild;
+                    root = root->rchild;
+                    LeftTreeMax->rchild = NULL;
+                }
+                else
+                    break;
             }
-        };
-        writeln!(output_buf, "{} {} {}", x, y, z).unwrap();
+            /* assemble L Tree, Middle Tree and R tree together */
+            LeftTreeMax->rchild = root->lchild;
+            RightTreeMin->lchild = root->rchild;
+            root->lchild = header.rchild;
+            root->rchild = header.lchild;
+
+            return root;
+        }
+                * */
     }
-    for _ in 0..n_queries {
-        let [a, b, c] = [pick(), pick(), pick()];
-        let d = 0;
-        writeln!(output_buf, "{} {} {} {}", a, b, c, d).unwrap();
+
+    struct SplayTree<K> {
+        root: UnsafeCell<Option<Box<Node<K>>>>,
     }
-    std::fs::write("input.txt", &output_buf).unwrap();
+
+    impl<K: Ord> SplayTree<K> {
+        //
+    }
 }
 
 fn main() {
     let mut input = simple_io::stdin_at_once();
-    let mut output_buf = Vec::<u8>::new();
-
-    use std::cmp::Ordering;
-    use std::collections::HashMap;
-    use std::iter::once;
-
-    let n_points: usize = input.value();
-    let n_queries: usize = input.value();
-    let mut points: Vec<Point3<i64>> = (0..n_points)
-        .map(|_| [input.value(), input.value(), input.value()].into())
-        .collect();
-
-    // TODO
-    // let mut rng = cheap_rand::Rng::new(10905525723936348110);
-    // rng.shuffle(&mut points);
-
-    // let mut faces = dim3::convex_hull(&points);
-    let mut faces = dim3::convex_hull_fast(&mut points);
-
-    // remove unused points
-    let mut transition_map = HashMap::new();
-    faces
-        .iter_mut()
-        .flat_map(|[ref mut i, ref mut j, ref mut k]| once(i).chain(once(j)).chain(once(k)))
-        .for_each(|i: &mut usize| {
-            let new_idx = transition_map.len();
-            *i = *transition_map.entry(*i).or_insert(new_idx);
-        });
-    let points: Vec<Point3<i32>> = {
-        let mut v = vec![Point3::default(); transition_map.len()];
-        for (old_idx, new_idx) in transition_map {
-            let PointNd([x, y, z]) = points[old_idx];
-            v[new_idx] = [x as i32, y as i32, z as i32].into();
-        }
-        v
-    };
-
-    let edges = faces
-        .iter()
-        .flat_map(|&[i, j, k]| once([i, j]).chain(once([j, k])).chain(once([k, i])))
-        .filter(|&[i, j]| i < j)
-        .collect::<Vec<_>>();
-
-    // graphical debugging
-    let mut mesh_str: Vec<u8> = vec![];
-    for &PointNd([x, y, z]) in &points {
-        writeln!(mesh_str, "v {} {} {}", x, y, z).unwrap();
-    }
-    for &[i, j, k] in &faces {
-        writeln!(mesh_str, "f {} {} {}", i + 1, j + 1, k + 1).unwrap();
-    }
-    std::fs::write("cvhull.obj", mesh_str).unwrap();
-
-    for _ in 0..n_queries {
-        use Ordering::*;
-        let [a, b, c, d]: [i32; 4] = [input.value(), input.value(), input.value(), input.value()];
-        let normal = [a, b, c].into();
-
-        let signed_dist: Vec<i32> = points.iter().map(|&p| p.dot(normal) + d).collect();
-
-        let section = (points.iter().zip(&signed_dist))
-            .filter_map(|(&p, &signed_dist)| {
-                (signed_dist == 0).then(|| PointNd([p[0] as f64, p[1] as f64, p[2] as f64]))
-            })
-            .chain(edges.iter().filter_map(|&[i, j]| {
-                matches!(
-                    (signed_dist[i].cmp(&0), signed_dist[j].cmp(&0)),
-                    (Greater, Less) | (Less, Greater)
-                )
-                .then(|| {
-                    let [p, q] = [points[i], points[j]];
-                    let dr = q - p;
-                    let denom = signed_dist[j] - signed_dist[i];
-                    let num = signed_dist[i];
-
-                    let t = -num as f64 / denom as f64;
-                    // debug_assert!(0.0 - 1e9 <= t && t <= 1.0 + 1e9);
-
-                    PointNd([
-                        p[0] as f64 + t * dr[0] as f64,
-                        p[1] as f64 + t * dr[1] as f64,
-                        p[2] as f64 + t * dr[2] as f64,
-                    ])
-                })
-            }));
-
-        fn cvhull_area(section: impl IntoIterator<Item = Point<f64>>) -> f64 {
-            let mut points: Vec<Point<f64>> = section.into_iter().collect();
-            let cvhull = convex_hull(&mut points);
-            convex_hull_area(cvhull)
-        }
-
-        let normalizing_factor = ((a * a + b * b + c * c) as f64).sqrt();
-        let result = if a != 0 {
-            cvhull_area(section.map(|PointNd([_, y, z])| PointNd([y, z]))) as f64 / a.abs() as f64
-        } else if b != 0 {
-            cvhull_area(section.map(|PointNd([x, _, z])| PointNd([x, z]))) as f64 / b.abs() as f64
-        } else if c != 0 {
-            cvhull_area(section.map(|PointNd([x, y, _])| PointNd([x, y]))) as f64 / c.abs() as f64
-        } else {
-            0.0
-            // unimplemented!()
-        } * normalizing_factor;
-
-        writeln!(output_buf, "{:.16}", result).unwrap();
-    }
-
-    std::io::stdout().write_all(&output_buf[..]).unwrap();
+    let mut output = std::io::BufWriter::new(std::io::stdout().lock());
 }
