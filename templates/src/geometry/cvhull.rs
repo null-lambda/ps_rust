@@ -1,117 +1,106 @@
-#[macro_use]
-mod geometry {
-    use std::ops::{Add, Index, IndexMut, Mul, Sub};
+use std::io::Write;
 
-    pub trait Scalar:
-        Copy
-        + Add<Output = Self>
-        + Sub<Output = Self>
-        + Mul<Output = Self>
-        + PartialOrd
-        + PartialEq
-        + Default
-    {
-        fn zero() -> Self {
-            Self::default()
+#[allow(dead_code)]
+mod simple_io {
+    pub struct InputAtOnce(std::str::SplitAsciiWhitespace<'static>);
+
+    impl InputAtOnce {
+        pub fn token(&mut self) -> &str {
+            self.0.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
         }
     }
 
-    impl Scalar for f64 {}
-    impl Scalar for i64 {}
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-    pub struct Point<T>(pub [T; 2]);
-
-    impl<T: Scalar> From<[T; 2]> for Point<T> {
-        fn from(p: [T; 2]) -> Self {
-            Point(p)
-        }
+    pub fn stdin_at_once() -> InputAtOnce {
+        let buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let buf = Box::leak(buf.into_boxed_str());
+        InputAtOnce(buf.split_ascii_whitespace())
     }
 
-    impl<T: Scalar> Index<usize> for Point<T> {
-        type Output = T;
-        fn index(&self, i: usize) -> &Self::Output {
-            &self.0[i]
+    pub fn stdout_buf() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
+const P: u64 = 1_000_000_007;
+
+fn pow(mut base: u64, mut exp: u64) -> u64 {
+    let mut result = 1;
+    while exp > 0 {
+        if exp % 2 == 1 {
+            result = result * base % P;
         }
+        base = base * base % P;
+        exp >>= 1;
+    }
+    result
+}
+
+fn mod_inv(n: u64) -> u64 {
+    pow(n, P - 2)
+}
+
+fn main() {
+    let mut input = simple_io::stdin_at_once();
+    let mut output = simple_io::stdout_buf();
+
+    let n: usize = input.value();
+    let m: usize = input.value();
+
+    // Paul Burkhardt, David G. Harris. "Simple and efficient four-cycle counting on sparse graphs"
+    // https://arxiv.org/abs/2303.06090
+
+    // order by degree
+    let mut degree = vec![0; n];
+    let edges: Vec<_> = (0..m)
+        .map(|_| {
+            let u: usize = input.value();
+            let v: usize = input.value();
+            degree[u - 1] += 1;
+            degree[v - 1] += 1;
+            (u - 1, v - 1)
+        })
+        .collect();
+
+    let mut indices: Vec<usize> = (0..n).collect();
+    indices.sort_unstable_by_key(|&i| degree[i]);
+    let mut inv_indices = vec![0; n];
+    for i in 0..n {
+        inv_indices[indices[i]] = i;
+    }
+    drop(degree);
+
+    let mut children = vec![vec![]; n];
+    let mut neighbors = vec![vec![]; n];
+    for &(u, v) in &edges {
+        let (u, v) = (u as usize, v as usize);
+        let (mut u, mut v) = (inv_indices[u], inv_indices[v]);
+        if !(u < v) {
+            std::mem::swap(&mut u, &mut v);
+        }
+        children[v].push(u);
+        neighbors[v].push(u);
+        neighbors[u].push(v);
     }
 
-    impl<T: Scalar> IndexMut<usize> for Point<T> {
-        fn index_mut(&mut self, i: usize) -> &mut Self::Output {
-            &mut self.0[i]
-        }
-    }
-
-    macro_rules! impl_binop {
-        ($trait:ident, $fn:ident) => {
-            impl<T: Scalar> $trait for Point<T> {
-                type Output = Self;
-                fn $fn(self, other: Self) -> Self::Output {
-                    Point([self[0].$fn(other[0]), self[1].$fn(other[1])])
+    let mut cnt = vec![0; n];
+    for u in 0..n {
+        for &v in &children[u] {
+            for &w in &neighbors[v] {
+                if w < u {
+                    cnt[u] += 1;
+                    cnt[v] += 1;
+                    cnt[w] += 1;
                 }
             }
-        };
-    }
-
-    impl_binop!(Add, add);
-    impl_binop!(Sub, sub);
-    impl_binop!(Mul, mul);
-
-    impl<T: Scalar> Mul<T> for Point<T> {
-        type Output = Self;
-        fn mul(self, k: T) -> Self::Output {
-            Point([self[0].mul(k), self[1].mul(k)])
         }
     }
 
-    pub fn signed_area<T: Scalar>(p: Point<T>, q: Point<T>, r: Point<T>) -> T {
-        (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
-    }
-
-    pub fn convex_hull<T: Scalar>(points: &mut [Point<T>]) -> Vec<Point<T>> {
-        // monotone chain algorithm
-        let n = points.len();
-        if n <= 1 {
-            return points.to_vec();
-        }
-        assert!(n >= 2);
-
-        points.sort_unstable_by(|&p, &q| p.partial_cmp(&q).unwrap());
-
-        let ccw = |p, q, r| signed_area(p, q, r) > T::zero();
-
-        let mut lower = Vec::new();
-        let mut upper = Vec::new();
-        for &p in points.iter() {
-            while matches!(lower.as_slice(), [.., l1, l2] if !ccw(*l1, *l2, p)) {
-                lower.pop();
-            }
-            lower.push(p);
-        }
-        for &p in points.iter().rev() {
-            while matches!(upper.as_slice(), [.., l1, l2] if !ccw(*l1, *l2, p)) {
-                upper.pop();
-            }
-            upper.push(p);
-        }
-        lower.pop();
-        upper.pop();
-
-        lower.extend(upper);
-        lower
-    }
-
-    pub fn convex_hull_area<I>(points: I) -> f64
-    where
-        I: IntoIterator<Item = [f64; 2]>,
-        I::IntoIter: Clone,
-    {
-        let mut area: f64 = 0.0;
-        let points = points.into_iter();
-        let points_shifted = points.clone().skip(1).chain(points.clone().next());
-        for ([x1, y1], [x2, y2]) in points.zip(points_shifted) {
-            area += x1 * y2 - x2 * y1;
-        }
-        area = (area / 2.0).abs();
-        area
-    }
+    println!("{:?}", cnt);
 }

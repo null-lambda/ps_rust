@@ -23,4 +23,8 @@ mod simple_io {
         let iter = unsafe { std::mem::transmute(iter) };
         InputAtOnce { _buf, iter }
     }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
 }
