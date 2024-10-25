@@ -204,6 +204,25 @@ fn signed_area<T: Scalar>(p: &Point<T>, q: &Point<T>, r: &Point<T>) -> T {
 
 type T = i64;
 
+#[derive(Debug, Clone, Copy)]
+pub struct Angle<T>(pub Point<T>);
+
+impl<T: Scalar> Angle<T> {
+    pub fn circular_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        T::zero().partial_cmp(&cross(self.0, other.0)).unwrap()
+    }
+}
+
+impl<T: Scalar> PartialEq for Angle<T> {
+    fn eq(&self, other: &Self) -> bool {
+        debug_assert!(self.0 != PointNd([T::zero(), T::zero()]));
+        debug_assert!(other.0 != PointNd([T::zero(), T::zero()]));
+        cross(self.0, other.0) == T::zero()
+    }
+}
+
+impl<T: Scalar> Eq for Angle<T> {}
+
 enum Intersection<T: Scalar> {
     Disjoint,
     Point(Point<T>),

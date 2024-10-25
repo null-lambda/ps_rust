@@ -1,83 +1,34 @@
-mod io {
-    use std::fmt::Debug;
-    use std::str::*;
+use std::io::Write;
 
-    pub trait InputStream {
-        fn token(&mut self) -> &[u8];
-        fn line(&mut self) -> &[u8];
+#[allow(dead_code)]
+mod simple_io {
+    pub struct InputAtOnce(std::str::SplitAsciiWhitespace<'static>);
 
-        fn skip_line(&mut self) {
-            self.line();
+    impl InputAtOnce {
+        pub fn token(&mut self) -> &str {
+            self.0.next().unwrap_or_default()
         }
 
-        #[inline]
-        fn value<T>(&mut self) -> T
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
         where
-            T: FromStr,
-            T::Err: Debug,
+            T::Err: std::fmt::Debug,
         {
-            let token = self.token();
-            let token = unsafe { from_utf8_unchecked(token) };
-            token.parse::<T>().unwrap()
+            self.token().parse().unwrap()
         }
     }
 
-    #[inline]
-    fn is_whitespace(c: u8) -> bool {
-        c <= b' '
+    pub fn stdin_at_once() -> InputAtOnce {
+        let buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let buf = Box::leak(buf.into_boxed_str());
+        InputAtOnce(buf.split_ascii_whitespace())
     }
 
-    fn trim_newline(s: &[u8]) -> &[u8] {
-        let mut s = s;
-        while s
-            .last()
-            .map(|&c| matches!(c, b'\n' | b'\r' | 0))
-            .unwrap_or_else(|| false)
-        {
-            s = &s[..s.len() - 1];
-        }
-        s
-    }
-
-    impl InputStream for &[u8] {
-        fn token(&mut self) -> &[u8] {
-            let i = self.iter().position(|&c| !is_whitespace(c)).unwrap();
-            //.expect("no available tokens left");
-            *self = &self[i..];
-            let i = self
-                .iter()
-                .position(|&c| is_whitespace(c))
-                .unwrap_or_else(|| self.len());
-            let (token, buf_new) = self.split_at(i);
-            *self = buf_new;
-            token
-        }
-
-        fn line(&mut self) -> &[u8] {
-            let i = self
-                .iter()
-                .position(|&c| c == b'\n')
-                .map(|i| i + 1)
-                .unwrap_or_else(|| self.len());
-            let (line, buf_new) = self.split_at(i);
-            *self = buf_new;
-            trim_newline(line)
-        }
+    pub fn stdout_buf() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
     }
 }
 
-use std::io::{BufReader, Read, Write};
-
-fn stdin() -> Vec<u8> {
-    let stdin = std::io::stdin();
-    let mut reader = BufReader::new(stdin.lock());
-
-    let mut input_buf: Vec<u8> = vec![];
-    reader.read_to_end(&mut input_buf).unwrap();
-    input_buf
-}
-
-use std::cmp::{max, min, Ordering};
+use std::cmp::Ordering;
 use std::ops::{Add, Mul, Neg, Sub};
 
 trait Zero: Sized + Add<Self, Output = Self> {
@@ -106,9 +57,9 @@ macro_rules! trait_alias {
     };
 }
 
-trait_alias! { Scalar = Copy + Clone + Add<Output = Self> + Sub<Output = Self> + Neg<Output = Self> + Mul<Output = Self> + Zero }
+trait_alias! { Scalar = Copy + Clone + Add<Output = Self> + Sub<Output = Self> + Neg<Output = Self> + Mul<Output = Self> + Zero + PartialOrd + Ord + PartialEq + Eq }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 struct Point<T: Scalar> {
     x: T,
     y: T,
@@ -174,7 +125,58 @@ fn signed_area<T: Scalar>(p: &Point<T>, q: &Point<T>, r: &Point<T>) -> T {
     (q.x - p.x) * (r.y - p.y) + (r.x - p.x) * (p.y - q.y)
 }
 
-fn segment_intersects<T: Scalar + Ord + std::fmt::Debug + std::fmt::Display>(
+fn cross<T: Scalar>(p: Point<T>, q: Point<T>) -> T {
+    signed_area(&Point::zero(), &p, &q)
+}
+
+#[derive(Debug, Clone)]
+struct Angle<T: Scalar>(Point<T>);
+
+impl<T: Scalar> Angle<T> {
+    fn rev(&self) -> Self {
+        Angle(Point {
+            x: self.0.x,
+            y: -self.0.y,
+        })
+    }
+}
+
+impl<T: Scalar> Angle<T> {
+    pub fn circular_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        T::zero().partial_cmp(&cross(self.0, other.0)).unwrap()
+    }
+}
+
+impl<T: Scalar> PartialOrd for Angle<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.circular_cmp(other))
+        // Some(
+        //     ((self.0.y, self.0.x) < (T::zero(), T::zero()))
+        //         .cmp(&((other.0.y, other.0.x) < (T::zero(), T::zero())))
+        //         .then_with(|| (self.circular_cmp(other))),
+        // )
+    }
+}
+
+impl<T: Scalar> Ord for Angle<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+
+impl<T: Scalar> PartialEq for Angle<T> {
+    fn eq(&self, other: &Self) -> bool {
+        debug_assert!(self.0 != Point::zero());
+        debug_assert!(other.0 != Point::zero());
+        ((self.0.y, self.0.x) < (T::zero(), T::zero()))
+            == ((other.0.y, other.0.x) < (T::zero(), T::zero()))
+            && cross(self.0, other.0) == T::zero()
+    }
+}
+
+impl<T: Scalar> Eq for Angle<T> {}
+
+fn check_seg_inter<T: Scalar + Ord + std::fmt::Debug + std::fmt::Display>(
     p1: Point<T>,
     p2: Point<T>,
     q1: Point<T>,
@@ -192,20 +194,9 @@ fn segment_intersects<T: Scalar + Ord + std::fmt::Debug + std::fmt::Display>(
     let mul_det_t = -qd.y * r.x + qd.x * r.y;
     let mul_det_s = -pd.y * r.x + pd.x * r.y;
 
-    /*
-    let i1 = p1 * det + pd * mul_det_t;
-    let mut i1: Point<f64> = (i1.x as f64, i1.y as f64).into();
-    i1 = i1 * (1.0 / (det as f64));
-    i1
-
-    let i2 = q1 * det + qd * mul_det_s;
-    let mut i2: Point<f64> = (i2.x as f64, i2.y as f64).into();
-    i2 = i2 * (1.0 / (det as f64));
-    println!("{} {} {} , {:?}={:?}", det, mul_det_t, mul_det_s, i1, i2);
-    */
-
-    let is_endpoint = (T::zero() == mul_det_t || mul_det_t == det)
-        && (T::zero() == mul_det_s || mul_det_s == det);
+    // let is_endpoint = (T::zero() == mul_det_t || mul_det_t == det)
+    //     && (T::zero() == mul_det_s || mul_det_s == det);
+    let is_endpoint = p1 == q1 || p1 == q2 || p2 == q1 || p2 == q2;
     if is_endpoint {
         return false;
     }
@@ -233,7 +224,7 @@ fn segment_intersects<T: Scalar + Ord + std::fmt::Debug + std::fmt::Display>(
                 } else {
                     (reorder(p1.y, p2.y), reorder(q1.y, q2.y))
                 };
-                return max(a1, b1) < min(a2, b2);
+                return a1 <= b2 && b1 <= a2;
             }
             false
         }
@@ -241,12 +232,8 @@ fn segment_intersects<T: Scalar + Ord + std::fmt::Debug + std::fmt::Display>(
 }
 
 fn main() {
-    use io::*;
-
-    let input_buf = stdin();
-    let mut input: &[u8] = &input_buf;
-
-    let mut output_buf = Vec::<u8>::new();
+    let mut input = simple_io::stdin_at_once();
+    let mut output = simple_io::stdout_buf();
 
     use std::collections::BTreeSet;
     let n: usize = input.value();
@@ -254,8 +241,8 @@ fn main() {
 
     #[derive(Debug, Copy, Clone)]
     enum EventType {
-        Add,
-        Remove,
+        Add = 1,
+        Remove = 0,
     }
     let mut events = Vec::with_capacity(2 * n);
 
@@ -264,46 +251,47 @@ fn main() {
             let mut p1 = read_point();
             let mut p2 = read_point();
 
-            if p1.x > p2.x {
+            if (p1.x, p1.y) > (p2.x, p2.y) {
                 std::mem::swap(&mut p1, &mut p2);
             }
-            events.push((EventType::Add, p1.x, i));
-            events.push((EventType::Remove, p2.x, i));
+            events.push((EventType::Add, p1, p2));
+            events.push((EventType::Remove, p1, p2));
             [p1, p2]
         })
         .collect();
-    events.sort_by_key(|&(event_type, x, _)| (x, matches!(event_type, EventType::Remove)));
+    events.sort_by_key(|&(event_type, p1, p2)| {
+        (match event_type {
+            EventType::Remove => (p2.x, p2.y, 0, Angle(p2 - p1).rev()),
+            EventType::Add => (p1.x, p1.y, 1, Angle(p2 - p1)),
+        },)
+    });
 
     let result = (|| {
-        let mut current_segments = BTreeSet::new();
-        for (event_type, _, idx) in events {
-            let [p1, p2] = segments[idx];
-            // println!("{:?} {:?}", [p1, p2], event_type);
-
+        let mut active_segs = BTreeSet::new();
+        for (event_type, p1, p2) in events {
+            let key = (p1.y, p1.x, Angle(p2 - p1), p2.y, p2.x);
             match event_type {
                 EventType::Add => {
-                    let next = current_segments.range((p1.y, idx)..).next();
-                    let prev = current_segments.range(..(p1.y, idx)).next_back();
-                    // println!("{:?}", (prev, next));
-                    for &(_, idx) in prev.into_iter().chain(next) {
-                        let [q1, q2] = segments[idx];
-                        // println!("{:?} {:?}", [p1, p2], [q1, q2]);
-                        if segment_intersects(p1, p2, q1, q2) {
+                    let next = active_segs.range(&key..).next();
+                    let prev = active_segs.range(..&key).rev().next();
+                    for &(q1y, q1x, _, q2y, q2x) in prev.into_iter().chain(next) {
+                        let (q1, q2) = (Point { x: q1x, y: q1y }, Point { x: q2x, y: q2y });
+                        if check_seg_inter(p1, p2, q1, q2) {
                             return true;
                         }
                     }
-                    current_segments.insert((p1.y, idx));
+                    active_segs.insert(key);
                 }
                 EventType::Remove => {
-                    current_segments.remove(&(p1.y, idx));
-
-                    let next = current_segments.range((p1.y, idx)..).next();
-                    let prev = current_segments.range(..(p1.y, idx)).next_back();
-                    if let (Some(&(_, idx1)), Some(&(_, idx2))) = (prev, next) {
-                        let [p1, p2] = segments[idx1];
-                        let [q1, q2] = segments[idx2];
-                        // println!("{:?} {:?}", [p1, p2], [q1, q2]);
-                        if segment_intersects(p1, p2, q1, q2) {
+                    active_segs.remove(&key);
+                    let next = active_segs.range(&key..).next();
+                    let prev = active_segs.range(..&key).rev().next();
+                    if let (Some(&(q1y, q1x, _, q2y, q2x)), Some(&(r1y, r1x, _, r2y, r2x))) =
+                        (prev, next)
+                    {
+                        let (q1, q2) = (Point { x: q1x, y: q1y }, Point { x: q2x, y: q2y });
+                        let (r1, r2) = (Point { x: r1x, y: r1y }, Point { x: r2x, y: r2y });
+                        if check_seg_inter(q1, q2, r1, r2) {
                             return true;
                         }
                     }
@@ -313,7 +301,5 @@ fn main() {
         false
     })();
 
-    writeln!(output_buf, "{}", result as i64).unwrap();
-
-    std::io::stdout().write(&output_buf[..]).unwrap();
+    writeln!(output, "{}", result as i64).unwrap();
 }
