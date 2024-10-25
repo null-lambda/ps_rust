@@ -1,5 +1,32 @@
 use std::io::Write;
-use std::{collections::HashMap, io::BufRead};
+
+#[allow(dead_code)]
+mod simple_io {
+    pub struct InputAtOnce(std::str::SplitAsciiWhitespace<'static>);
+
+    impl InputAtOnce {
+        pub fn token(&mut self) -> &str {
+            self.0.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin_at_once() -> InputAtOnce {
+        let buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let buf = Box::leak(buf.into_boxed_str());
+        InputAtOnce(buf.split_ascii_whitespace())
+    }
+
+    pub fn stdout_buf() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
 
 #[allow(dead_code)]
 #[macro_use]
@@ -264,6 +291,7 @@ pub mod parser {
             let mut result = Vec::new();
             while let Some((e, s_new)) = p.run(s.clone()) {
                 result.push(e);
+
                 s = s_new;
             }
             Some((result, s))
@@ -406,7 +434,7 @@ pub mod parser {
         }
 
         pub fn skip_while<'a, S: U8Stream<'a>>(
-            pred: impl Fn(&u8) -> bool,
+            pred: impl Fn(&S::Item) -> bool,
         ) -> impl Parser<'a, S, ()> {
             take_while(move |b| pred(b)).map(|_| ())
         }
@@ -437,7 +465,8 @@ pub mod parser {
         }
 
         pub fn rspaces<'a, S: U8Stream<'a>, A, P: Parser<'a, S, A>>(p: P) -> impl Parser<'a, S, A> {
-            between(spaces, p, spaces)
+            // between(spaces, p, spaces)
+            (p, spaces).map(|(a, _)| a)
         }
 
         pub fn uint<'a, S: U8Stream<'a>>(s: S) -> ParseResult<S, i32> {
@@ -473,6 +502,298 @@ pub mod parser {
             }
 
             Some((result * sign, s))
+        }
+    }
+}
+
+pub mod ast {
+    use std::fmt;
+    use std::iter::{Product, Sum};
+    use std::ops::{Add, Mul};
+
+    use crate::parser_fn;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum Expr {
+        Var(u8),
+        Or(Vec<Expr>),
+        And(Vec<Expr>),
+        Neg(Box<Expr>),
+    }
+
+    impl fmt::Display for Expr {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Expr::Var(v) => write!(f, "{}", *v as char),
+                Expr::Neg(e) => write!(f, "~{}", e),
+                Expr::Or(es) => {
+                    write!(f, "(+")?;
+                    for e in es {
+                        write!(f, "{}", e)?;
+                    }
+                    write!(f, ")")
+                }
+                Expr::And(es) => {
+                    write!(f, "(*")?;
+                    for e in es {
+                        write!(f, "{}", e)?;
+                    }
+                    write!(f, ")")
+                }
+            }
+        }
+    }
+
+    use crate::parser::u8::*;
+    use crate::parser::*;
+    fn lit<'a, S: U8Stream<'a>>(t: &'static [u8]) -> impl Parser<'a, S, ()> {
+        rspaces(crate::parser::u8::lit(t))
+    }
+
+    parser_fn!(let varname: u8 = rspaces(satisfy(|b| b.is_ascii_lowercase())));
+    parser_fn!(let var: Expr = varname.map(Expr::Var));
+    parser_fn!(let neg: Expr = (lit(b"~"), expr).map(|(_, e)| Expr::Neg(Box::new(e))));
+    parser_fn!(let or: Expr = between(lit(b"(+"), many(expr), lit(b")")).map(Expr::Or));
+    parser_fn!(let and: Expr = between(lit(b"(*"), many(expr), lit(b")")).map(Expr::And));
+    parser_fn!(let expr: Expr = or.or_else(and).or_else(neg).or_else(var));
+
+    pub fn parse_expr(s: &[u8]) -> ParseResult<&[u8], Expr> {
+        expr(s)
+    }
+
+    pub fn parse_axiom<'a>(s: &'a [u8]) -> Option<(Vec<bool>, &'a [u8])> {
+        (lit(b"("), many(varname), lit(b")"))
+            .map(|(_, xs, _)| {
+                let mut res = vec![false; 26];
+                for c in xs {
+                    res[(c - b'a') as usize] = true;
+                }
+                res
+            })
+            .run(s)
+    }
+
+    pub fn parse_num(s: &[u8]) -> Option<(i32, &[u8])> {
+        rspaces(int).run(s)
+    }
+
+    pub fn push_neg(e: Expr) -> Expr {
+        use Expr::*;
+        match e {
+            Neg(f) => match *f {
+                Neg(g) => push_neg(*g),
+                And(gs) => Or(gs.into_iter().map(|g| push_neg(Neg(Box::new(g)))).collect()),
+                Or(gs) => And(gs.into_iter().map(|g| push_neg(Neg(Box::new(g)))).collect()),
+                _ => Neg(Box::new(push_neg(*f))),
+            },
+            And(fs) => And(fs.into_iter().map(push_neg).collect()),
+            Or(fs) => Or(fs.into_iter().map(push_neg).collect()),
+            _ => e,
+        }
+    }
+
+    pub fn push_and(e: Expr) -> Expr {
+        use Expr::*;
+        match e {
+            And(fs) => match fs.iter().position(|f| matches!(f, Or(..))) {
+                Some(i) => {
+                    let (head, mid) = fs.split_at(i);
+                    let (mid, tail) = mid.split_at(1);
+                    let Or(gs) = &mid[0] else { unreachable!() };
+                    Or(gs
+                        .into_iter()
+                        .map(|g| {
+                            push_and(And((head.iter().cloned())
+                                .chain(std::iter::once(g.clone()))
+                                .chain(tail.iter().cloned())
+                                .collect()))
+                        })
+                        .collect())
+                }
+                None => And(fs.into_iter().map(push_and).collect()),
+            },
+            Or(fs) => Or(fs.into_iter().map(push_and).collect()),
+            _ => e,
+        }
+    }
+
+    pub fn flatten(e: Expr) -> Expr {
+        use Expr::*;
+        match e {
+            And(fs) => {
+                let mut result = vec![];
+                for f in fs {
+                    match f {
+                        And(gs) => result.extend(gs.into_iter().map(flatten)),
+                        _ => result.push(flatten(f)),
+                    }
+                }
+                if result.len() == 1 {
+                    result.pop().unwrap()
+                } else {
+                    And(result)
+                }
+            }
+            Or(fs) => {
+                let mut result = vec![];
+                for f in fs {
+                    match f {
+                        Or(gs) => result.extend(gs.into_iter().map(flatten)),
+                        _ => result.push(flatten(f)),
+                    }
+                }
+                if result.len() == 1 {
+                    result.pop().unwrap()
+                } else {
+                    Or(result)
+                }
+            }
+            _ => e,
+        }
+    }
+
+    pub fn normalize(mut e: Expr) -> Expr {
+        loop {
+            // The full ACMNF should be not calculated explicitly and be lazily evaluated,
+            // since 'push_and' (term rewriting rule 8)
+            // expands the formula with exponential space complexity.
+            let e_prev = e.clone();
+            e = push_neg(e);
+            // e = push_and(e);
+            e = flatten(e);
+            if e == e_prev {
+                return e;
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Bounded<const MAX: u64>(pub u64);
+
+    impl<const MAX: u64> Add for Bounded<MAX> {
+        type Output = Self;
+        fn add(self, rhs: Self) -> Self::Output {
+            Self((self.0 + rhs.0) % MAX)
+        }
+    }
+
+    impl<const MAX: u64> Mul for Bounded<MAX> {
+        type Output = Self;
+        fn mul(self, rhs: Self) -> Self::Output {
+            Self((self.0 * rhs.0) % MAX)
+        }
+    }
+
+    impl<const MAX: u64> Sum for Bounded<MAX> {
+        fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+            iter.fold(Self(0), |acc, x| acc + x)
+        }
+    }
+
+    impl<const MAX: u64> Product for Bounded<MAX> {
+        fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
+            iter.fold(Self(1), |acc, x| acc * x)
+        }
+    }
+
+    impl From<u64> for Bounded<1_000_000_007> {
+        fn from(x: u64) -> Self {
+            Self(x % 1_000_000_007)
+        }
+    }
+
+    type BoundedU32 = Bounded<1_000_000_007>;
+
+    pub fn count_proofs(e: &Expr, axiom: &[bool]) -> BoundedU32 {
+        match e {
+            Expr::Or(fs) => fs.iter().map(|f| count_proofs(f, axiom)).sum(),
+            Expr::And(fs) => fs.iter().map(|f| count_proofs(f, axiom)).product(),
+            Expr::Var(v) => (axiom[(*v - b'a') as usize] as u64).into(),
+            Expr::Neg(f) => match f.as_ref() {
+                Expr::Var(v) => (!axiom[(*v - b'a') as usize] as u64).into(),
+                _ => panic!(),
+            },
+        }
+    }
+
+    pub fn nth_proof(e: &Expr, axiom: &[bool], mut n: usize) -> Option<Expr> {
+        match e {
+            Expr::Or(fs) => {
+                for f in fs {
+                    let l = count_proofs(f, axiom).0 as usize;
+                    if n < l {
+                        return nth_proof(f, axiom, n);
+                    }
+
+                    n -= l;
+                }
+                None
+            }
+            Expr::And(fs) => {
+                let mut ls = vec![];
+                for f in fs.iter().rev() {
+                    let l = count_proofs(f, axiom).0 as usize;
+                    if l == 0 {
+                        return None;
+                    }
+
+                    ls.push(n % l);
+                    n /= l;
+                }
+                let mut res = vec![];
+                for (f, l) in fs.iter().zip(ls.iter().rev()) {
+                    let Some(proof) = nth_proof(f, axiom, *l) else {
+                        return None;
+                    };
+                    res.push(proof);
+                }
+                Some(flatten(Expr::And(res)))
+            }
+            Expr::Var(..) | Expr::Neg(..) => {
+                (n == 0 && count_proofs(e, axiom).0 == 1).then(|| e.clone())
+            }
+        }
+    }
+}
+
+fn main() {
+    use parser::Parser;
+
+    // let mut input = simple_io::stdin_at_once();
+    let buf = std::io::read_to_string(std::io::stdin()).unwrap();
+    let mut s = buf.trim().as_bytes();
+    let mut output = simple_io::stdout_buf();
+
+    loop {
+        let Some(mut expr) = ast::parse_expr.run_in_place(&mut s) else {
+            break;
+        };
+        expr = ast::normalize(expr);
+        // println!("{}", expr);
+
+        // let axiom = ast::parse_axiom.run_in_place(&mut s).unwrap();
+        let axiom = vec![true; 26];
+
+        let m = ast::count_proofs(&expr, &axiom).0 as usize;
+        let mut pos = 0;
+        loop {
+            let k = ast::parse_num.run_in_place(&mut s).unwrap();
+            if k == 0 {
+                break;
+            }
+
+            if m == 0 {
+                continue;
+            }
+
+            if k > 0 {
+                for _ in 0..k {
+                    writeln!(output, "{}", ast::nth_proof(&expr, &axiom, pos).unwrap()).unwrap();
+                    pos = (pos + 1) % m;
+                }
+            } else {
+                pos = (pos + k.abs() as usize) % m;
+            }
         }
     }
 }

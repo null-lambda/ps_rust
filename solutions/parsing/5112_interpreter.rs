@@ -31,7 +31,7 @@ mod simple_io {
 #[allow(dead_code)]
 #[macro_use]
 pub mod parser {
-    use std::{mem, ptr};
+    use std::mem;
 
     pub type ParseResult<S, A> = Option<(A, S)>;
     pub trait Stream<'a>: Sized + Clone + std::fmt::Debug + 'a {
