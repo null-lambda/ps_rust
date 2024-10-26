@@ -31,29 +31,10 @@ mod simple_io {
     }
 }
 
-fn dijkstra(nieghbors: &Vec<Vec<(u32, u32)>>, start: u32) -> Vec<u32> {
-    let mut dist = vec![i32::MAX as u32; nieghbors.len()];
-    let mut pq: BinaryHeap<_> = [Reverse((0, start))].into();
-    dist[start as usize] = 0;
-
-    while let Some(Reverse((d, d_u))) = pq.pop() {
-        if dist[d_u as usize] < d {
-            continue;
-        }
-        for &(v, d_uv) in &nieghbors[d_u as usize] {
-            let d_v_new = d + d_uv;
-            if dist[v as usize] > d_v_new {
-                dist[v as usize] = d_v_new;
-                pq.push(Reverse((d_v_new, v)));
-            }
-        }
-    }
-    dist
-}
-
 fn main() {
     let mut input = simple_io::stdin_at_once();
     let mut output = simple_io::stdout();
 
     let n: usize = input.value();
+    writeln!(output, "{}", n).unwrap();
 }
