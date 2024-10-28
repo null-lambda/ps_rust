@@ -1,3 +1,36 @@
+use std::{io::Write, iter, ops::Range};
+
+mod simple_io {
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin_at_once<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
 #[allow(dead_code)]
 mod rand {
     // Written in 2015 by Sebastiano Vigna (vigna@acm.org)
@@ -556,4 +589,35 @@ pub mod network_flow {
             }
         }
     }
+}
+
+fn main() {
+    let mut input = simple_io::stdin_at_once();
+    let mut output = simple_io::stdout();
+
+    let n_src: usize = input.value();
+    let n_dest: usize = input.value();
+    let n_nodes = n_dest + n_src;
+
+    let mut ns = network_flow::NetworkSimplex::with_size(n_nodes);
+    for i in 0..n_src {
+        ns.set_supply(i, 1);
+    }
+    for i in 0..n_dest {
+        ns.set_demand(n_src + i, 1);
+    }
+
+    for u in 0..n_src {
+        let n_v: usize = input.value();
+        for _ in 0..n_v {
+            let v: usize = input.value::<usize>() - 1;
+            let cost: i32 = input.value();
+            ns.add_edge([u, n_src + v], 0, 1, cost);
+        }
+    }
+
+    let max_flow = ns.min_cost_max_flow();
+    let min_cost = ns.circulation_cost();
+    writeln!(output, "{}", max_flow).unwrap();
+    writeln!(output, "{}", min_cost).unwrap();
 }
