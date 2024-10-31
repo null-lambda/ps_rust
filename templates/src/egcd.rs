@@ -1,3 +1,12 @@
+fn gcd(mut a: u32, mut b: u32) -> u32 {
+    while b != 0 {
+        let temp = b;
+        b = a % b;
+        a = temp;
+    }
+    a
+}
+
 // Extended euclidean algorithm
 // find (d, x, y) satisfying d = gcd(a, b) and a * x + b * y = d
 fn egcd(a: u64, b: u64) -> (u64, i64, i64) {
