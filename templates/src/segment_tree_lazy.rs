@@ -1,3 +1,4 @@
+// TOOD: modify monoid trait with existential type and a constructor
 pub mod segtree {
     // monoid, not necesserily commutative
     pub trait Monoid {

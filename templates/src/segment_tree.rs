@@ -1,79 +1,79 @@
 pub mod segtree {
-    use std::ops::Range;
+    use std::{iter, ops::Range};
 
     pub trait Monoid {
-        fn id() -> Self;
-        fn op(self, rhs: Self) -> Self;
+        type Elem;
+        fn id(&self) -> Self::Elem;
+        fn op(&self, a: &Self::Elem, b: &Self::Elem) -> Self::Elem;
     }
 
     #[derive(Debug)]
-    pub struct SegTree<T> {
+    pub struct SegTree<M>
+    where
+        M: Monoid,
+    {
         n: usize,
-        sum: Vec<T>,
+        sum: Vec<M::Elem>,
+        monoid: M,
     }
 
-    impl<T> SegTree<T>
-    where
-        T: Monoid + Copy + Eq,
-    {
-        pub fn with_size(n: usize) -> Self {
+    impl<M: Monoid> SegTree<M> {
+        pub fn with_size(n: usize, monoid: M) -> Self {
             Self {
                 n,
-                sum: vec![T::id(); 2 * n],
+                sum: (0..2 * n).map(|_| monoid.id()).collect(),
+                monoid,
             }
         }
 
-        pub fn from_iter<I>(n: usize, iter: I) -> Self
+        pub fn from_iter<I>(n: usize, iter: I, monoid: M) -> Self
         where
-            I: Iterator<Item = T>,
+            I: Iterator<Item = M::Elem>,
         {
-            use std::iter::repeat;
-            let mut sum: Vec<T> = repeat(T::id())
-                .take(n)
+            let mut sum: Vec<_> = (0..n)
+                .map(|_| monoid.id())
                 .chain(iter)
-                .chain(repeat(T::id()))
+                .chain(iter::repeat_with(|| monoid.id()))
                 .take(2 * n)
                 .collect();
             for i in (0..n).rev() {
-                sum[i] = sum[i << 1].op(sum[i << 1 | 1]);
+                sum[i] = monoid.op(&sum[i << 1], &sum[i << 1 | 1]);
             }
-            Self { n, sum }
+            Self { n, sum, monoid }
         }
 
-        pub fn set(&mut self, mut idx: usize, value: T) {
+        pub fn set(&mut self, mut idx: usize, value: M::Elem) {
             debug_assert!(idx < self.n);
             idx += self.n;
             self.sum[idx] = value;
             while idx > 1 {
                 idx >>= 1;
-                self.sum[idx] = self.sum[idx << 1].op(self.sum[idx << 1 | 1]);
+                self.sum[idx] = self.monoid.op(&self.sum[idx << 1], &self.sum[idx << 1 | 1]);
             }
         }
 
-        #[inline]
-        pub fn get(&self, idx: usize) -> T {
-            self.sum[idx + self.n]
+        pub fn get(&self, idx: usize) -> &M::Elem {
+            &self.sum[idx + self.n]
         }
 
-        // sum on interval [left, right)
-        pub fn query_range(&self, range: Range<usize>) -> T {
+        pub fn query_range(&self, range: Range<usize>) -> M::Elem {
             let Range { mut start, mut end } = range;
             debug_assert!(start < self.n && end <= self.n);
             start += self.n;
             end += self.n;
-            let (mut result_left, mut result_right) = (T::id(), T::id());
+            let (mut result_left, mut result_right) = (self.monoid.id(), self.monoid.id());
             while start < end {
                 if start & 1 != 0 {
-                    result_left = result_left.op(self.sum[start]);
+                    result_left = self.monoid.op(&result_left, &self.sum[start]);
                 }
                 if end & 1 != 0 {
-                    result_right = self.sum[end - 1].op(result_right);
+                    result_right = self.monoid.op(&self.sum[end - 1], &result_right);
                 }
                 start = (start + 1) >> 1;
                 end >>= 1;
             }
 
-            result_left.op(result_right)
+            self.monoid.op(&result_left, &result_right)
         }
     }
 }
