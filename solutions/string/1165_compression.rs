@@ -135,7 +135,10 @@ pub mod lzw {
     }
 
     pub fn decode<'a>(s: &'a [u8]) -> Vec<u8> {
-        let mut dict: HashMap<u32, Vec<u8>> = (0..256).map(|i| (i, vec![i as u8])).collect();
+        let mut dict: Vec<Vec<u8>> = (0..256)
+            .map(|i| vec![i as u8])
+            .chain((0..3).map(|_| vec![]))
+            .collect();
         let mut next_code: u32 = 259;
         let mut n_bits = u32::BITS - next_code.leading_zeros();
 
@@ -156,20 +159,23 @@ pub mod lzw {
                 TERMINAL_CODE => break,
                 INC_BITS_CODE => n_bits += 1,
                 CLEAR_CODE => {
-                    dict = (0..256).map(|i| (i, vec![i as u8])).collect();
+                    dict = (0..256)
+                        .map(|i| vec![i as u8])
+                        .chain((0..3).map(|_| vec![]))
+                        .collect();
                     next_code = 259;
                     n_bits = u32::BITS - next_code.leading_zeros();
                     pattern = vec![];
                 }
                 _ => {
                     if pattern.is_empty() {
-                        pattern = dict[&c].clone();
+                        pattern = dict[c as usize].clone();
                         res.push(pattern[0]);
                         continue;
                     }
 
                     let mut next_pattern;
-                    if let Some(x) = dict.get(&c) {
+                    if let Some(x) = dict.get(c as usize) {
                         next_pattern = x.clone();
                     } else {
                         next_pattern = pattern.clone();
@@ -177,8 +183,7 @@ pub mod lzw {
                     }
 
                     res.extend(next_pattern.iter().cloned());
-                    dict.insert(
-                        next_code,
+                    dict.push(
                         pattern
                             .iter()
                             .chain(Some(&next_pattern[0]))
