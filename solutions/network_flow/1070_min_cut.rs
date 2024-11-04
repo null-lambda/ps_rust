@@ -1,8 +1,41 @@
+use std::io::Write;
+
+mod simple_io {
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin_at_once<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
 pub mod network_flow {
     use std::collections::VecDeque;
 
-    type Flow = i32;
-    const INFINITY: Flow = i32::MAX / 3;
+    type Flow = i64;
+    const INFINITY: Flow = i64::MAX / 4;
 
     struct Edge {
         to: u32,
@@ -215,4 +248,73 @@ pub mod network_flow {
             return self.excess[dest] + INFINITY;
         }
     }
+}
+
+fn main() {
+    let mut input = simple_io::stdin_at_once();
+    let mut output = simple_io::stdout();
+
+    let n: usize = input.value();
+    let m: usize = input.value();
+    let grid: Vec<u8> = (0..n).flat_map(|_| input.token().bytes().take(m)).collect();
+    let cost: Vec<i64> = (0..26).map(|_| input.value()).collect();
+
+    let mut network = network_flow::HLPP::with_size(n * m * 2 + 1);
+    let src = grid.iter().position(|&b| b == b'*').unwrap() + m * n;
+    let sink = n * m * 2;
+
+    let cell_cost = |i: usize| match grid[i] {
+        b'-' => None,
+        c @ b'A'..=b'Z' => Some(cost[(c - b'A') as usize]),
+        b'*' => Some(0),
+        _ => panic!(),
+    };
+
+    let base_cost = 3e8 as i64;
+    let inf = 9e10 as i64;
+
+    for i in 0..n {
+        for j in 0..m - 1 {
+            let u = i * m + j;
+            let v = i * m + j + 1;
+            if cell_cost(u).is_none() || cell_cost(v).is_none() {
+                continue;
+            }
+
+            network.add_edge(u + n * m, v, 0, inf);
+            network.add_edge(v + n * m, u, 0, inf);
+        }
+    }
+
+    for j in 0..m {
+        for i in 0..n - 1 {
+            let u = i * m + j;
+            let v = (i + 1) * m + j;
+            if cell_cost(u).is_none() || cell_cost(v).is_none() {
+                continue;
+            }
+
+            network.add_edge(u + n * m, v, 0, inf);
+            network.add_edge(v + n * m, u, 0, inf);
+        }
+    }
+
+    for i in 0..n {
+        for j in 0..m {
+            let u = i * m + j;
+            let Some(c) = cell_cost(u) else {
+                continue;
+            };
+
+            network.add_edge(u, u + m * n, 0, base_cost + c);
+
+            if i == 0 || i == n - 1 || j == 0 || j == m - 1 {
+                network.add_edge(u + m * n, sink, 0, inf);
+            }
+        }
+    }
+
+    let min_cut = network.max_flow(src, sink);
+    let (_n_barricates, total_cost) = (min_cut / base_cost, min_cut % base_cost);
+    writeln!(output, "{}", total_cost).unwrap();
 }
