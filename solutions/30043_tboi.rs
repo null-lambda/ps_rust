@@ -64,7 +64,6 @@ impl Rng {
     }
 }
 
-#[allow(dead_code)]
 pub mod iter {
     pub fn product<I, J>(i: I, j: J) -> impl Iterator<Item = (I::Item, J::Item)>
     where
@@ -79,7 +78,6 @@ pub mod iter {
     }
 }
 
-#[allow(dead_code)]
 mod collections {
     use std::{
         cmp::Reverse,

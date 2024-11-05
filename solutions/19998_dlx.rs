@@ -27,7 +27,6 @@ mod simple_io {
     }
 }
 
-#[allow(dead_code)]
 mod dlx {
     type Link = [usize; 2];
 

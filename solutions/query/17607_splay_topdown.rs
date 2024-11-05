@@ -29,7 +29,6 @@ mod simple_io {
     }
 }
 
-#[allow(unused)]
 pub mod splay {
     use super::*;
 

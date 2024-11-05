@@ -1,6 +1,5 @@
 use std::io::{self, BufRead, Write};
 
-#[allow(dead_code)]
 mod simple_io {
     pub struct InputAtOnce(std::str::SplitAsciiWhitespace<'static>);
 
@@ -28,7 +27,6 @@ mod simple_io {
     }
 }
 
-#[allow(dead_code)]
 #[macro_use]
 pub mod parser {
     use std::mem;

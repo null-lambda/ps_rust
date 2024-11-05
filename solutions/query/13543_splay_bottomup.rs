@@ -63,7 +63,6 @@ fn pow(mut base: u64, mut exp: u64) -> u64 {
     res
 }
 
-#[allow(unused)]
 pub mod splay {
     use super::*;
 

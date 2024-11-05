@@ -7,7 +7,6 @@ use std::{
     ops::{Index, IndexMut},
 };
 
-#[allow(dead_code)]
 mod simple_io {
     pub struct InputAtOnce(std::str::SplitAsciiWhitespace<'static>);
 
@@ -134,7 +133,6 @@ impl Grid<u8> {
     }
 }
 
-#[allow(dead_code)]
 #[macro_use]
 pub mod parser {
     pub type ParseResult<S, A> = Option<(A, S)>;
@@ -777,7 +775,6 @@ mod ast {
     }
 }
 
-#[allow(dead_code)]
 mod collections {
     use std::cell::Cell;
 

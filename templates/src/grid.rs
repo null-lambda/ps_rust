@@ -1,4 +1,3 @@
-#[allow(dead_code)]
 mod collections {
     use std::{
         cmp::Reverse,

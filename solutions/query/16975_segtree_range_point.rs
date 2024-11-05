@@ -131,7 +131,6 @@ impl<T: CommMonoid + Copy> SegmentTree<T> {
     }
 }
 
-#[allow(dead_code)]
 fn main() {
     use io::InputStream;
     let input_buf = stdin();

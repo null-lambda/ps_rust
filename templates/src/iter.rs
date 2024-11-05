@@ -1,4 +1,3 @@
-#[allow(dead_code)]
 pub mod iter {
     fn group_by<T, P, F>(xs: &[T], mut pred: P, mut f: F)
     where

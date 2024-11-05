@@ -7,7 +7,6 @@ use std::{
     ops::{Index, IndexMut, RangeBounds, RangeInclusive, RangeToInclusive},
 };
 
-#[allow(dead_code)]
 mod simple_io {
     pub struct InputAtOnce(std::str::SplitAsciiWhitespace<'static>);
 

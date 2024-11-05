@@ -1,6 +1,5 @@
 use std::{cmp::Reverse, collections::BinaryHeap, io::Write};
 
-#[allow(dead_code)]
 mod simple_io {
     pub struct InputAtOnce(std::str::SplitAsciiWhitespace<'static>);
 

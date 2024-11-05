@@ -1,4 +1,3 @@
-#[allow(dead_code)]
 mod rand {
     // Written in 2015 by Sebastiano Vigna (vigna@acm.org)
     // https://xoshiro.di.unimi.it/splitmix64.c
@@ -66,7 +65,6 @@ mod rand {
     }
 }
 
-#[allow(dead_code)]
 pub mod network_flow {
     const UNSET: usize = i32::MAX as usize;
 

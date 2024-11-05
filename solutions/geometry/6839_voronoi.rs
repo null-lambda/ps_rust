@@ -65,7 +65,6 @@ pub mod cmp {
     }
 }
 
-#[allow(dead_code)]
 #[macro_use]
 pub mod geometry {
     use core::f64;

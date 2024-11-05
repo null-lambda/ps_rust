@@ -1,4 +1,3 @@
-#[allow(dead_code)]
 mod fast_io {
     use std::fmt::Debug;
     use std::str::*;

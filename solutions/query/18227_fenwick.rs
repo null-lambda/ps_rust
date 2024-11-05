@@ -31,7 +31,6 @@ mod simple_io {
     }
 }
 
-#[allow(dead_code)]
 pub mod fenwick_tree {
     pub trait Group {
         type Elem: Clone;

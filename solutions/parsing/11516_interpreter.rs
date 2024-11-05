@@ -1,7 +1,6 @@
 use std::io::Write;
 use std::{collections::HashMap, io::BufRead};
 
-#[allow(dead_code)]
 #[macro_use]
 pub mod parser {
     pub type ParseResult<S, A> = Option<(A, S)>;

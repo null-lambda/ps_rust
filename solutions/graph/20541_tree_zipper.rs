@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 use std::collections::{btree_map::Entry, BTreeMap, BTreeSet};
 use std::io::Write;
 
-#[allow(dead_code)]
 mod simple_io {
     pub struct InputAtOnce(std::str::SplitAsciiWhitespace<'static>);
 

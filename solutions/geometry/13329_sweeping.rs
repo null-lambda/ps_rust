@@ -28,7 +28,6 @@ mod simple_io {
     }
 }
 
-#[allow(dead_code)]
 #[macro_use]
 mod geometry {
     use std::ops::{Add, Index, IndexMut, Mul, Neg, Sub};
