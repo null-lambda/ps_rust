@@ -463,46 +463,6 @@ mod geometry {
 
 use geometry::*;
 
-#[test]
-fn gen_test_cases() {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let mut rng = cheap_rand::Rng::new(loop {
-        let seed = (SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-            % u64::MAX as u128) as u64;
-        if seed != 0 {
-            break seed;
-        }
-    });
-
-    let mut output_buf = Vec::<u8>::new();
-
-    let n = 10000;
-    // let n = 10;
-    let n_queries = 10;
-    let mut pick = || rng.range_u64(0..4001) as i64 - 2000;
-    // let mut pick = || rng.range_u64(0..10) as i64;
-    writeln!(output_buf, "{} {}", n, n_queries).unwrap();
-    for _ in 0..n {
-        let [x, y, z] = loop {
-            let [x, y, z] = [pick(), pick(), pick()];
-            let [dx, dy, dz] = [x, y, z];
-            if dx * dx + dy * dy + dz * dz <= 1000 * 1000 {
-                break [x, y, z];
-            }
-        };
-        writeln!(output_buf, "{} {} {}", x, y, z).unwrap();
-    }
-    for _ in 0..n_queries {
-        let [a, b, c] = [pick(), pick(), pick()];
-        let d = 0;
-        writeln!(output_buf, "{} {} {} {}", a, b, c, d).unwrap();
-    }
-    std::fs::write("input.txt", &output_buf).unwrap();
-}
-
 fn main() {
     let mut input = simple_io::stdin_at_once();
     let mut output_buf = Vec::<u8>::new();
@@ -512,7 +472,9 @@ fn main() {
     use std::iter::once;
 
     let n_points: usize = input.value();
-    let n_queries: usize = input.value();
+    let z_min: i64 = input.value();
+    let z_max: i64 = input.value();
+
     let mut points: Vec<Point3<i64>> = (0..n_points)
         .map(|_| [input.value(), input.value(), input.value()].into())
         .collect();
@@ -557,38 +519,25 @@ fn main() {
     // }
     // std::fs::write("cvhull.obj", mesh_str).unwrap();
 
-    for _ in 0..n_queries {
+    for z in z_min..=z_max {
         use Ordering::*;
-        let [a, b, c, d]: [i32; 4] = [input.value(), input.value(), input.value(), input.value()];
-        let normal = [a, b, c].into();
 
-        let signed_dist: Vec<i32> = points.iter().map(|&p| p.dot(normal) + d).collect();
-
-        let section = (points.iter().zip(&signed_dist))
-            .filter_map(|(&p, &signed_dist)| {
-                (signed_dist == 0).then(|| PointNd([p[0] as f64, p[1] as f64, p[2] as f64]))
+        let mut section = edges
+            .iter()
+            .filter_map(|&[i, j]| {
+                let p1 = points[i];
+                let p2 = points[j];
+                if !(p1[2] + 1..p2[2]).contains(&z) && !(p2[2] + 1..p1[2]).contains(&z) {
+                    return None;
+                }
+                todo!()
             })
-            .chain(edges.iter().filter_map(|&[i, j]| {
-                matches!(
-                    (signed_dist[i].cmp(&0), signed_dist[j].cmp(&0)),
-                    (Greater, Less) | (Less, Greater)
-                )
-                .then(|| {
-                    let [p, q] = [points[i], points[j]];
-                    let dr = q - p;
-                    let denom = signed_dist[j] - signed_dist[i];
-                    let num = signed_dist[i];
+            .chain(points.iter().filter(|&p| p[2] == z))
+            .map(|PointNd([x, y, z])| PointNd([x, y]))
+            .collect::<Vec<_>>();
 
-                    let t = -num as f64 / denom as f64;
-                    // debug_assert!(0.0 - 1e9 <= t && t <= 1.0 + 1e9);
-
-                    PointNd([
-                        p[0] as f64 + t * dr[0] as f64,
-                        p[1] as f64 + t * dr[1] as f64,
-                        p[2] as f64 + t * dr[2] as f64,
-                    ])
-                })
-            }));
+        let cvhull = convex_hull(&mut section);
+        let area = convex_hull_area(cvhull);
 
         fn cvhull_area(section: impl IntoIterator<Item = Point<f64>>) -> f64 {
             let mut points: Vec<Point<f64>> = section.into_iter().collect();
