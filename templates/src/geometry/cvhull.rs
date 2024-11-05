@@ -77,18 +77,16 @@ mod geometry {
 
         points.sort_unstable_by(|&p, &q| p.partial_cmp(&q).unwrap());
 
-        let ccw = |p, q, r| signed_area(p, q, r) > T::zero();
-
         let mut lower = Vec::new();
         let mut upper = Vec::new();
         for &p in points.iter() {
-            while matches!(lower.as_slice(), [.., l1, l2] if !ccw(*l1, *l2, p)) {
+            while matches!(lower.as_slice(), &[.., l1, l2] if signed_area(p, l1, l2) <= T::zero()) {
                 lower.pop();
             }
             lower.push(p);
         }
         for &p in points.iter().rev() {
-            while matches!(upper.as_slice(), [.., l1, l2] if !ccw(*l1, *l2, p)) {
+            while matches!(upper.as_slice(), &[.., l1, l2] if signed_area(p, l1, l2) <= T::zero()) {
                 upper.pop();
             }
             upper.push(p);
