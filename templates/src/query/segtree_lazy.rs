@@ -58,7 +58,7 @@ pub mod segtree {
         fn apply(&mut self, idx: usize, width: u32, value: &M::F) {
             self.sum[idx] = self.ma.apply_to_sum(&value, width, &self.sum[idx]);
             if idx < self.n {
-                self.lazy[idx] = self.ma.combine_action(&self.lazy[idx], &value);
+                self.lazy[idx] = self.ma.combine_action(&value, &self.lazy[idx]);
             }
         }
 
@@ -132,7 +132,6 @@ pub mod segtree {
             start += self.n;
             end += self.n;
             let (mut result_left, mut result_right) = (self.ma.id(), self.ma.id());
-
             while start < end {
                 if start & 1 != 0 {
                     result_left = self.ma.combine(&result_left, &self.sum[start]);

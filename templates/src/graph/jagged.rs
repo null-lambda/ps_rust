@@ -2,7 +2,7 @@ pub mod collections {
     use std::fmt::Debug;
     use std::ops::Index;
 
-    // compress sparse row format for jagged array
+    // compressed sparse row format for jagged array
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
     pub struct Jagged<T> {
         data: Vec<T>,
