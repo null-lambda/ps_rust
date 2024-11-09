@@ -345,22 +345,15 @@ fn main() {
     let (_, x_map_inv) = compress_coord(
         (h_segs.iter().flat_map(|(x1, x2, _)| [*x1, *x2])).chain(v_segs.iter().map(|(_, _, x)| *x)),
     );
-    let (_, y_map_inv) = compress_coord(
-        (v_segs.iter().flat_map(|(y1, y2, _)| [*y1, *y2])).chain(h_segs.iter().map(|(_, _, y)| *y)),
-    );
 
-    for (x1, x2, y) in h_segs.iter_mut() {
+    for (x1, x2, _) in h_segs.iter_mut() {
         *x1 = x_map_inv[&x1];
         *x2 = x_map_inv[&x2];
-        *y = y_map_inv[&y];
     }
-    for (y1, y2, x) in v_segs.iter_mut() {
-        *y1 = y_map_inv[&y1];
-        *y2 = y_map_inv[&y2];
+    for (_, _, x) in v_segs.iter_mut() {
         *x = x_map_inv[&x];
     }
     let w = x_map_inv[&w];
-    let _h = y_map_inv[&h];
 
     // 1st Sweep - count intersections
     let mut n_inter: u64 = 0;
