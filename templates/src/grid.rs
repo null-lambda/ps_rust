@@ -67,6 +67,19 @@ mod collections {
         }
     }
 
+    impl<T> Index<usize> for Grid<T> {
+        type Output = [T];
+        fn index(&self, i: usize) -> &Self::Output {
+            &self.data[i * self.w..(i + 1) * self.w]
+        }
+    }
+
+    impl<T> IndexMut<usize> for Grid<T> {
+        fn index_mut(&mut self, i: usize) -> &mut Self::Output {
+            &mut self.data[i * self.w..(i + 1) * self.w]
+        }
+    }
+
     struct PrettyColored<'a>(&'a Grid<u8>);
 
     impl Display for PrettyColored<'_> {
