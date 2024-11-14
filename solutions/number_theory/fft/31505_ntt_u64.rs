@@ -171,23 +171,24 @@ pub mod num {
                 x + self.m - y
             }
         }
-    }
-}
 
-fn mod_pow(mut base: u64, mut exp: u64, m: u64) -> u64 {
-    let mut result = 1;
-    while exp > 0 {
-        if exp % 2 == 1 {
-            result = result * base % m;
+        pub fn pow(&self, mut base: u64, mut exp: u64) -> u64 {
+            let mut res = self.transform(1);
+            while exp > 0 {
+                if exp % 2 == 1 {
+                    res = self.multiply(res, base);
+                }
+                base = self.multiply(base, base);
+                exp >>= 1;
+            }
+            res
         }
-        base = base * base % m;
-        exp >>= 1;
-    }
-    result
-}
 
-fn mod_inv(n: u64, p: u64) -> u64 {
-    mod_pow(n, p - 2, p)
+        pub fn inv(&self, n: u64) -> u64 {
+            // m must be prime
+            self.pow(n, self.m - 2)
+        }
+    }
 }
 
 pub mod ntt {
@@ -207,13 +208,13 @@ pub mod ntt {
         }
     }
 
-    pub fn radix4_u32(mont: &Montgometry<u32>, proot: u32, xs: &mut [u32]) {
+    pub fn radix4_u64(mont: &Montgometry<u64>, proot: u64, xs: &mut [u64]) {
         let n = xs.len();
         assert!(n.is_power_of_two());
-        let n_log2 = u32::BITS - (n as u32).leading_zeros() - 1;
+        let n_log2 = u64::BITS - (n as u64).leading_zeros() - 1;
         bit_reversal_perm(xs);
 
-        let base: Vec<u32> = (0..n_log2)
+        let base: Vec<u64> = (0..n_log2)
             .scan(proot, |acc, _| {
                 let prev = *acc;
                 *acc = mont.multiply(*acc, *acc);
@@ -224,9 +225,9 @@ pub mod ntt {
         let mut proot_pow = vec![0; n]; // Cache-friendly twiddle factors
         proot_pow[0] = mont.transform(1);
 
-        let quartic_root = mont.pow(proot, n as u32 / 4);
+        let quartic_root = mont.pow(proot, n as u64 / 4);
 
-        let update_proot_pow = |proot_pow: &mut [u32], k: u32| {
+        let update_proot_pow = |proot_pow: &mut [u64], k: u32| {
             let step = 1 << k;
             let base = base[(n_log2 - k - 1) as usize];
             for i in (0..step).rev() {
@@ -307,54 +308,115 @@ pub mod ntt {
     }
 }
 
+fn parse_bigint(mut s: &[u8]) -> (bool, Vec<u64>) {
+    let mut xs = vec![0];
+    let mut neg = false;
+
+    if s[0] == b'~' {
+        neg = true;
+        s = &s[1..];
+    }
+
+    for &b in s {
+        match b {
+            33..=125 => {
+                xs.push(b as u64 - 33);
+            }
+            _ => panic!(),
+        }
+    }
+    xs.reverse();
+    (neg, xs)
+}
+
+fn print_bigint((neg, xs): &(bool, Vec<u64>), f: &mut impl Write) -> std::io::Result<()> {
+    if *neg {
+        write!(f, "~")?;
+    }
+
+    for &digit in xs.iter().rev() {
+        write!(f, "{}", (digit + 33) as u8 as char)?;
+    }
+
+    Ok(())
+}
+
 fn main() {
     let mut input = simple_io::stdin_at_once();
     let mut output = simple_io::stdout();
 
-    let n_orig: usize = input.value();
-    let mut xs: Vec<u32> = (0..n_orig).map(|_| input.value()).collect();
-    let mut ys: Vec<u32> = (0..n_orig).map(|_| input.value()).collect();
-    ys.reverse();
+    let base: i64 = input.value();
+    let (mut sx, mut x) = parse_bigint(input.token().as_bytes());
+    let (sy, mut y) = parse_bigint(input.token().as_bytes());
 
-    let n = n_orig.next_power_of_two() * 2;
-    xs.resize(n, 0);
-    let (left, right) = xs[0..n_orig * 2].split_at_mut(n_orig);
-    right.copy_from_slice(&left);
+    // Polynomial multiplication with NTT
+    let nx = x.len();
+    let ny = y.len();
+    let n = nx.max(ny).next_power_of_two() * 2;
+    x.resize(n, 0);
+    y.resize(n, 0);
 
-    ys.resize(n, 0);
-
-    let p = 998_244_353;
-    let mont = Montgometry::<u32>::new(p);
+    // let p = 998_244_353;
+    let p = 9223372036737335297;
+    let mont = Montgometry::<u64>::new(p);
     let gen = 3;
+    let proot = mont.pow(mont.transform(gen), (p - 1) / n as u64);
+    let proot_inv = mont.inv(proot);
+    let n_inv = mont.inv(mont.transform(n as u64));
 
-    assert!((p - 1) % n as u32 == 0);
-    let mut proot = mod_pow(gen as u64, (p - 1) as u64 / n as u64, p as u64) as u32;
-    let mut proot_inv = mod_inv(proot as u64, p as u64) as u32;
-    let mut n_inv = mod_inv(n as u64, p as u64) as u32;
-
-    proot = mont.transform(proot);
-    proot_inv = mont.transform(proot_inv);
-    n_inv = mont.transform(n_inv);
-
-    for x in &mut xs {
-        *x = mont.transform(*x);
+    sx ^= sy;
+    for a in &mut x {
+        *a = mont.transform(*a);
     }
-    for y in &mut ys {
-        *y = mont.transform(*y);
+    for b in &mut y {
+        *b = mont.transform(*b);
     }
-
-    ntt::radix4_u32(&mont, proot, &mut xs);
-    ntt::radix4_u32(&mont, proot, &mut ys);
-    for (x, y) in xs.iter_mut().zip(&ys) {
-        *x = mont.multiply(*x, *y);
+    ntt::radix4_u64(&mont, proot, &mut x);
+    ntt::radix4_u64(&mont, proot, &mut y);
+    for (a, b) in x.iter_mut().zip(&y) {
+        *a = mont.multiply(*a, *b);
     }
-    ntt::radix4_u32(&mont, proot_inv, &mut xs);
-
-    for x in &mut xs {
-        *x = mont.multiply(*x, n_inv);
-        *x = mont.reduce(*x as u64);
+    ntt::radix4_u64(&mont, proot_inv, &mut x);
+    for a in &mut x {
+        *a = mont.multiply(*a, n_inv);
+        *a = mont.reduce(*a as u128);
     }
 
-    let result = xs[n_orig - 1..2 * n_orig - 1].iter().max().unwrap();
-    writeln!(output, "{}", result).unwrap();
+    x[nx + ny..].fill(0);
+    if base > 0 {
+        let base = base as u64;
+        let mut carry = 0u64;
+        for a in &mut x {
+            let a_new = (carry + *a) % base;
+            carry = (carry + *a) / base;
+            *a = a_new as u64;
+        }
+        while carry > 0 {
+            x.push(carry % base);
+            carry /= base;
+        }
+    } else if base < 0 {
+        let base_abs = -base;
+        let mut carry = 0i64;
+        for a in &mut x {
+            let a_new = (carry + *a as i64).rem_euclid(base_abs);
+            carry = -(carry + *a as i64).div_euclid(base_abs);
+            *a = a_new as u64;
+        }
+        while carry != 0 {
+            x.push(carry.rem_euclid(base_abs) as u64);
+            carry = -carry.div_euclid(base_abs);
+        }
+    } else {
+        panic!()
+    }
+
+    while x.len() >= 2 && x.last() == Some(&0) {
+        x.pop();
+    }
+    if x == &[0] {
+        sx = false;
+    }
+
+    print_bigint(&(sx, x), &mut output).unwrap();
 }

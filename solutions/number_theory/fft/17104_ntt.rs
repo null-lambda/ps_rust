@@ -1,6 +1,9 @@
 use std::io::Write;
 
+use num::InvOp;
+use num::ModOp;
 use num::Montgometry;
+use num::PowBy;
 
 mod simple_io {
     pub struct InputAtOnce<'a> {
@@ -34,6 +37,63 @@ mod simple_io {
 }
 
 pub mod num {
+    pub trait ModOp<T> {
+        fn zero(&self) -> T;
+        fn one(&self) -> T;
+        fn modulus(&self) -> T;
+        fn add(&self, lhs: T, rhs: T) -> T;
+        fn sub(&self, lhs: T, rhs: T) -> T;
+        fn mul(&self, lhs: T, rhs: T) -> T;
+    }
+
+    pub trait PowBy<T, E> {
+        fn pow(&self, base: T, exp: E) -> T;
+    }
+
+    pub trait InvOp<T> {
+        fn inv(&self, n: T) -> T;
+    }
+
+    impl<T: Clone, M: ModOp<T>> PowBy<T, u32> for M {
+        fn pow(&self, mut base: T, mut exp: u32) -> T {
+            let mut res = self.one();
+            while exp > 0 {
+                if exp % 2 == 1 {
+                    res = self.mul(res, base.clone());
+                }
+                base = self.mul(base.clone(), base);
+                exp >>= 1;
+            }
+            res
+        }
+    }
+
+    impl<T: Clone, M: ModOp<T>> PowBy<T, u64> for M {
+        fn pow(&self, mut base: T, mut exp: u64) -> T {
+            let mut res = self.one();
+            while exp > 0 {
+                if exp % 2 == 1 {
+                    res = self.mul(res, base.clone());
+                }
+                base = self.mul(base.clone(), base);
+                exp >>= 1;
+            }
+            res
+        }
+    }
+
+    impl<M: ModOp<u32>> InvOp<u32> for M {
+        fn inv(&self, n: u32) -> u32 {
+            self.pow(n, self.modulus() - 2)
+        }
+    }
+
+    impl<M: ModOp<u64>> InvOp<u64> for M {
+        fn inv(&self, n: u64) -> u64 {
+            self.pow(n, self.modulus() - 2)
+        }
+    }
+
     // Montgomery reduction
     #[derive(Debug, Clone)]
     pub struct Montgometry<T> {
@@ -55,7 +115,7 @@ pub mod num {
             Self { m, m_inv, r2 }
         }
 
-        pub fn reduce(&self, x: u64) -> u32 {
+        fn reduce_double(&self, x: u64) -> u32 {
             debug_assert!((x as u64) < (self.m as u64) * (self.m as u64));
             let q = (x as u32).wrapping_mul(self.m_inv);
             let a = ((q as u64 * self.m as u64) >> 32) as u32;
@@ -66,18 +126,33 @@ pub mod num {
             res as u32
         }
 
-        pub fn multiply(&self, x: u32, y: u32) -> u32 {
-            debug_assert!(x < self.m);
-            debug_assert!(y < self.m);
-            self.reduce(x as u64 * y as u64)
+        pub fn reduce(&self, x: u32) -> u32 {
+            self.reduce_double(x as u64)
         }
 
         pub fn transform(&self, x: u32) -> u32 {
             debug_assert!(x < self.m);
-            self.multiply(x, self.r2)
+            self.mul(x, self.r2)
+        }
+    }
+
+    impl ModOp<u32> for Montgometry<u32> {
+        fn zero(&self) -> u32 {
+            0
+        }
+        fn one(&self) -> u32 {
+            self.transform(1)
+        }
+        fn modulus(&self) -> u32 {
+            self.m
+        }
+        fn mul(&self, x: u32, y: u32) -> u32 {
+            debug_assert!(x < self.m);
+            debug_assert!(y < self.m);
+            self.reduce_double(x as u64 * y as u64)
         }
 
-        pub fn add(&self, x: u32, y: u32) -> u32 {
+        fn add(&self, x: u32, y: u32) -> u32 {
             debug_assert!(x < self.m);
             debug_assert!(y < self.m);
             let sum = x + y;
@@ -88,7 +163,7 @@ pub mod num {
             }
         }
 
-        pub fn sub(&self, x: u32, y: u32) -> u32 {
+        fn sub(&self, x: u32, y: u32) -> u32 {
             debug_assert!(x < self.m);
             debug_assert!(y < self.m);
             if x >= y {
@@ -97,23 +172,6 @@ pub mod num {
                 x + self.m - y
             }
         }
-
-        pub fn pow(&self, mut base: u32, mut exp: u32) -> u32 {
-            let mut res = self.transform(1);
-            while exp > 0 {
-                if exp % 2 == 1 {
-                    res = self.multiply(res, base);
-                }
-                base = self.multiply(base, base);
-                exp >>= 1;
-            }
-            res
-        }
-
-        pub fn inv(&self, n: u32) -> u32 {
-            // m must be prime
-            self.pow(n, self.m - 2)
-        }
     }
 
     impl Montgometry<u64> {
@@ -121,6 +179,7 @@ pub mod num {
             debug_assert!(m % 2 == 1, "modulus must be coprime with 2");
             let mut m_inv = 1u64;
             for _ in 0..6 {
+                // More iterations may be needed for u64 precision
                 m_inv = m_inv.wrapping_mul(2u64.wrapping_sub(m.wrapping_mul(m_inv)));
             }
             let r = m.wrapping_neg() % m;
@@ -129,7 +188,7 @@ pub mod num {
             Self { m, m_inv, r2 }
         }
 
-        pub fn reduce(&self, x: u128) -> u64 {
+        pub fn reduce_double(&self, x: u128) -> u64 {
             debug_assert!((x as u128) < (self.m as u128) * (self.m as u128));
             let q = (x as u64).wrapping_mul(self.m_inv);
             let a = ((q as u128 * self.m as u128) >> 64) as u64;
@@ -139,19 +198,36 @@ pub mod num {
             }
             res as u64
         }
-
-        pub fn multiply(&self, x: u64, y: u64) -> u64 {
-            debug_assert!(x < self.m);
-            debug_assert!(y < self.m);
-            self.reduce(x as u128 * y as u128)
+        pub fn reduce(&self, x: u64) -> u64 {
+            self.reduce_double(x as u128)
         }
 
         pub fn transform(&self, x: u64) -> u64 {
             debug_assert!(x < self.m);
-            self.multiply(x, self.r2)
+            self.mul(x, self.r2)
+        }
+    }
+
+    impl ModOp<u64> for Montgometry<u64> {
+        fn zero(&self) -> u64 {
+            0
         }
 
-        pub fn add(&self, x: u64, y: u64) -> u64 {
+        fn one(&self) -> u64 {
+            self.transform(1)
+        }
+
+        fn modulus(&self) -> u64 {
+            self.m
+        }
+
+        fn mul(&self, x: u64, y: u64) -> u64 {
+            debug_assert!(x < self.m);
+            debug_assert!(y < self.m);
+            self.reduce_double(x as u128 * y as u128)
+        }
+
+        fn add(&self, x: u64, y: u64) -> u64 {
             debug_assert!(x < self.m);
             debug_assert!(y < self.m);
             let sum = x + y;
@@ -162,7 +238,7 @@ pub mod num {
             }
         }
 
-        pub fn sub(&self, x: u64, y: u64) -> u64 {
+        fn sub(&self, x: u64, y: u64) -> u64 {
             debug_assert!(x < self.m);
             debug_assert!(y < self.m);
             if x >= y {
@@ -174,26 +250,10 @@ pub mod num {
     }
 }
 
-fn mod_pow(mut base: u64, mut exp: u64, m: u64) -> u64 {
-    let mut result = 1;
-    while exp > 0 {
-        if exp % 2 == 1 {
-            result = result * base % m;
-        }
-        base = base * base % m;
-        exp >>= 1;
-    }
-    result
-}
-
-fn mod_inv(n: u64, p: u64) -> u64 {
-    mod_pow(n, p - 2, p)
-}
-
 pub mod ntt {
     use std::iter;
 
-    use crate::num::Montgometry;
+    use crate::num::{ModOp, PowBy};
 
     fn bit_reversal_perm<T>(xs: &mut [T]) {
         let n = xs.len();
@@ -207,30 +267,34 @@ pub mod ntt {
         }
     }
 
-    pub fn radix4_u32(mont: &Montgometry<u32>, proot: u32, xs: &mut [u32]) {
+    pub fn radix4<T, M>(op: &M, proot: T, xs: &mut [T])
+    where
+        T: Copy,
+        M: ModOp<T> + PowBy<T, u32>,
+    {
         let n = xs.len();
         assert!(n.is_power_of_two());
         let n_log2 = u32::BITS - (n as u32).leading_zeros() - 1;
         bit_reversal_perm(xs);
 
-        let base: Vec<u32> = (0..n_log2)
+        let base: Vec<_> = (0..n_log2)
             .scan(proot, |acc, _| {
                 let prev = *acc;
-                *acc = mont.multiply(*acc, *acc);
+                *acc = op.mul(*acc, *acc);
                 Some(prev)
             })
             .collect();
 
-        let mut proot_pow = vec![0; n]; // Cache-friendly twiddle factors
-        proot_pow[0] = mont.transform(1);
+        let mut proot_pow = vec![op.zero(); n]; // Cache-friendly twiddle factors
+        proot_pow[0] = op.one();
 
-        let quartic_root = mont.pow(proot, n as u32 / 4);
+        let quartic_root = op.pow(proot, n as u32 / 4);
 
-        let update_proot_pow = |proot_pow: &mut [u32], k: u32| {
+        let update_proot_pow = |proot_pow: &mut [T], k: u32| {
             let step = 1 << k;
             let base = base[(n_log2 - k - 1) as usize];
             for i in (0..step).rev() {
-                proot_pow[i * 2 + 1] = mont.multiply(proot_pow[i], base);
+                proot_pow[i * 2 + 1] = op.mul(proot_pow[i], base);
                 proot_pow[i * 2] = proot_pow[i];
             }
         };
@@ -245,8 +309,8 @@ pub mod ntt {
                 for (a0, a1) in t0.into_iter().zip(t1) {
                     let b0 = *a0;
                     let b1 = *a1;
-                    *a0 = mont.add(b0, b1);
-                    *a1 = mont.sub(b0, b1);
+                    *a0 = op.add(b0, b1);
+                    *a1 = op.sub(b0, b1);
                 }
             }
             k += 1;
@@ -265,23 +329,23 @@ pub mod ntt {
                 for ((((a0, a1), a2), a3), &pow1) in
                     t0.into_iter().zip(t1).zip(t2).zip(t3).zip(&proot_pow)
                 {
-                    let pow2 = mont.multiply(pow1, pow1);
-                    let pow1_shift = mont.multiply(pow1, quartic_root);
+                    let pow2 = op.mul(pow1, pow1);
+                    let pow1_shift = op.mul(pow1, quartic_root);
 
                     let b0 = *a0;
-                    let b1 = mont.multiply(*a1, pow2);
+                    let b1 = op.mul(*a1, pow2);
                     let b2 = *a2;
-                    let b3 = mont.multiply(*a3, pow2);
+                    let b3 = op.mul(*a3, pow2);
 
-                    let c0 = mont.add(b0, b1);
-                    let c1 = mont.sub(b0, b1);
-                    let c2 = mont.multiply(mont.add(b2, b3), pow1);
-                    let c3 = mont.multiply(mont.sub(b2, b3), pow1_shift);
+                    let c0 = op.add(b0, b1);
+                    let c1 = op.sub(b0, b1);
+                    let c2 = op.mul(op.add(b2, b3), pow1);
+                    let c3 = op.mul(op.sub(b2, b3), pow1_shift);
 
-                    *a0 = mont.add(c0, c2);
-                    *a1 = mont.add(c1, c3);
-                    *a2 = mont.sub(c0, c2);
-                    *a3 = mont.sub(c1, c3);
+                    *a0 = op.add(c0, c2);
+                    *a1 = op.add(c1, c3);
+                    *a2 = op.sub(c0, c2);
+                    *a3 = op.sub(c1, c3);
                 }
             }
             k += 2;
@@ -289,72 +353,90 @@ pub mod ntt {
     }
 
     // naive O(n^2)
-    pub fn naive_u64(mont: &Montgometry<u64>, proot: u64, xs: &mut [u64]) {
+    pub fn naive<T, M>(op: &M, proot: T, xs: &mut [T])
+    where
+        T: Copy,
+        M: ModOp<T> + PowBy<T, u32>,
+    {
         let n = xs.len().next_power_of_two();
-        let proot_pow: Vec<u64> = iter::successors(Some(mont.transform(1)), |&acc| {
-            Some(mont.multiply(acc, proot))
-        })
-        .take(n)
-        .collect();
+        let proot_pow: Vec<T> = iter::successors(Some(op.one()), |&acc| Some(op.mul(acc, proot)))
+            .take(n)
+            .collect();
         let res: Vec<_> = (0..n)
             .map(|i| {
                 (0..n)
-                    .map(|j| mont.multiply(xs[j], proot_pow[(i * j) % n]))
-                    .fold(0, |acc, x| mont.add(acc, x))
+                    .map(|j| op.mul(xs[j], proot_pow[(i * j) % n]))
+                    .fold(op.zero(), |acc, x| op.add(acc, x))
             })
             .collect();
         xs.copy_from_slice(&res);
     }
 }
 
+fn linear_sieve(n_max: u32) -> (Vec<u32>, Vec<u32>) {
+    let mut min_prime_factor = vec![0; n_max as usize + 1];
+    let mut primes = Vec::new();
+
+    for i in 2..=n_max {
+        if min_prime_factor[i as usize] == 0 {
+            primes.push(i);
+        }
+        for &p in primes.iter() {
+            if i * p > n_max {
+                break;
+            }
+            min_prime_factor[(i * p) as usize] = p;
+            if i % p == 0 {
+                break;
+            }
+        }
+    }
+
+    (min_prime_factor, primes)
+}
+
 fn main() {
     let mut input = simple_io::stdin_at_once();
     let mut output = simple_io::stdout();
 
-    let n_orig: usize = input.value();
-    let mut xs: Vec<u32> = (0..n_orig).map(|_| input.value()).collect();
-    let mut ys: Vec<u32> = (0..n_orig).map(|_| input.value()).collect();
-    ys.reverse();
+    let n_max = 1_000_000;
+    let (mpf, _) = linear_sieve(n_max);
+    let mut x: Vec<u32> = mpf
+        .iter()
+        .enumerate()
+        .map(|(x, &p)| (x >= 2 && p == 0) as u32)
+        .collect();
 
-    let n = n_orig.next_power_of_two() * 2;
-    xs.resize(n, 0);
-    let (left, right) = xs[0..n_orig * 2].split_at_mut(n_orig);
-    right.copy_from_slice(&left);
-
-    ys.resize(n, 0);
+    // Polynomial multiplication with NTT
+    let nx = x.len();
+    let n = nx.next_power_of_two() * 2;
+    x.resize(n, 0);
 
     let p = 998_244_353;
+    // let p = 9223372036737335297;
     let mont = Montgometry::<u32>::new(p);
     let gen = 3;
+    let proot = mont.pow(mont.transform(gen), (p - 1) / n as u32);
+    let proot_inv = mont.inv(proot);
+    let n_inv = mont.inv(mont.transform(n as u32));
 
-    assert!((p - 1) % n as u32 == 0);
-    let mut proot = mod_pow(gen as u64, (p - 1) as u64 / n as u64, p as u64) as u32;
-    let mut proot_inv = mod_inv(proot as u64, p as u64) as u32;
-    let mut n_inv = mod_inv(n as u64, p as u64) as u32;
-
-    proot = mont.transform(proot);
-    proot_inv = mont.transform(proot_inv);
-    n_inv = mont.transform(n_inv);
-
-    for x in &mut xs {
-        *x = mont.transform(*x);
+    for a in &mut x {
+        *a = mont.transform(*a);
     }
-    for y in &mut ys {
-        *y = mont.transform(*y);
+    ntt::radix4(&mont, proot, &mut x);
+    for a in &mut x {
+        *a = mont.mul(*a, *a);
     }
-
-    ntt::radix4_u32(&mont, proot, &mut xs);
-    ntt::radix4_u32(&mont, proot, &mut ys);
-    for (x, y) in xs.iter_mut().zip(&ys) {
-        *x = mont.multiply(*x, *y);
-    }
-    ntt::radix4_u32(&mont, proot_inv, &mut xs);
-
-    for x in &mut xs {
-        *x = mont.multiply(*x, n_inv);
-        *x = mont.reduce(*x as u64);
+    ntt::radix4(&mont, proot_inv, &mut x);
+    for a in &mut x {
+        *a = mont.mul(*a, n_inv);
+        *a = mont.reduce(*a);
     }
 
-    let result = xs[n_orig - 1..2 * n_orig - 1].iter().max().unwrap();
-    writeln!(output, "{}", result).unwrap();
+    let x = &x[..=n_max as usize];
+    for _ in 0..input.value() {
+        let a: u32 = input.value();
+        let count = x[a as usize].div_ceil(2);
+        writeln!(output, "{}", count).unwrap();
+    }
 }
