@@ -30,12 +30,10 @@ mod simple_io {
 }
 
 pub mod splay {
-    use super::*;
-
     use std::{
         cmp::Ordering,
         fmt, iter, mem,
-        ops::{Bound, Index, IndexMut, Range, RangeBounds},
+        ops::{Bound, RangeBounds},
         ptr,
     };
 
@@ -108,6 +106,7 @@ pub mod splay {
             debug_assert!(!self.inv);
             self.size = 1;
 
+            self.push_down();
             self.children[Left as usize].as_mut().map(|x| x.push_down());
             self.children[Right as usize]
                 .as_mut()
@@ -226,10 +225,33 @@ pub mod splay {
             }
             self.pull_up();
         }
+
+        pub fn splay_nth(self: &mut Box<Node>, mut pos: usize) {
+            self.splay_by(|node| {
+                let size_left = node.children[Left as usize]
+                    .as_ref()
+                    .map_or(0, |x| x.size as usize);
+                let res = pos.cmp(&size_left);
+                match res {
+                    Ordering::Less => {}
+                    Ordering::Equal => pos = 0,
+                    Ordering::Greater => pos -= size_left + 1,
+                };
+                res
+            })
+        }
+
+        pub fn splay_first(self: &mut Box<Node>) {
+            self.splay_by(|_| Ordering::Less)
+        }
+
+        pub fn splay_last(self: &mut Box<Node>) {
+            self.splay_by(|_| Ordering::Greater)
+        }
     }
 
     impl Tree {
-        pub fn new() -> Self {
+        pub fn empty() -> Self {
             Self { root: None }
         }
 
@@ -237,31 +259,30 @@ pub mod splay {
             self.root.as_ref().map_or(0, |node| node.size) as usize
         }
 
-        pub fn splay_nth(&mut self, mut pos: usize) {
-            debug_assert!(pos < self.size());
-            // println!("call splay_nth");
-            self.root.as_mut().map(|x| {
-                x.splay_by(|node| {
-                    // println!("call comparator at pos {pos}, {:?}", node);
-                    let size_left = node.children[Left as usize]
-                        .as_ref()
-                        .map_or(0, |x| x.size as usize);
-                    let res = pos.cmp(&size_left);
-                    match res {
-                        Ordering::Less => {}
-                        Ordering::Equal => pos = 0,
-                        Ordering::Greater => pos -= size_left + 1,
-                    };
-                    res
-                })
-            });
+        pub fn join(mut self, other: Self) -> Self {
+            match self.root {
+                None => other,
+                Some(ref mut left_root) => {
+                    left_root.splay_last();
+                    left_root.children[Right as usize] = other.root;
+                    left_root.pull_up();
+                    self
+                }
+            }
         }
 
-        pub fn merge(mut left: Self, mut right: Self) -> Self {
-            left.splay_nth(left.size());
-            left.root.as_mut().unwrap().children[Right as usize] = right.root.take();
-            left.root.as_mut().unwrap().pull_up();
-            left
+        pub fn join_empty_branch(mut self, child: Self, branch: Branch) -> Self {
+            let child = child.root;
+            match self.root {
+                None => self.root = child,
+                Some(ref mut root) => {
+                    debug_assert!(root.children[branch as usize].is_none());
+                    root.push_down();
+                    root.children[branch as usize] = child;
+                    root.pull_up();
+                }
+            }
+            self
         }
 
         pub fn split(mut self, branch: Branch, pos: usize) -> (Self, Self) {
@@ -270,10 +291,10 @@ pub mod splay {
                     if pos == self.size() {
                         (self.into(), None.into())
                     } else {
-                        self.splay_nth(pos);
-                        let mut root = self.root.as_mut().unwrap();
+                        let root = self.root.as_mut().unwrap();
+                        root.splay_nth(pos);
                         root.push_down();
-                        let mut left = root.children[Left as usize].take();
+                        let left = root.children[Left as usize].take();
                         root.pull_up();
                         (left.into(), self)
                     }
@@ -282,36 +303,15 @@ pub mod splay {
                     if pos == 0 {
                         (None.into(), self.into())
                     } else {
-                        self.splay_nth(pos - 1);
-
-                        let mut root = self.root.as_mut().unwrap();
+                        let root = self.root.as_mut().unwrap();
+                        root.splay_nth(pos - 1);
                         root.push_down();
-                        let mut right = root.children[Right as usize].take();
+                        let right = root.children[Right as usize].take();
                         root.pull_up();
-
                         (self, right.into())
                     }
                 }
             }
-        }
-
-        pub fn join(&mut self, branch: Branch, mut child: Self) {
-            let child = child.root;
-            match self.root {
-                None => self.root = child,
-                Some(ref mut root) => {
-                    debug_assert!(root.children[branch as usize].is_none());
-
-                    root.push_down();
-                    root.children[branch as usize] = child;
-                    root.pull_up();
-                }
-            }
-        }
-
-        pub fn join_to(&mut self, branch: Branch, mut parent: Self) {
-            mem::swap(self, &mut parent);
-            self.join(branch, parent);
         }
 
         pub fn split_range<R>(&mut self, range: R) -> (Self, Self)
@@ -364,11 +364,12 @@ pub mod splay {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(
                 f,
-                "{} {} {}",
+                "{}:{}-{} {}",
                 self.children[Left as usize]
                     .as_ref()
                     .map_or("_".to_owned(), |x| format!("({:?})", x)),
                 self.value as u8,
+                self.inv,
                 self.children[Right as usize]
                     .as_ref()
                     .map_or("_".to_owned(), |x| format!("({:?})", x)),
@@ -412,7 +413,7 @@ fn main() {
             _ => panic!(),
         }
 
-        xs.join_to(Branch::Left, right);
-        xs.join_to(Branch::Right, left);
+        xs = right.join_empty_branch(xs, Branch::Left);
+        xs = left.join_empty_branch(xs, Branch::Right);
     }
 }
