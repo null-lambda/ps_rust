@@ -1,3 +1,38 @@
+use std::{collections::HashMap, io::Write};
+
+use num_mod::{InvOp, ModOp, Montgomery, PowBy};
+
+mod simple_io {
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin_at_once<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
 pub mod num_mod {
     use std::ops::*;
 
@@ -430,5 +465,85 @@ pub mod ntt {
             })
             .collect();
         xs.copy_from_slice(&res);
+    }
+}
+
+fn main() {
+    let mut input = simple_io::stdin_at_once();
+    let mut output = simple_io::stdout();
+
+    let n: usize = input.value();
+    let m: usize = input.value();
+    let edges: Vec<(u32, u32)> = (0..m)
+        .map(|_| (input.value::<u32>() - 1, input.value::<u32>() - 1))
+        .map(|(u, v)| if u <= v { (u, v) } else { (v, u) })
+        .collect();
+    let mut edges_mult: HashMap<(u32, u32), u32> = Default::default();
+
+    let r = 2 * (m + 1).next_power_of_two();
+    let mut degree = vec![0; n];
+    for &(u, v) in &edges {
+        if u == v {
+            degree[u as usize] += 1;
+        } else {
+            degree[u as usize] += 1;
+            degree[v as usize] += 1;
+        }
+        *edges_mult.entry((u, v)).or_default() += 1;
+    }
+    let mut degree_poly = vec![0; r];
+    for &d in &degree {
+        degree_poly[d] += 1;
+    }
+
+    let p = 9223372036737335297;
+    let mod_op = Montgomery::<u64>::new(p);
+    let gen = mod_op.transform(3);
+    let proot = mod_op.pow(gen, (p - 1) / r as u64);
+    let proot_inv = mod_op.inv(proot);
+
+    // Square polynomial with NTT
+    for a in &mut degree_poly {
+        *a = mod_op.transform(*a);
+    }
+    ntt::radix4(&mod_op, proot, &mut degree_poly);
+    for a in &mut degree_poly {
+        *a = mod_op.mul(*a, *a);
+    }
+    ntt::radix4(&mod_op, proot_inv, &mut degree_poly);
+    let r_inv = mod_op.inv(mod_op.transform(r as u64));
+    for a in &mut degree_poly {
+        *a = mod_op.mul(*a, r_inv);
+        *a = mod_op.reduce(*a);
+    }
+    let degree_poly = &mut degree_poly[..r - 1];
+    for (&(u, v), &mult) in &edges_mult {
+        let du = degree[u as usize];
+        let dv = degree[v as usize];
+        if u == v {
+            degree_poly[(2 * du) as usize] -= 1;
+            degree_poly[(2 * du - mult as usize) as usize] += 1;
+        } else {
+            degree_poly[(du + dv) as usize] -= 2;
+            degree_poly[(du + dv - mult as usize) as usize] += 2;
+        }
+    }
+    for u in 0..n {
+        let self_mult = edges_mult.get(&(u as u32, u as u32)).copied().unwrap_or(0);
+        degree_poly[(2 * degree[u] - self_mult as usize) as usize] -= 1;
+    }
+    for d in 0..r - 1 {
+        degree_poly[d] /= 2;
+    }
+
+    let mut postfix_sum = vec![0u64; r];
+    for i in (0..r - 1).rev() {
+        postfix_sum[i] = degree_poly[i] + postfix_sum[i + 1];
+    }
+
+    for _ in 0..input.value() {
+        let lb = input.value::<usize>() + 1;
+        let ans = postfix_sum.get(lb).unwrap_or(&0);
+        writeln!(output, "{}", ans).unwrap();
     }
 }

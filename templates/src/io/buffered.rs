@@ -1,4 +1,4 @@
-mod fast_io {
+mod buffered_io {
     use std::fmt::Debug;
     use std::str::*;
 
@@ -41,52 +41,6 @@ mod fast_io {
     }
 
     use std::io::{BufRead, BufReader, BufWriter, Read, Stdin, StdinLock, Stdout};
-
-    pub struct InputAtOnce {
-        buf: Box<[u8]>,
-        cursor: usize,
-    }
-
-    impl<'a> InputAtOnce {
-        pub fn new(buf: Box<[u8]>) -> Self {
-            Self { buf, cursor: 0 }
-        }
-
-        fn take(&mut self, n: usize) -> &[u8] {
-            let n = n.min(self.buf.len() - self.cursor);
-            let slice = &self.buf[self.cursor..self.cursor + n];
-            self.cursor += n;
-            slice
-        }
-    }
-
-    impl<'a> InputStream for InputAtOnce {
-        fn token(&mut self) -> &[u8] {
-            self.take(
-                self.buf[self.cursor..]
-                    .iter()
-                    .position(|&c| !is_whitespace(c))
-                    .expect("no available tokens left"),
-            );
-            self.take(
-                self.buf[self.cursor..]
-                    .iter()
-                    .position(|&c| is_whitespace(c))
-                    .unwrap_or_else(|| self.buf.len() - self.cursor),
-            )
-        }
-
-        fn line(&mut self) -> &[u8] {
-            let line = self.take(
-                self.buf[self.cursor..]
-                    .iter()
-                    .position(|&c| c == b'\n')
-                    .map(|idx| idx + 1)
-                    .unwrap_or_else(|| self.buf.len() - self.cursor),
-            );
-            trim_newline(line)
-        }
-    }
 
     pub struct LineSyncedInput<R: BufRead> {
         line_buf: Vec<u8>,
@@ -158,24 +112,16 @@ mod fast_io {
         }
     }
 
-    pub fn stdin_at_once() -> InputAtOnce {
-        let mut reader = BufReader::new(std::io::stdin().lock());
-        let mut buf: Vec<u8> = vec![];
-        reader.read_to_end(&mut buf).unwrap();
-        let buf = buf.into_boxed_slice();
-        InputAtOnce::new(buf)
-    }
-
     // pub fn stdin_buf() -> LineSyncedInput<BufReader<StdinLock<'static>>> {
     //     LineSyncedInput::new(BufReader::new(std::io::stdin().lock()))
     // }
 
     // no lock
-    pub fn stdin_buf() -> LineSyncedInput<BufReader<Stdin>> {
+    pub fn stdin() -> LineSyncedInput<BufReader<Stdin>> {
         LineSyncedInput::new(BufReader::new(std::io::stdin()))
     }
 
-    pub fn stdout_buf() -> BufWriter<Stdout> {
+    pub fn stdout() -> BufWriter<Stdout> {
         BufWriter::new(std::io::stdout())
     }
 }
