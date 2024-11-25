@@ -82,6 +82,7 @@ pub mod collections {
             let mut head = vec![0u32; n + 1];
 
             for &(u, _) in pairs {
+                debug_assert!(u < n as u32);
                 head[u as usize + 1] += 1;
             }
             for i in 2..n + 1 {
@@ -154,7 +155,7 @@ pub mod collections {
     }
 }
 
-fn gen_scc<'a>(neighbors: &Jagged<u32>) -> (usize, Vec<u32>) {
+fn gen_scc(neighbors: &Jagged<u32>) -> (usize, Vec<u32>) {
     // Tarjan algorithm, iterative
     let n = neighbors.len();
 
@@ -221,30 +222,160 @@ fn gen_scc<'a>(neighbors: &Jagged<u32>) -> (usize, Vec<u32>) {
     (scc_count as usize, scc_index)
 }
 
+pub struct TwoSat {
+    n_props: usize,
+    edges: Vec<(u32, u32)>,
+}
+
+impl TwoSat {
+    pub fn new(n_props: usize) -> Self {
+        Self {
+            n_props,
+            edges: vec![],
+        }
+    }
+
+    pub fn add_disj(&mut self, (p, bp): (u32, bool), (q, bq): (u32, bool)) {
+        self.edges
+            .push((self.prop_to_node((p, !bp)), self.prop_to_node((q, bq))));
+        self.edges
+            .push((self.prop_to_node((q, !bq)), self.prop_to_node((p, bp))));
+    }
+
+    pub fn assign(&mut self, (p, bp): (u32, bool)) {
+        self.edges
+            .push((self.prop_to_node((p, !bp)), self.prop_to_node((p, bp))));
+    }
+
+    fn prop_to_node(&self, (p, bp): (u32, bool)) -> u32 {
+        debug_assert!(p < self.n_props as u32);
+        if bp {
+            p
+        } else {
+            self.n_props as u32 + p
+        }
+    }
+
+    fn node_to_prop(&self, node: u32) -> (u32, bool) {
+        if node < self.n_props as u32 {
+            (node, true)
+        } else {
+            (node - self.n_props as u32, false)
+        }
+    }
+
+    pub fn solve(&self) -> Option<Vec<bool>> {
+        let (scc_count, scc_index) =
+            gen_scc(&Jagged::from_assoc_list(self.n_props * 2, &self.edges));
+
+        let mut scc = vec![vec![]; scc_count];
+        for (i, &scc_idx) in scc_index.iter().enumerate() {
+            scc[scc_idx as usize].push(i as u32);
+        }
+
+        let satisfiable = (0..self.n_props as u32).all(|p| {
+            scc_index[self.prop_to_node((p, true)) as usize]
+                != scc_index[self.prop_to_node((p, false)) as usize]
+        });
+        if !satisfiable {
+            return None;
+        }
+
+        let mut interpretation = vec![None; self.n_props];
+        for component in &scc {
+            for &i in component.iter() {
+                let (p, p_value) = self.node_to_prop(i);
+                if interpretation[p as usize].is_some() {
+                    break;
+                }
+                interpretation[p as usize] = Some(p_value);
+            }
+        }
+        Some(interpretation.into_iter().map(|x| x.unwrap()).collect())
+    }
+}
+
 fn main() {
     let mut input = simple_io::stdin();
     let mut output = simple_io::stdout();
 
     for _ in 0..input.value() {
-        let n = input.value();
-        let n_edges = input.value();
-        let edges: Vec<(u32, u32)> = (0..n_edges)
-            .map(|_| (input.value::<u32>() - 1, input.value::<u32>() - 1))
-            .collect();
-        let neighbors = collections::Jagged::from_assoc_list(n, &edges);
+        let n: usize = input.value();
+        let m: usize = input.value();
 
-        let (scc_count, scc_index) = gen_scc(&neighbors);
+        let n_pad = n + 2;
+        let m_pad = m + 2;
 
-        let mut has_parent = vec![false; scc_count as usize];
-        for u in 0..n {
-            for &v in &neighbors[u] {
-                if scc_index[u] != scc_index[v as usize] {
-                    has_parent[scc_index[v as usize] as usize] = true;
+        let mut grid = vec![vec![b'.'; m_pad]; n_pad];
+        for i in 1..=n {
+            let row = input.token().as_bytes();
+            for j in 1..=m {
+                grid[i][j] = row[j - 1];
+            }
+        }
+
+        let mut twosat = TwoSat::new(n_pad * m_pad * 4);
+        let left = 0;
+        let right = 1;
+        let up = 2;
+        let down = 3;
+
+        let mut w_count = 0;
+        let mut b_count = 0;
+
+        for i in 1..=n {
+            for j in 1..=m {
+                let p = 4 * (i * m_pad + j) as u32;
+                if grid[i][j] == b'W' {
+                    w_count += 1;
+
+                    let mut candidates = vec![];
+                    if grid[i][j - 1] == b'B' {
+                        candidates.push(((p - 4) | right, false));
+                    }
+                    if grid[i][j + 1] == b'B' {
+                        candidates.push(((p + 4) | left, false));
+                    }
+                    if grid[i - 1][j] == b'B' {
+                        candidates.push(((p - 4 * m_pad as u32) | down, false));
+                    }
+                    if grid[i + 1][j] == b'B' {
+                        candidates.push(((p + 4 * m_pad as u32) | up, false));
+                    }
+                    for i in 0..candidates.len() {
+                        for j in i + 1..candidates.len() {
+                            twosat.add_disj(candidates[i], candidates[j]);
+                        }
+                    }
+                } else if grid[i][j] == b'B' {
+                    b_count += 1;
+
+                    twosat.add_disj((p | left, false), (p | right, false));
+                    twosat.add_disj((p | left, true), (p | right, true));
+                    twosat.add_disj((p | up, false), (p | down, false));
+                    twosat.add_disj((p | up, true), (p | down, true));
+
+                    if grid[i][j - 1] != b'W' {
+                        twosat.assign((p | left, false));
+                    }
+                    if grid[i][j + 1] != b'W' {
+                        twosat.assign((p | right, false));
+                    }
+                    if grid[i - 1][j] != b'W' {
+                        twosat.assign((p | up, false));
+                    }
+                    if grid[i + 1][j] != b'W' {
+                        twosat.assign((p | down, false));
+                    }
                 }
             }
         }
 
-        let result: u32 = has_parent.iter().map(|b| !b as u32).sum();
-        writeln!(output, "{}", result).unwrap();
+        let ans = twosat.solve().is_some() && b_count * 2 == w_count;
+        if ans {
+            writeln!(output, "YES").unwrap();
+        } else {
+            writeln!(output, "NO").unwrap();
+        }
     }
 }

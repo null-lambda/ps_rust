@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::{collections::HashMap, io::Write};
 
 use collections::Jagged;
 
@@ -82,6 +82,7 @@ pub mod collections {
             let mut head = vec![0u32; n + 1];
 
             for &(u, _) in pairs {
+                debug_assert!(u < n as u32);
                 head[u as usize + 1] += 1;
             }
             for i in 2..n + 1 {
@@ -225,26 +226,44 @@ fn main() {
     let mut input = simple_io::stdin();
     let mut output = simple_io::stdout();
 
-    for _ in 0..input.value() {
-        let n = input.value();
-        let n_edges = input.value();
-        let edges: Vec<(u32, u32)> = (0..n_edges)
-            .map(|_| (input.value::<u32>() - 1, input.value::<u32>() - 1))
-            .collect();
-        let neighbors = collections::Jagged::from_assoc_list(n, &edges);
+    let m = input.value();
+    let mut index_map = HashMap::new();
+    let mut query_index = |x| {
+        let idx = index_map.len() as u32;
+        *index_map.entry(x).or_insert_with(|| idx)
+    };
 
-        let (scc_count, scc_index) = gen_scc(&neighbors);
+    let mut edges = vec![];
+    for _ in 0..m {
+        let u = query_index(input.token());
+        for _ in 0..input.value() {
+            let v = query_index(input.token());
+            edges.push((u, v));
+        }
+    }
+    let target = index_map[input.token()];
+    let n = index_map.len();
 
-        let mut has_parent = vec![false; scc_count as usize];
-        for u in 0..n {
+    let neighbors = Jagged::from_assoc_list(n, &edges);
+    let (scc_count, scc_index) = gen_scc(&neighbors);
+
+    let mut components = vec![vec![]; scc_count];
+    for (i, &c) in scc_index.iter().enumerate() {
+        components[c as usize].push(i);
+    }
+
+    let mut score = vec![u64::MAX; n];
+    for c in 0..scc_count {
+        for &u in &components[c] {
+            score[u] = 1;
             for &v in &neighbors[u] {
-                if scc_index[u] != scc_index[v as usize] {
-                    has_parent[scc_index[v as usize] as usize] = true;
+                if scc_index[v as usize] != scc_index[u] {
+                    score[u] += score[v as usize];
                 }
             }
         }
-
-        let result: u32 = has_parent.iter().map(|b| !b as u32).sum();
-        writeln!(output, "{}", result).unwrap();
     }
+
+    let ans = score[target as usize];
+    writeln!(output, "{}", ans).unwrap();
 }

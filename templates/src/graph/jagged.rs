@@ -1,8 +1,10 @@
 pub mod collections {
     use std::fmt::Debug;
+    use std::iter;
+    use std::mem::MaybeUninit;
     use std::ops::Index;
 
-    // compressed sparse row format for jagged array
+    // Compressed sparse row format for jagged array
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
     pub struct Jagged<T> {
         data: Vec<T>,
@@ -36,6 +38,35 @@ pub mod collections {
                 data.extend(row.into_iter().inspect(|_| cnt += 1));
                 head.push(cnt);
             }
+            Jagged { data, head }
+        }
+    }
+
+    impl<T: Clone> Jagged<T> {
+        pub fn from_assoc_list(n: usize, pairs: &[(u32, T)]) -> Self {
+            let mut head = vec![0u32; n + 1];
+
+            for &(u, _) in pairs {
+                head[u as usize + 1] += 1;
+            }
+            for i in 2..n + 1 {
+                head[i] += head[i - 1];
+            }
+            let mut data: Vec<_> = iter::repeat_with(|| MaybeUninit::uninit())
+                .take(head[n] as usize)
+                .collect();
+            let mut pos = head.clone();
+
+            for (u, v) in pairs {
+                data[pos[*u as usize] as usize] = MaybeUninit::new(v.clone());
+                pos[*u as usize] += 1;
+            }
+
+            let data = std::mem::ManuallyDrop::new(data);
+            let data = unsafe {
+                Vec::from_raw_parts(data.as_ptr() as *mut T, data.len(), data.capacity())
+            };
+
             Jagged { data, head }
         }
     }

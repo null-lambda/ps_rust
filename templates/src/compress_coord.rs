@@ -16,3 +16,13 @@ fn compress_coord<T: Ord + Clone + Hash>(
 
     (x_map, x_map_inv)
 }
+
+use std::{collections::HashMap, hash::Hash};
+
+fn gen_index_mapper<T: Eq + Hash>() -> impl FnMut(T) -> u32 {
+    let mut map = HashMap::new();
+    move |x| {
+        let idx = map.len() as u32;
+        *map.entry(x).or_insert_with(|| idx)
+    }
+}
