@@ -1,32 +1,26 @@
 mod graph {
-    // topological sort, with lazy evaluation
-    pub fn toposort<'a>(neighbors: &'a Vec<Vec<usize>>) -> impl Iterator<Item = usize> + 'a {
-        let n = neighbors.len();
+    use std::{collections::VecDeque, iter};
+
+    // Topological sort, with lazy evaluation
+    pub fn toposort<'a>(children: &'a [Vec<usize>]) -> impl Iterator<Item = usize> + 'a {
+        let n = children.len();
         let mut indegree: Vec<u32> = vec![0; n];
         for u in 0..n {
-            for &v in &neighbors[u] {
+            for &v in &children[u] {
                 indegree[v] += 1;
             }
         }
 
-        // intialize queue with zero indegree nodes
-        let mut queue: std::collections::VecDeque<usize> = indegree
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &d)| (d == 0).then_some(i))
-            .collect();
-
-        // topological sort
-        std::iter::from_fn(move || {
-            queue.pop_front().map(|u| {
-                for &v in &neighbors[u] {
-                    indegree[v] -= 1;
-                    if indegree[v] == 0 {
-                        queue.push_back(v);
-                    }
+        let mut queue: VecDeque<usize> = (0..n).filter(|&i| indegree[i] == 0).collect();
+        iter::from_fn(move || {
+            let u = queue.pop_front()?;
+            for &v in &children[u] {
+                indegree[v] -= 1;
+                if indegree[v] == 0 {
+                    queue.push_back(v);
                 }
-                u
-            })
+            }
+            Some(u)
         })
     }
 }
