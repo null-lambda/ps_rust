@@ -1,5 +1,7 @@
 use std::io::Write;
 
+use splay::SplayForest;
+
 mod simple_io {
     pub struct InputAtOnce<'a> {
         _buf: String,
@@ -63,12 +65,18 @@ fn pow(mut base: u64, mut exp: u64) -> u64 {
     res
 }
 
+#[allow(unused)]
 pub mod splay {
     use super::*;
 
     use std::{
-        fmt, iter, mem,
-        ops::{Index, IndexMut, Range},
+        cmp::Ordering,
+        fmt::{self, Debug},
+        iter,
+        marker::PhantomData,
+        mem::{self, MaybeUninit},
+        num::NonZeroU32,
+        ops::{Deref, DerefMut, Index, IndexMut, Range},
         ptr::{self, NonNull},
     };
 
@@ -85,505 +93,354 @@ pub mod splay {
                 Branch::Right => Branch::Left,
             }
         }
-
-        pub fn iter() -> iter::Chain<iter::Once<Self>, iter::Once<Self>> {
-            iter::once(Branch::Left).chain(iter::once(Branch::Right))
-        }
     }
 
-    type Link = Option<NonNull<Node>>;
-    pub struct Node {
+    type Link<'pool> = Option<NodeRef<'pool>>;
+
+    #[derive(Debug)]
+    pub struct Node<'pool> {
         pub value: u64,
         pub sum: [u64; 11],
-        pub count: u32,
-        children: Children,
-        parent: Link,
+        pub size: u32,
+        children: [Link<'pool>; 2],
+        parent: Link<'pool>,
+        _marker: PhantomData<&'pool ()>,
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub struct NodeRef<'pool> {
+        idx: NonZeroU32,
+        _marker: PhantomData<&'pool mut Node<'pool>>,
+    }
+
+    impl Debug for NodeRef<'_> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{}", self.idx.get())
+        }
     }
 
     #[derive(Debug)]
-    struct Children([Link; 2]);
-
-    impl Children {
-        fn get(&self, branch: Branch) -> Option<&Node> {
-            self.0[branch as usize]
-                .as_ref()
-                .map(|x| unsafe { x.as_ref() })
-        }
-
-        fn get_mut(&mut self, branch: Branch) -> Option<&mut Node> {
-            self.0[branch as usize]
-                .as_mut()
-                .map(|x| unsafe { x.as_mut() })
-        }
+    pub struct SplayForest<'pool> {
+        pool: Vec<Node<'pool>>,
     }
 
-    impl Node {
-        unsafe fn new(value: u64, parent: Option<NonNull<Node>>) -> Box<Self> {
-            Box::new(Node {
+    impl<'pool> SplayForest<'pool> {
+        pub fn new() -> Self {
+            let dummy = Node {
+                value: 0,
+                sum: Default::default(),
+                size: 0,
+                children: [None, None],
+                parent: None,
+                _marker: PhantomData,
+            };
+            Self { pool: vec![dummy] }
+        }
+
+        pub fn new_node(&mut self, value: u64, parent: Link<'pool>) -> NodeRef<'pool> {
+            let idx = self.pool.len();
+            self.pool.push(Node {
                 value,
                 sum: [value; 11],
-                count: 1,
-                children: Children([None, None]),
+                size: 1,
+                children: [None, None],
                 parent,
-            })
-        }
-
-        fn attach(mut node: NonNull<Self>, branch: Branch, mut child: Option<NonNull<Self>>) {
-            unsafe {
-                // debug_assert!(self.children.0[branch as usize] == None);
-                debug_assert_ne!(Some(node.as_ptr() as *mut _), child.map(|x| x.as_ptr()));
-
-                node.as_mut().children.0[branch as usize] = child;
-                if let Some(mut child) = child.as_mut() {
-                    child.as_mut().parent = Some(node);
-                }
+                _marker: PhantomData,
+            });
+            NodeRef {
+                idx: unsafe { NonZeroU32::new(idx as u32).unwrap_unchecked() },
+                _marker: PhantomData,
             }
         }
 
-        fn detach(mut node: NonNull<Self>, branch: Branch) -> Option<NonNull<Self>> {
-            unsafe {
-                node.as_mut().children.0[branch as usize]
-                    .take()
-                    .map(|mut child| {
-                        child.as_mut().parent = None;
-                        child
-                    })
-            }
+        pub fn add_root(&mut self, value: u64) -> NodeRef<'pool> {
+            let root = self.new_node(value, None);
+            root
         }
 
-        fn is_root(&self) -> bool {
-            self.parent.is_none()
+        pub fn get_node<'a>(&'a self, ptr: NodeRef<'pool>) -> &'a Node<'pool> {
+            &self.pool[ptr.idx.get() as usize]
         }
 
-        fn branch(&self) -> Branch {
-            debug_assert!(!self.is_root());
+        pub fn get_node_mut<'a>(&'a mut self, ptr: NodeRef<'pool>) -> &'a mut Node<'pool> {
+            &mut self.pool[ptr.idx.get() as usize]
+        }
+
+        pub fn get_node_with_children<'a>(
+            &'a mut self,
+            ptr: NodeRef<'pool>,
+        ) -> (&'a mut Node<'pool>, [Option<&'a mut Node<'pool>>; 2]) {
             unsafe {
-                let node: NonNull<Self> = self.into();
-                match node
-                    .as_ref()
-                    .parent
-                    .unwrap()
-                    .as_ref()
+                let pool_ptr = self.pool.as_mut_ptr();
+                let node = &mut *pool_ptr.add(ptr.idx.get() as usize);
+                let children = node
                     .children
-                    .get(Branch::Left)
-                {
-                    Some(child) if ptr::eq(node.as_ptr(), child) => Branch::Left,
-                    _ => Branch::Right,
-                }
+                    .map(|child| child.map(|child| &mut *pool_ptr.add(child.idx.get() as usize)));
+                (node, children)
             }
         }
 
-        fn rotate(mut node: NonNull<Self>) {
-            unsafe {
-                debug_assert!(!node.as_mut().is_root());
-
-                let branch = node.as_mut().branch();
-
-                let mut c = Node::detach(node, branch.inv());
-                Node::attach(node.as_mut().parent.unwrap(), branch, c);
-
-                let mut parent = node.as_mut().parent.unwrap();
-                if let Some(mut grandparent) = parent.as_mut().parent {
-                    Node::attach(grandparent, parent.as_ref().branch(), Some(node));
-                } else {
-                    node.as_mut().parent = None;
-                }
-                Node::attach(node, branch.inv(), Some(parent));
-
-                parent.as_mut().update();
-                node.as_mut().update();
-            }
+        fn push_down(&mut self, node: NodeRef<'pool>) {
+            unimplemented!();
         }
 
-        fn update(&mut self) {
-            self.count = 1;
-            for branch in Branch::iter() {
-                if let Some(child) = self.children.get(branch) {
-                    self.count += child.count;
-                }
+        fn pull_up(&mut self, node: NodeRef<'pool>) {
+            let (node, children) = self.get_node_with_children(node);
+            node.size = 1;
+
+            for child in children.iter().flatten() {
+                node.size += child.size;
             }
 
-            self.sum = [0; 11];
+            node.sum = [0; 11];
             let mut size_left = 1;
-            if let Some(child) = &self.children.get(Branch::Left) {
-                size_left = child.count + 1;
+            if let Some(child) = children[Branch::Left as usize].as_ref() {
+                size_left = child.size + 1;
                 for i in 0..=10 {
-                    self.sum[i] += child.sum[i];
-                    self.sum[i] %= P;
+                    node.sum[i] += child.sum[i];
+                    node.sum[i] %= P;
                 }
             }
             for i in 0..=10 {
-                self.sum[i] = (self.sum[i] + self.value * pow(size_left as u64, i as u64)) % P;
+                node.sum[i] = (node.sum[i] + node.value * pow(size_left as u64, i as u64)) % P;
             }
-            if let Some(child) = &self.children.get(Branch::Right) {
+            if let Some(child) = children[Branch::Right as usize].as_ref() {
                 for i in 0..=10 {
                     for k in 0..=i {
-                        self.sum[i] += child.sum[k] * comb(i as usize, k as usize) % P
+                        node.sum[i] += child.sum[k] * comb(i as usize, k as usize) % P
                             * pow(size_left as u64, (i - k) as u64);
-                        self.sum[i] %= P;
+                        node.sum[i] %= P;
                     }
                 }
             }
         }
 
-        pub fn validate_parents(&self) {
-            if !cfg!(debug_assertions) {
-                return;
-            }
-
-            unsafe {
-                if let Some(parent) = self.parent {
-                    debug_assert_eq!(
-                        self as *const _,
-                        parent.as_ref().children.get(self.branch()).unwrap() as *const _,
-                        "Parent's child pointer does not point to self"
-                    );
-                }
-                for branch in Branch::iter() {
-                    if let Some(child) = self.children.get(branch) {
-                        debug_assert_eq!(
-                            Some(self as *const _),
-                            child.parent.map(|x| x.as_ptr() as *const _),
-                            "Child's parent pointer does not point to self: {:?} {:?}",
-                            self,
-                            child
-                        );
-                        debug_assert_ne!(child as *const _, self as *const _, "Self loop detected");
-                    }
-                }
-            }
-        }
-    }
-
-    pub struct Tree {
-        root: Link,
-    }
-
-    impl Tree {
-        pub fn into_root(mut self) -> Link {
-            self.root.take()
+        pub fn is_root(&self, node: NodeRef<'pool>) -> bool {
+            self.get_node(node).parent.is_none()
         }
 
-        pub fn size(&self) -> usize {
-            unsafe { self.root.map_or(0, |x| x.as_ref().count as usize) }
-        }
-
-        fn splay(&mut self, mut node: NonNull<Node>) {
-            debug_assert!(self.root.is_some());
-
-            unsafe {
-                let mut node_mut = node.as_ptr();
-                while let Some(mut parent) = (*node_mut).parent {
-                    if let Some(_grandparent) = parent.as_ref().parent {
-                        if parent.as_ref().branch() == (*node_mut).branch() {
-                            Node::rotate(parent);
-                        } else {
-                            Node::rotate(node);
-                        }
-                    }
-                    Node::rotate(node);
-                }
-
-                self.root = Some(node);
-            }
-        }
-
-        pub fn splay_nth(&mut self, mut n: usize) {
-            debug_assert!(n < self.size(), "Out of Index: {} < {}", n, self.size());
-
-            unsafe {
-                let mut node: NonNull<Node> = self.root.unwrap();
-                loop {
-                    let mut child_count = (node)
-                        .as_ref()
-                        .children
-                        .get(Branch::Left)
-                        .map_or(0, |x| x.count as usize);
-
-                    if child_count == n {
-                        break;
-                    } else if child_count < n {
-                        node = node.as_mut().children.0[Branch::Right as usize].unwrap();
-                        n -= child_count + 1;
-                    } else {
-                        node = node.as_mut().children.0[Branch::Left as usize].unwrap();
-                    }
-                }
-
-                self.splay(node);
-            }
-        }
-
-        fn split_right(&mut self) -> Option<Tree> {
-            unsafe {
-                let mut right = Node::detach(self.root?, Branch::Right);
-                right.map(|x| Tree { root: Some(x) })
-            }
-        }
-
-        fn merge(&mut self, rhs: Tree) {
-            unsafe {
-                if self.root.is_none() {
-                    self.root = rhs.into_root();
-                    return;
-                }
-                if rhs.root.is_none() {
-                    return;
-                }
-                let mut node = self.root.unwrap();
-                while let Some(mut right) = node.as_mut().children.0[Branch::Right as usize] {
-                    node = right;
-                }
-                self.splay(node);
-                Node::attach(self.root.unwrap(), Branch::Right, rhs.into_root());
-                self.root.unwrap().as_mut().update();
-            }
-        }
-
-        pub fn insert_left(&mut self, value: u64, pos: usize) {
-            unsafe {
-                let new_node = Some(NonNull::new_unchecked(Box::into_raw(Node::new(
-                    value, None,
-                ))));
-                if self.root.is_none() {
-                    debug_assert_eq!(pos, 0);
-                    self.root = new_node;
-                    return;
-                }
-
-                if pos == self.size() {
-                    let mut p = self.root.unwrap();
-                    while let Some(child) = p.as_mut().children.0[Branch::Right as usize] {
-                        p = child;
-                    }
-                    Node::attach(p, Branch::Right, new_node);
-                    self.splay(p);
+        pub fn get_branch(&self, node: NodeRef<'pool>) -> Option<Branch> {
+            let parent = self.get_node(node).parent?;
+            Some(
+                if self.get_node(parent).children[Branch::Left as usize] == Some(node) {
+                    Branch::Left
                 } else {
-                    self.splay_nth(pos);
+                    Branch::Right
+                },
+            )
+        }
 
-                    let Some(mut p) = self.root.unwrap().as_mut().children.0[Branch::Left as usize]
-                    else {
-                        Node::attach(self.root.unwrap(), Branch::Left, new_node);
-                        self.root.unwrap().as_mut().update();
-                        return;
-                    };
-                    while let Some(child) = p.as_ref().children.0[Branch::Right as usize] {
-                        p = child;
-                    }
-
-                    Node::attach(p, Branch::Right, new_node);
-                    self.splay(p);
-                }
+        fn attach(&mut self, node: NodeRef<'pool>, mut child: NodeRef<'pool>, branch: Branch) {
+            unsafe {
+                debug_assert_ne!(node, child);
+                self.get_node_mut(node).children[branch as usize] = Some(child);
+                self.get_node_mut(child).parent = Some(node);
             }
         }
 
-        pub fn remove(&mut self, pos: usize) {
-            debug_assert!(pos < self.size());
-            unsafe {
-                self.splay_nth(pos);
-                let mut right = self.split_right();
-                let mut left = Node::detach(self.root.unwrap(), Branch::Left);
-                let old = mem::replace(&mut self.root, left);
-                if let Some(old) = old {
-                    drop(Box::from_raw(old.as_ptr()));
-                }
-
-                if let Some(mut right) = right {
-                    self.merge(right);
-                }
-            }
+        fn detach(&mut self, node: NodeRef<'pool>, branch: Branch) -> Option<NodeRef<'pool>> {
+            let child = self.get_node_mut(node).children[branch as usize].take()?;
+            self.get_node_mut(child).parent = None;
+            Some(child)
         }
 
-        pub fn replace(&mut self, pos: usize, value: u64) {
-            debug_assert!(pos < self.size());
-            unsafe {
-                self.splay_nth(pos);
-                self.root.unwrap().as_mut().value = value;
-                self.root.unwrap().as_mut().update();
+        fn rotate(&mut self, node: NodeRef<'pool>) {
+            debug_assert!(!self.is_root(node));
+            let branch = self.get_branch(node).unwrap();
+            let mut child = self.detach(node, branch.inv());
+            let parent = self.get_node(node).parent.unwrap();
+            if let Some(child) = child {
+                self.attach(parent, child, branch);
+            } else {
+                self.detach(parent, branch);
             }
+            if let Some(mut grandparent) = self.get_node(parent).parent {
+                self.attach(grandparent, node, self.get_branch(parent).unwrap());
+            } else {
+                self.get_node_mut(node).parent = None;
+            }
+            self.attach(node, parent, branch.inv());
+
+            self.pull_up(parent);
+            self.pull_up(node);
         }
 
-        pub fn query_range<'a>(&'a mut self, range: Range<usize>) -> &'a Node {
-            unsafe {
-                let Range { start: l, end: r } = range;
-                debug_assert!(l < r && r <= self.size());
-
-                if r == self.size() {
-                    if l == 0 {
-                        &self.root.unwrap().as_ref()
+        pub fn splay(&mut self, mut node: NodeRef<'pool>) {
+            // eprintln!("splay {:?}", node);
+            while let Some(parent) = self.get_node(node).parent {
+                if let Some(grandparent) = self.get_node(parent).parent {
+                    if self.get_branch(node) == self.get_branch(parent) {
+                        self.rotate(parent);
                     } else {
-                        self.splay_nth(l - 1);
-
-                        let mut res: &mut Node = self
-                            .root
-                            .unwrap()
-                            .as_mut()
-                            .children
-                            .get_mut(Branch::Right)
-                            .unwrap();
-
-                        res.update();
-                        for branch in Branch::iter() {
-                            res.children.get_mut(branch).map(|x| x.update());
-                        }
-                        res.update();
-
-                        res
+                        self.rotate(node);
                     }
+                }
+                self.rotate(node);
+                // self.debug_print_topo();
+            }
+        }
+
+        fn first(&mut self, mut node: NodeRef<'pool>) -> NodeRef<'pool> {
+            while let Some(left) = self.get_node(node).children[Branch::Left as usize] {
+                node = left;
+            }
+            node
+        }
+
+        fn last(&mut self, mut node: NodeRef<'pool>) -> NodeRef<'pool> {
+            while let Some(right) = self.get_node(node).children[Branch::Right as usize] {
+                node = right;
+            }
+            node
+        }
+
+        #[must_use]
+        pub fn splay_nth(&mut self, mut node: NodeRef<'pool>, mut n: usize) -> NodeRef<'pool> {
+            debug_assert!(n < self.get_node(node).size as usize, "Out of bounds");
+            loop {
+                let node_ref = self.get_node(node);
+                let mut left_size = node_ref.children[Branch::Left as usize]
+                    .map_or(0, |x| self.get_node(x).size as usize);
+                match n.cmp(&left_size) {
+                    Ordering::Equal => break,
+                    Ordering::Less => {
+                        node = node_ref.children[Branch::Left as usize].unwrap();
+                    }
+                    Ordering::Greater => {
+                        n -= left_size + 1;
+                        node = node_ref.children[Branch::Right as usize].unwrap();
+                    }
+                }
+            }
+            self.splay(node);
+            node
+        }
+
+        #[must_use]
+        pub fn merge(&mut self, mut left: NodeRef<'pool>, right: NodeRef<'pool>) -> NodeRef<'pool> {
+            let r = self.last(left);
+            self.splay(r);
+            self.attach(r, right, Branch::Right);
+            self.pull_up(r);
+            r
+        }
+
+        #[must_use]
+        pub fn insert(&mut self, node: NodeRef<'pool>, pos: usize, value: u64) -> NodeRef<'pool> {
+            debug_assert!(pos <= self.get_node(node).size as usize);
+            let mut new_node = self.new_node(value, None);
+            if pos == self.get_node(node).size as usize {
+                let last = self.last(node);
+                self.splay(last);
+                self.attach(last, new_node, Branch::Right);
+                self.pull_up(last);
+                last
+            } else {
+                let mut right = self.splay_nth(node, pos);
+                if let Some(left) = self.get_node(right).children[Branch::Left as usize] {
+                    let last = self.last(left);
+                    self.attach(last, new_node, Branch::Right);
+                    self.splay(last);
+                    last
                 } else {
-                    self.splay_nth(r);
-                    if l == 0 {
-                        &self
-                            .root
-                            .unwrap()
-                            .as_ref()
-                            .children
-                            .get(Branch::Left)
-                            .unwrap()
-                    } else {
-                        let temp = self.root.unwrap();
-                        self.splay_nth(l - 1);
-                        let mut right = self.split_right().unwrap();
-                        right.splay(temp);
-                        let mut right = right.into_root();
-                        Node::attach(self.root.unwrap(), Branch::Right, right.take());
-                        self.root.unwrap().as_mut().update();
-
-                        self.root
-                            .unwrap()
-                            .as_ref()
-                            .children
-                            .get(Branch::Right)
-                            .unwrap()
-                            .children
-                            .get(Branch::Left)
-                            .unwrap()
-                    }
+                    self.attach(right, new_node, Branch::Left);
+                    self.pull_up(right);
+                    right
                 }
             }
         }
-    }
 
-    impl FromIterator<u64> for Tree {
-        fn from_iter<I: IntoIterator<Item = u64>>(iter: I) -> Self {
-            unsafe {
-                let mut root: Link = iter
-                    .into_iter()
-                    .map(|value| NonNull::new_unchecked(Box::into_raw(Node::new(value, None))))
-                    .reduce(|mut acc, mut node| {
-                        Node::attach(node, Branch::Left, Some(acc));
-                        node.as_mut().update();
-                        node
-                    });
-                // println!("{:?}", root.unwrap().as_ref());
-
-                Tree { root }
+        #[must_use]
+        pub fn remove(&mut self, mut node: NodeRef<'pool>, pos: usize) -> Option<NodeRef<'pool>> {
+            debug_assert!(pos < self.get_node(node).size as usize);
+            node = self.splay_nth(node, pos);
+            let mut left = self.detach(node, Branch::Left);
+            let mut right = self.detach(node, Branch::Right);
+            if let Some((left, right)) = left.zip(right) {
+                Some(self.merge(left, right))
+            } else {
+                left.or_else(|| right)
             }
         }
-    }
 
-    impl Drop for Node {
-        fn drop(&mut self) {
-            unsafe {
-                for branch in Branch::iter() {
-                    if let Some(mut child) = self.children.0[branch as usize] {
-                        let _owned = Box::from_raw(child.as_ptr());
-                    }
+        #[must_use]
+        pub fn set(&mut self, mut node: NodeRef<'pool>, pos: usize, value: u64) -> NodeRef<'pool> {
+            node = self.splay_nth(node, pos);
+            self.get_node_mut(node).value = value;
+            node
+        }
+
+        #[must_use]
+        pub fn extract_range(
+            &mut self,
+            node: NodeRef<'pool>,
+            range: Range<usize>,
+        ) -> (NodeRef<'pool>, NodeRef<'pool>) {
+            let Range { start: l, end: r } = range;
+            let n = self.get_node(node).size as usize;
+            debug_assert!(l < r && r <= n);
+            if r == self.get_node(node).size as usize {
+                if l == 0 {
+                    (node, node)
+                } else {
+                    //   l
+                    //  / \
+                    // .   m
+                    let left = self.splay_nth(node, l - 1);
+                    let mid = self.get_node(left).children[Branch::Right as usize].unwrap();
+                    (left, mid)
+                }
+            } else {
+                let right = self.splay_nth(node, r);
+                if l == 0 {
+                    //   r
+                    //  / \
+                    // m   .
+                    let mid = self.get_node(right).children[Branch::Left as usize].unwrap();
+                    (right, mid)
+                } else {
+                    //     r
+                    //    / \
+                    //   l   .
+                    //  / \
+                    // .   m
+                    let left_mid = self.detach(right, Branch::Left).unwrap();
+                    let mut left = self.splay_nth(left_mid, l - 1);
+                    self.attach(right, left, Branch::Left);
+                    self.pull_up(right);
+                    let mid = self.get_node(left).children[Branch::Right as usize].unwrap();
+                    (right, mid)
                 }
             }
         }
-    }
 
-    impl Drop for Tree {
-        fn drop(&mut self) {
-            unsafe {
-                if let Some(mut root) = self.root {
-                    let _owned = Box::from_raw(root.as_ptr());
+        pub fn from_iter(iter: impl IntoIterator<Item = u64>) -> (Self, Option<NodeRef<'pool>>) {
+            let mut tree = SplayForest::new();
+            let mut root = None;
+            for value in iter {
+                let node = tree.new_node(value, None);
+                root = Some(root.map_or(node, |root| {
+                    tree.attach(node, root, Branch::Left);
+                    tree.pull_up(node);
+                    node
+                }));
+            }
+            (tree, root)
+        }
+
+        pub fn preorder(&self, node: NodeRef<'pool>, mut visitor: impl FnMut(NodeRef<'pool>)) {
+            fn rec<'pool>(
+                tree: &SplayForest<'pool>,
+                node: NodeRef<'pool>,
+                visitor: &mut impl FnMut(NodeRef<'pool>),
+            ) {
+                visitor(node);
+                let children = tree.get_node(node).children;
+                for child in children.into_iter().flatten() {
+                    rec(tree, child, visitor);
                 }
             }
-        }
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum VisitType {
-        Inorder,
-        Preorder,
-        Postorder,
-    }
-
-    impl Node {
-        pub fn traverse(&self, mut visitor: impl FnMut(VisitType, &Node)) {
-            pub fn inner(node: &Node, visitor: &mut impl FnMut(VisitType, &Node)) {
-                visitor(VisitType::Preorder, node);
-                if let Some(left) = node.children.get(Branch::Left) {
-                    inner(left, visitor);
-                }
-                visitor(VisitType::Inorder, node);
-                if let Some(right) = node.children.get(Branch::Right) {
-                    inner(right, visitor);
-                }
-                visitor(VisitType::Postorder, node);
-            }
-            inner(self, &mut visitor);
-        }
-
-        pub fn inorder(&self, mut visitor: impl FnMut(&Node)) {
-            self.traverse(|visit_type, node| {
-                if visit_type == VisitType::Inorder {
-                    visitor(node);
-                }
-            });
-        }
-
-        pub fn preorder(&self, mut visitor: impl FnMut(&Node)) {
-            self.traverse(|visit_type, node| {
-                if visit_type == VisitType::Preorder {
-                    visitor(node);
-                }
-            });
-        }
-
-        pub fn postorder(&self, mut visitor: impl FnMut(&Node)) {
-            self.traverse(|visit_type, node| {
-                if visit_type == VisitType::Postorder {
-                    visitor(node);
-                }
-            });
-        }
-    }
-
-    impl fmt::Debug for Node {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            let mut res = Ok(());
-            self.traverse(|visit_type, node| match visit_type {
-                VisitType::Preorder => res = res.and_then(|_| write!(f, "(")),
-                VisitType::Inorder => {
-                    res = res.and_then(|_| write!(f, "{:?},{:?}", node.value, node.count))
-                }
-                VisitType::Postorder => res = res.and_then(|_| write!(f, ")")),
-            });
-            // self.preorder(|node| {
-            //     res = res.and_then(|_| {
-            //         writeln!(
-            //             f,
-            //             "{:?}>{:?}>{:?}",
-            //             node.parent.map(|x| unsafe { x.as_ref().value }),
-            //             node.value,
-            //             Branch::iter()
-            //                 .map(|b| node.children.get(b).map(|x| x.value))
-            //                 .collect::<Vec<_>>()
-            //         )
-            //     })
-            // });
-            res?;
-            // writeln!(f)
-            Ok(())
-        }
-    }
-
-    impl fmt::Debug for Tree {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            unsafe { write!(f, "Tree {:?}", self.root.map(|x| x.as_ref())) }
+            rec(self, node, &mut visitor);
         }
     }
 }
@@ -596,7 +453,7 @@ fn main() {
 
     init_comb();
 
-    let mut tree: splay::Tree = (0..n).map(|_| input.value()).collect();
+    let (mut tree, mut root) = SplayForest::from_iter((0..n).map(|_| input.value()));
 
     for _i_query in 0..input.value() {
         let cmd: u8 = input.value();
@@ -604,24 +461,29 @@ fn main() {
             1 => {
                 let p: usize = input.value();
                 let x: u64 = input.value();
-                tree.insert_left(x, p);
+                root = Some(if let Some(root) = root {
+                    tree.insert(root, p, x)
+                } else {
+                    tree.add_root(x)
+                });
             }
             2 => {
                 let p: usize = input.value();
-                tree.remove(p);
+                root = tree.remove(root.unwrap(), p);
             }
             3 => {
                 let p: usize = input.value();
                 let x: u64 = input.value();
-                tree.replace(p, x);
+                root = Some(tree.set(root.unwrap(), p, x));
                 continue;
             }
             4 => {
                 let l: usize = input.value();
                 let r: usize = input.value();
                 let k: usize = input.value();
-                let node = tree.query_range(l..r + 1);
-                writeln!(output, "{}", node.sum[k]).unwrap();
+                let (new_root, sub_node) = tree.extract_range(root.unwrap(), l..r + 1);
+                root = Some(new_root);
+                writeln!(output, "{}", tree.get_node(sub_node).sum[k]).unwrap();
             }
             _ => panic!(),
         }
