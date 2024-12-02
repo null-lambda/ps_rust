@@ -10,11 +10,11 @@ mod collections {
 
     impl<T> DisjointMap<T> {
         pub fn new(values: impl IntoIterator<Item = T>) -> Self {
-            let node_weights: Vec<_> = values.into_iter().map(|c| MaybeUninit::new(c)).collect();
-            let n = node_weights.len();
+            let values: Vec<_> = values.into_iter().map(MaybeUninit::new).collect();
+            let n = values.len();
             Self {
                 parent_or_size: vec![Cell::new(-1); n],
-                values: node_weights,
+                values,
             }
         }
 
