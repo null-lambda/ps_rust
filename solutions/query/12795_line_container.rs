@@ -1,13 +1,17 @@
 use std::io::Write;
 
-mod simple_io {
-    pub struct InputAtOnce<'a> {
-        _buf: String,
-        iter: std::str::SplitAsciiWhitespace<'a>,
+mod fast_io {
+    use std::fs::File;
+    use std::io::BufWriter;
+    use std::os::unix::io::FromRawFd;
+
+    pub struct InputAtOnce {
+        _buf: &'static str,
+        iter: std::str::SplitAsciiWhitespace<'static>,
     }
 
-    impl<'a> InputAtOnce<'a> {
-        pub fn token(&mut self) -> &'a str {
+    impl InputAtOnce {
+        pub fn token(&mut self) -> &'static str {
             self.iter.next().unwrap_or_default()
         }
 
@@ -19,15 +23,25 @@ mod simple_io {
         }
     }
 
-    pub fn stdin<'a>() -> InputAtOnce<'a> {
-        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+    extern "C" {
+        fn mmap(addr: usize, length: usize, prot: i32, flags: i32, fd: i32, offset: i64)
+            -> *mut u8;
+        fn fstat(fd: i32, stat: *mut usize) -> i32;
+    }
+
+    pub fn stdin() -> InputAtOnce {
+        let mut stat = [0; 18];
+        unsafe { fstat(0, (&mut stat).as_mut_ptr()) };
+        let _buf = unsafe { mmap(0, stat[6], 1, 2, 0, 0) };
+        let _buf =
+            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(_buf, stat[6])) };
         let iter = _buf.split_ascii_whitespace();
-        let iter = unsafe { std::mem::transmute(iter) };
         InputAtOnce { _buf, iter }
     }
 
-    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
-        std::io::BufWriter::new(std::io::stdout())
+    pub fn stdout() -> BufWriter<File> {
+        let stdout = unsafe { File::from_raw_fd(1) };
+        BufWriter::new(stdout)
     }
 }
 
@@ -37,12 +51,12 @@ mod cht {
     // https://github.com/kth-competitive-programming/kactl/blob/main/content/data-structures/LineContainer.h
 
     use std::{cell::Cell, cmp::Ordering, collections::BTreeSet};
-    type V = i32;
+    type V = i64;
     const NEG_INF: V = V::MIN;
     const INF: V = V::MAX;
 
     fn div_floor(x: V, y: V) -> V {
-        x / y - (((x < 0) ^ (y < 0)) && x % y == 0) as V
+        x / y - (((x < 0) ^ (y < 0)) && x % y != 0) as V
     }
 
     #[derive(Clone, Debug)]
@@ -131,30 +145,35 @@ mod cht {
                 }
                 to_remove.push(z.clone());
             }
-
-            let mut r = self.lines.range(..&y).rev();
-            if let Some(x) = r.next() {
-                let new_x_right_end = x.inter(&y);
-                if !(new_x_right_end < y.right_end.get()) {
-                    return;
-                }
-                x.right_end.set(new_x_right_end);
-
-                let mut x_prev = x;
-                for x in r {
-                    if x.right_end < x_prev.right_end {
-                        break;
-                    }
-                    x.right_end.set(x.inter(&y));
-                    to_remove.push(x_prev.clone());
-
-                    x_prev = x;
-                }
-            }
-
             for x in to_remove.drain(..) {
                 self.lines.remove(&x);
             }
+
+            let mut r = self.lines.range(..&y).rev();
+            if let Some(x) = r.next() {
+                let x_right_end = x.inter(&y);
+                if !(x_right_end < y.right_end.get()) {
+                    return;
+                }
+
+                let mut prev = x;
+                let mut prev_right_end = x_right_end;
+                for x in r {
+                    if x.right_end.get() < prev_right_end {
+                        break;
+                    }
+                    to_remove.push(prev.clone());
+
+                    prev = x;
+                    prev_right_end = x.inter(&y);
+                }
+                prev.right_end.set(prev_right_end);
+
+                for x in to_remove.drain(..) {
+                    self.lines.remove(&x);
+                }
+            }
+
             self.lines.insert(y);
         }
 
@@ -166,8 +185,8 @@ mod cht {
 }
 
 fn main() {
-    let mut input = simple_io::stdin();
-    let mut output = simple_io::stdout();
+    let mut input = fast_io::stdin();
+    let mut output = fast_io::stdout();
 
     let mut hull = cht::LineContainer::new();
     for _ in 0..input.value() {
