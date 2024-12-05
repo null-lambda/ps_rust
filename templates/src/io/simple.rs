@@ -17,7 +17,7 @@ mod simple_io {
         }
     }
 
-    pub fn stdin_at_once<'a>() -> InputAtOnce<'a> {
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
         let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
         let iter = _buf.split_ascii_whitespace();
         let iter = unsafe { std::mem::transmute(iter) };

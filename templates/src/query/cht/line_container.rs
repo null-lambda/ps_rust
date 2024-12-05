@@ -9,7 +9,7 @@ mod cht {
     const INF: V = V::MAX;
 
     fn div_floor(x: V, y: V) -> V {
-        x / y - (((x < 0) ^ (y < 0)) && x % y == 0) as V
+        x / y - (((x < 0) ^ (y < 0)) && x % y != 0) as V
     }
 
     #[derive(Clone, Debug)]
