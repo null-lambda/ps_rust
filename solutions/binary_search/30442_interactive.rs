@@ -1,3 +1,7 @@
+use std::{collections::HashMap, io::Write, iter};
+
+use buffered_io::InputStream;
+
 mod buffered_io {
     use std::fmt::Debug;
     use std::str::*;
@@ -119,4 +123,56 @@ mod buffered_io {
     pub fn stdout() -> BufWriter<Stdout> {
         BufWriter::new(std::io::stdout())
     }
+}
+
+fn partition_point<P>(mut left: u64, mut right: u64, mut pred: P) -> u64
+where
+    P: FnMut(u64) -> bool,
+{
+    while left < right {
+        let mid = left + (right - left) / 2;
+        if pred(mid) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+    left
+}
+
+fn main() {
+    let mut input = buffered_io::stdin();
+    let mut output = buffered_io::stdout();
+
+    let mut memo = HashMap::new();
+    let mut query = |i: u64| {
+        if let Some(&res) = memo.get(&i) {
+            return res;
+        }
+        writeln!(output, "buf[{}]", i).unwrap();
+        output.flush().unwrap();
+
+        let res = iter::repeat_with(|| {
+            let line = input.line();
+            let line = unsafe { std::str::from_utf8_unchecked(line) };
+            line.trim().parse::<u8>()
+        })
+        .flatten()
+        .next()
+        .unwrap()
+            > 0;
+        memo.insert(i, res);
+        res
+    };
+
+    let mut i = 4;
+    loop {
+        if !query(i - 1) {
+            break;
+        }
+        i *= 2;
+    }
+
+    let ans = partition_point((i / 2).max(2), i - 1, |pos| query(pos));
+    writeln!(output, "strlen(buf) = {}", ans).unwrap();
 }
