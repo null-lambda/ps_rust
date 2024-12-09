@@ -62,62 +62,75 @@ pub mod segtree {
             }
         }
 
-        fn push_lazy(&mut self, mut idx: usize) {
-            idx += self.n;
-            for height in (1..=self.max_height).rev() {
-                let node = idx >> height;
-                let width: u32 = 1 << (height - 1);
-                let value = unsafe { &*(&self.lazy[node] as *const _) };
-                self.apply(node << 1, width, value);
-                self.apply(node << 1 | 1, width, value);
-                self.lazy[node] = self.ma.id_action();
+        fn push_down(&mut self, width: u32, node: usize) {
+            let value = unsafe { &*(&self.lazy[node] as *const _) };
+            self.apply(node << 1, width, value);
+            self.apply(node << 1 | 1, width, value);
+            self.lazy[node] = self.ma.id_action();
+        }
+
+        fn push_range(&mut self, range: Range<usize>) {
+            let Range { mut start, mut end } = range;
+            start += self.n;
+            end += self.n;
+
+            let start_height = 1 + start.trailing_zeros();
+            let end_height = 1 + end.trailing_zeros();
+            for height in (start_height..=self.max_height).rev() {
+                let width = 1 << height - 1;
+                self.push_down(width, start >> height);
+            }
+            for height in (end_height..=self.max_height).rev().skip_while(|&height| {
+                height >= start_height && end - 1 >> height == start >> height
+            }) {
+                let width = 1 << height - 1;
+                self.push_down(width, end - 1 >> height);
             }
         }
 
-        fn pull_sum(&mut self, node: usize, width: u32) {
+        fn pull_up(&mut self, node: usize) {
             self.sum[node] = (self.ma).combine(&self.sum[node << 1], &self.sum[node << 1 | 1]);
-            self.sum[node] = (self.ma).apply_to_sum(&self.lazy[node], width, &self.sum[node]);
         }
 
         pub fn apply_range(&mut self, range: Range<usize>, value: M::F) {
             let Range { mut start, mut end } = range;
-            debug_assert!(start <= end);
-            debug_assert!(end <= self.n);
+            debug_assert!(start <= end && end <= self.n);
             if start == end {
                 return;
             }
-            self.push_lazy(start);
-            self.push_lazy(end - 1);
+
+            self.push_range(range);
             start += self.n;
             end += self.n;
             let mut width: u32 = 1;
-            let (mut update_left, mut update_right) = (false, false);
+            let (mut pull_start, mut pull_end) = (false, false);
             while start < end {
-                if update_left {
-                    self.pull_sum(start - 1, width);
+                if pull_start {
+                    self.pull_up(start - 1);
                 }
-                if update_right {
-                    self.pull_sum(end, width);
+                if pull_end {
+                    self.pull_up(end);
                 }
                 if start & 1 != 0 {
                     self.apply(start, width, &value);
-                    update_left = true;
+                    start += 1;
+                    pull_start = true;
                 }
                 if end & 1 != 0 {
                     self.apply(end - 1, width, &value);
-                    update_right = true;
+                    pull_end = true;
                 }
-                start = (start + 1) >> 1;
+                start >>= 1;
                 end >>= 1;
                 width <<= 1;
             }
             start -= 1;
             while end > 0 {
-                if update_left {
-                    self.pull_sum(start, width);
+                if pull_start {
+                    self.pull_up(start);
                 }
-                if update_right && !(update_left && start == end) {
-                    self.pull_sum(end, width);
+                if pull_end && !(pull_start && start == end) {
+                    self.pull_up(end);
                 }
                 start >>= 1;
                 end >>= 1;
@@ -127,8 +140,8 @@ pub mod segtree {
 
         pub fn query_range(&mut self, range: Range<usize>) -> M::X {
             let Range { mut start, mut end } = range;
-            self.push_lazy(start);
-            self.push_lazy(end - 1);
+
+            self.push_range(range);
             start += self.n;
             end += self.n;
             let (mut result_left, mut result_right) = (self.ma.id(), self.ma.id());
