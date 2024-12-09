@@ -1,4 +1,5 @@
 pub mod iter {
+    // chunk_by in std >= 1.77
     fn group_by<T, P, F>(xs: &[T], mut pred: P, mut f: F)
     where
         P: FnMut(&T, &T) -> bool,

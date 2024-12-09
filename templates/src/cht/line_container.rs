@@ -1,57 +1,10 @@
-use std::io::Write;
-
-mod fast_io {
-    use std::fs::File;
-    use std::io::BufWriter;
-    use std::os::unix::io::FromRawFd;
-
-    pub struct InputAtOnce {
-        _buf: &'static str,
-        iter: std::str::SplitAsciiWhitespace<'static>,
-    }
-
-    impl InputAtOnce {
-        pub fn token(&mut self) -> &'static str {
-            self.iter.next().unwrap_or_default()
-        }
-
-        pub fn value<T: std::str::FromStr>(&mut self) -> T
-        where
-            T::Err: std::fmt::Debug,
-        {
-            self.token().parse().unwrap()
-        }
-    }
-
-    extern "C" {
-        fn mmap(addr: usize, length: usize, prot: i32, flags: i32, fd: i32, offset: i64)
-            -> *mut u8;
-        fn fstat(fd: i32, stat: *mut usize) -> i32;
-    }
-
-    pub fn stdin() -> InputAtOnce {
-        let mut stat = [0; 18];
-        unsafe { fstat(0, (&mut stat).as_mut_ptr()) };
-        let _buf = unsafe { mmap(0, stat[6], 1, 2, 0, 0) };
-        let _buf =
-            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(_buf, stat[6])) };
-        let iter = _buf.split_ascii_whitespace();
-        InputAtOnce { _buf, iter }
-    }
-
-    pub fn stdout() -> BufWriter<File> {
-        let stdout = unsafe { File::from_raw_fd(1) };
-        BufWriter::new(stdout)
-    }
-}
-
 mod cht {
     // Line Container for Convex hull trick
     // adapted from KACTL
     // https://github.com/kth-competitive-programming/kactl/blob/main/content/data-structures/LineContainer.h
 
     use std::{cell::Cell, cmp::Ordering, collections::BTreeSet};
-    type V = i64;
+    type V = i32;
     const NEG_INF: V = V::MIN;
     const INF: V = V::MAX;
 
@@ -145,59 +98,36 @@ mod cht {
                 }
                 to_remove.push(z.clone());
             }
-            for x in to_remove.drain(..) {
-                self.lines.remove(&x);
-            }
 
             let mut r = self.lines.range(..&y).rev();
             if let Some(x) = r.next() {
-                let x_right_end = x.inter(&y);
-                if !(x_right_end < y.right_end.get()) {
+                let new_x_right_end = x.inter(&y);
+                if !(new_x_right_end < y.right_end.get()) {
                     return;
                 }
+                x.right_end.set(new_x_right_end);
 
-                let mut prev = x;
-                let mut prev_right_end = x_right_end;
+                let mut x_prev = x;
                 for x in r {
-                    if x.right_end.get() < prev_right_end {
+                    if x.right_end < x_prev.right_end {
                         break;
                     }
-                    to_remove.push(prev.clone());
+                    x.right_end.set(x.inter(&y));
+                    to_remove.push(x_prev.clone());
 
-                    prev = x;
-                    prev_right_end = x.inter(&y);
-                }
-                prev.right_end.set(prev_right_end);
-
-                for x in to_remove.drain(..) {
-                    self.lines.remove(&x);
+                    x_prev = x;
                 }
             }
 
+            for x in to_remove.drain(..) {
+                self.lines.remove(&x);
+            }
             self.lines.insert(y);
         }
 
         pub fn query(&self, x: V) -> Option<V> {
             let l = self.lines.range(Line::point_query(x)..).next()?;
             Some(l.slope * x + l.intercept)
-        }
-    }
-}
-
-fn main() {
-    let mut input = fast_io::stdin();
-    let mut output = fast_io::stdout();
-
-    let mut hull = cht::LineContainer::new();
-    for _ in 0..input.value() {
-        match input.token() {
-            "1" => {
-                hull.insert(input.value(), input.value());
-            }
-            "2" => {
-                writeln!(output, "{}", hull.query(input.value()).unwrap()).unwrap();
-            }
-            _ => panic!(),
         }
     }
 }
