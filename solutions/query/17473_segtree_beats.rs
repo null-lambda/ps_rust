@@ -1,3 +1,38 @@
+use std::{io::Write, u32};
+
+use segtree_beats::*;
+
+mod simple_io {
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
 pub mod segtree_beats {
     use std::{iter, ops::Range};
 
@@ -9,7 +44,7 @@ pub mod segtree_beats {
             debug_assert!(indices_sorted.iter().all(|&i| i < xs.len()));
         }
         let ptr = xs.as_mut_ptr();
-        unsafe { indices.map(|i| ptr.add(i).as_mut().unwrap()) }
+        unsafe { std::array::from_fn(|i| ptr.add(indices[i]).as_mut().unwrap()) }
     }
 
     pub trait NodeSpec {
@@ -190,6 +225,150 @@ pub mod segtree_beats {
             }
 
             R::combine(&self.op, result_left, result_right)
+        }
+    }
+}
+
+#[derive(Default)]
+struct NodeData {
+    max: u32,
+    or: u32,
+    and: u32,
+    lazy_add: i32,
+}
+
+impl NodeData {
+    fn singleton(value: u32) -> Self {
+        Self {
+            max: value,
+            or: value,
+            and: value,
+            lazy_add: 0,
+        }
+    }
+}
+
+struct Spec;
+
+impl NodeSpec for Spec {
+    type V = NodeData;
+
+    fn push_down(&self, parent: &mut Self::V, children: [&mut Self::V; 2], _child_size: u32) {
+        if parent.lazy_add > 0 {
+            for child in children {
+                child.max += parent.lazy_add as u32;
+                child.or += parent.lazy_add as u32;
+                child.and += parent.lazy_add as u32;
+                child.lazy_add += parent.lazy_add;
+            }
+        } else if parent.lazy_add < 0 {
+            for child in children {
+                child.max -= -parent.lazy_add as u32;
+                child.or -= -parent.lazy_add as u32;
+                child.and -= -parent.lazy_add as u32;
+                child.lazy_add += parent.lazy_add;
+            }
+        }
+        parent.lazy_add = 0;
+    }
+
+    fn pull_up(&self, parent: &mut Self::V, children: [&Self::V; 2]) {
+        debug_assert!(parent.lazy_add == 0);
+        let [left, right] = children;
+        parent.max = left.max.max(right.max);
+        parent.or = left.or | right.or;
+        parent.and = left.and & right.and;
+    }
+}
+
+#[derive(Clone)]
+struct BitAndAction(u32);
+
+impl Action<Spec> for BitAndAction {
+    fn try_apply_to_sum(&mut self, _m: &Spec, _x_count: u32, x_sum: &mut NodeData) -> bool {
+        if !x_sum.or & !self.0 == !self.0 {
+            return true;
+        }
+
+        let fixed = !(x_sum.and ^ x_sum.or);
+        if fixed & !self.0 == !self.0 {
+            x_sum.lazy_add -= (x_sum.or & !self.0) as i32;
+            x_sum.or &= self.0;
+            x_sum.and &= self.0;
+            x_sum.max &= self.0;
+            return true;
+        }
+
+        false
+    }
+}
+
+#[derive(Clone)]
+struct BitOrAction(u32);
+
+impl Action<Spec> for BitOrAction {
+    fn try_apply_to_sum(&mut self, _m: &Spec, _x_count: u32, x_sum: &mut NodeData) -> bool {
+        if x_sum.and & self.0 == self.0 {
+            return true;
+        }
+
+        let fixed = !(x_sum.and ^ x_sum.or);
+        if fixed & self.0 == self.0 {
+            x_sum.lazy_add += (self.0 & !x_sum.and) as i32;
+            x_sum.or |= self.0;
+            x_sum.and |= self.0;
+            x_sum.max |= self.0;
+            return true;
+        }
+
+        false
+    }
+}
+
+struct MaxQuery;
+
+impl Reducer<Spec> for MaxQuery {
+    type X = u32;
+
+    fn id(_: &Spec) -> Self::X {
+        u32::MIN
+    }
+
+    fn combine(_: &Spec, lhs: Self::X, rhs: Self::X) -> Self::X {
+        lhs.max(rhs)
+    }
+
+    fn extract(_: &Spec, x_sum: &<Spec as NodeSpec>::V) -> Self::X {
+        x_sum.max
+    }
+}
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    let n = input.value();
+    let mut xs = SegTree::from_iter(n, (0..n).map(|_| NodeData::singleton(input.value())), Spec);
+
+    let q = input.value();
+    for _ in 0..q {
+        let cmd = input.token();
+        let l = input.value::<usize>() - 1;
+        let r = input.value::<usize>() - 1;
+        match cmd {
+            "1" => {
+                let x = input.value();
+                xs.apply_range(l..r + 1, &BitAndAction(x));
+            }
+            "2" => {
+                let x = input.value();
+                xs.apply_range(l..r + 1, &BitOrAction(x));
+            }
+            "3" => {
+                let ans = xs.query_range::<MaxQuery>(l..r + 1);
+                writeln!(output, "{}", ans).unwrap();
+            }
+            _ => panic!(),
         }
     }
 }
