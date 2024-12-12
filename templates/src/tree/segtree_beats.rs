@@ -73,14 +73,14 @@ pub mod segtree_beats {
             this
         }
 
-        fn apply(&mut self, idx: usize, width: u32, action: &impl Action<M>) {
+        fn apply(&mut self, idx: usize, width: u32, action: impl Action<M>) {
             let mut action = action.clone();
             let complete = action.try_apply_to_sum(&self.op, width, &mut self.data[idx]);
             if !complete {
                 assert!(idx < self.n, "try_apply_to_sum should not fail for leaves");
                 self.push_down(width, idx);
-                self.apply(idx << 1, width >> 1, &action);
-                self.apply(idx << 1 | 1, width >> 1, &action);
+                self.apply(idx << 1, width >> 1, action.clone());
+                self.apply(idx << 1 | 1, width >> 1, action);
                 self.pull_up(idx);
             }
         }
@@ -116,7 +116,7 @@ pub mod segtree_beats {
             self.op.pull_up(p, [l, r]);
         }
 
-        pub fn apply_range(&mut self, range: Range<usize>, action: &impl Action<M>) {
+        pub fn apply_range(&mut self, range: Range<usize>, action: impl Action<M>) {
             let Range { mut start, mut end } = range;
             debug_assert!(start <= end && end <= self.n);
             if start == end {
@@ -136,12 +136,12 @@ pub mod segtree_beats {
                     self.pull_up(end);
                 }
                 if start & 1 != 0 {
-                    self.apply(start, width, action);
+                    self.apply(start, width, action.clone());
                     start += 1;
                     pull_start = true;
                 }
                 if end & 1 != 0 {
-                    self.apply(end - 1, width, action);
+                    self.apply(end - 1, width, action.clone());
                     pull_end = true;
                 }
                 start >>= 1;

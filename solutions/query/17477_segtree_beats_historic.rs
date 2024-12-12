@@ -108,14 +108,14 @@ pub mod segtree_beats {
             this
         }
 
-        fn apply(&mut self, idx: usize, width: u32, action: &impl Action<M>) {
+        fn apply(&mut self, idx: usize, width: u32, action: impl Action<M>) {
             let mut action = action.clone();
             let complete = action.try_apply_to_sum(&self.op, width, &mut self.data[idx]);
             if !complete {
                 assert!(idx < self.n, "try_apply_to_sum should not fail for leaves");
                 self.push_down(width, idx);
-                self.apply(idx << 1, width >> 1, &action);
-                self.apply(idx << 1 | 1, width >> 1, &action);
+                self.apply(idx << 1, width >> 1, action.clone());
+                self.apply(idx << 1 | 1, width >> 1, action);
                 self.pull_up(idx);
             }
         }
@@ -151,7 +151,7 @@ pub mod segtree_beats {
             self.op.pull_up(p, [l, r]);
         }
 
-        pub fn apply_range(&mut self, range: Range<usize>, action: &impl Action<M>) {
+        pub fn apply_range(&mut self, range: Range<usize>, action: impl Action<M>) {
             let Range { mut start, mut end } = range;
             debug_assert!(start <= end && end <= self.n);
             if start == end {
@@ -171,12 +171,12 @@ pub mod segtree_beats {
                     self.pull_up(end);
                 }
                 if start & 1 != 0 {
-                    self.apply(start, width, action);
+                    self.apply(start, width, action.clone());
                     start += 1;
                     pull_start = true;
                 }
                 if end & 1 != 0 {
-                    self.apply(end - 1, width, action);
+                    self.apply(end - 1, width, action.clone());
                     pull_end = true;
                 }
                 start >>= 1;
@@ -229,23 +229,65 @@ pub mod segtree_beats {
     }
 }
 
-const NEG_INF: i32 = -1;
+const INF: i64 = 1 << 56;
+const NEG_INF: i64 = -INF;
 
-#[derive(Default)]
+#[derive(Debug)]
 struct NodeData {
-    max: i32,
-    sub_max: i32,
+    max: i64, // Simultaneously, a lazy tag
+    sub_max: i64,
     max_count: u32,
-    sum: i64,
+
+    min: i64, // Simultaneously, a lazy tag
+    sub_min: i64,
+    min_count: u32,
+
+    lazy_add: i64,
+
+    n_mod: u64,
+    lazy_addop_count: u32,
+    lazy_maxop_count: u32,
+    lazy_minop_count: u32,
+}
+
+impl Default for NodeData {
+    fn default() -> Self {
+        Self {
+            max: NEG_INF + 1,
+            sub_max: NEG_INF,
+            max_count: 0,
+
+            min: INF - 1,
+            sub_min: INF,
+            min_count: 0,
+
+            lazy_add: 0,
+
+            n_mod: 0,
+            lazy_addop_count: 0,
+            lazy_maxop_count: 0,
+            lazy_minop_count: 0,
+        }
+    }
 }
 
 impl NodeData {
     fn singleton(value: i32) -> Self {
         Self {
-            max: value,
+            max: value as i64,
             sub_max: NEG_INF,
             max_count: 1,
-            sum: value as i64,
+
+            min: value as i64,
+            sub_min: INF,
+            min_count: 1,
+
+            lazy_add: 0,
+
+            n_mod: 0,
+            lazy_addop_count: 0,
+            lazy_maxop_count: 0,
+            lazy_minop_count: 0,
         }
     }
 }
@@ -254,46 +296,145 @@ struct Op;
 
 impl NodeSpec for Op {
     type V = NodeData;
+
     fn push_down(&self, parent: &mut Self::V, children: [&mut Self::V; 2], child_size: u32) {
         for i in 0..2 {
-            assert!(MaxAction(parent.max).try_apply_to_sum(self, child_size, children[i]));
+            let res = (parent.lazy_addop_count == 0
+                || AddAction(parent.lazy_add, parent.lazy_addop_count).try_apply_to_sum(
+                    self,
+                    child_size,
+                    children[i],
+                ))
+                && (parent.lazy_minop_count == 0
+                    || MinAction(parent.max, parent.lazy_minop_count).try_apply_to_sum(
+                        self,
+                        child_size,
+                        children[i],
+                    ))
+                && (parent.lazy_maxop_count == 0
+                    || MaxAction(parent.min, parent.lazy_maxop_count).try_apply_to_sum(
+                        self,
+                        child_size,
+                        children[i],
+                    ));
+            debug_assert!(res);
         }
+        parent.lazy_add = 0;
+        parent.lazy_addop_count = 0;
+        parent.lazy_maxop_count = 0;
+        parent.lazy_minop_count = 0;
     }
+
     fn pull_up(&self, parent: &mut Self::V, children: [&Self::V; 2]) {
+        debug_assert_eq!(parent.lazy_add, 0);
+        debug_assert_eq!(parent.lazy_addop_count, 0);
+        debug_assert_eq!(parent.lazy_maxop_count, 0);
+        debug_assert_eq!(parent.lazy_minop_count, 0);
+
         let [left, right] = children;
-        parent.max = left.max.max(right.max);
-        parent.sum = left.sum + right.sum;
 
         match left.max.cmp(&right.max) {
             Ordering::Equal => {
+                parent.max = left.max;
                 parent.max_count = left.max_count + right.max_count;
                 parent.sub_max = left.sub_max.max(right.sub_max);
             }
             Ordering::Less => {
+                parent.max = right.max;
                 parent.max_count = right.max_count;
                 parent.sub_max = left.max.max(right.sub_max);
             }
             Ordering::Greater => {
+                parent.max = left.max;
                 parent.max_count = left.max_count;
                 parent.sub_max = left.sub_max.max(right.max);
             }
         }
+
+        match left.min.cmp(&right.min) {
+            Ordering::Equal => {
+                parent.min = left.min;
+                parent.min_count = left.min_count + right.min_count;
+                parent.sub_min = left.sub_min.min(right.sub_min);
+            }
+            Ordering::Less => {
+                parent.min = left.min;
+                parent.min_count = left.min_count;
+                parent.sub_min = left.sub_min.min(right.min);
+            }
+            Ordering::Greater => {
+                parent.min = right.min;
+                parent.min_count = right.min_count;
+                parent.sub_min = left.min.min(right.sub_min);
+            }
+        }
+
+        parent.n_mod = left.n_mod + right.n_mod;
     }
 }
 
 #[derive(Clone)]
-struct MaxAction(i32);
+struct AddAction(i64, u32);
 
-impl Action<Op> for MaxAction {
-    fn try_apply_to_sum(&mut self, _: &Op, _x_count: u32, x_sum: &mut NodeData) -> bool {
-        if self.0 >= x_sum.max {
+impl Action<Op> for AddAction {
+    fn try_apply_to_sum(&mut self, _: &Op, x_count: u32, x_sum: &mut <Op as NodeSpec>::V) -> bool {
+        let AddAction(f, mult) = *self;
+        x_sum.max += f;
+        x_sum.sub_max += f;
+
+        x_sum.min += f;
+        x_sum.sub_min += f;
+
+        x_sum.lazy_add += f;
+
+        x_sum.n_mod += x_count as u64 * mult as u64;
+        x_sum.lazy_addop_count += mult;
+
+        true
+    }
+}
+
+#[derive(Clone)]
+struct MinAction(i64, u32);
+
+impl Action<Op> for MinAction {
+    fn try_apply_to_sum(&mut self, _: &Op, x_count: u32, x_sum: &mut NodeData) -> bool {
+        let Self(f, mult) = *self;
+
+        if f >= x_sum.max {
             return true;
         }
 
-        if self.0 > x_sum.sub_max {
-            let delta = self.0 - x_sum.max;
-            x_sum.max = self.0;
-            x_sum.sum += delta as i64 * x_sum.max_count as i64;
+        if x_sum.min == x_sum.max {
+            // Ensure that accumulated min queries are disjoint with max queries,
+            // by converting some of them into add queries.
+            let delta = (f - x_sum.min).min(0);
+            if delta != 0 {
+                // The following operations are semantically equivalent to:
+                // AddAction(delta, mult).try_apply_to_sum(m, x_count, x_sum);
+                x_sum.max = f;
+                x_sum.sub_max = NEG_INF;
+                x_sum.max_count = x_count;
+
+                x_sum.min = f;
+                x_sum.sub_min = INF;
+                x_sum.min_count = x_count;
+
+                x_sum.lazy_add += delta;
+                x_sum.lazy_addop_count += mult;
+                x_sum.n_mod += x_count as u64 * mult as u64;
+            }
+            return true;
+        }
+
+        if f > x_sum.sub_max {
+            x_sum.max = f;
+
+            x_sum.sub_min = x_sum.sub_min.min(f);
+
+            x_sum.n_mod += x_sum.max_count as u64 * mult as u64;
+            x_sum.lazy_minop_count += mult;
+
             return true;
         }
 
@@ -301,10 +442,58 @@ impl Action<Op> for MaxAction {
     }
 }
 
-struct SumQuery;
+#[derive(Clone)]
+struct MaxAction(i64, u32);
 
-impl Reducer<Op> for SumQuery {
-    type X = i64;
+impl Action<Op> for MaxAction {
+    fn try_apply_to_sum(&mut self, _: &Op, x_count: u32, x_sum: &mut NodeData) -> bool {
+        let Self(f, mult) = *self;
+
+        if f <= x_sum.min {
+            return true;
+        }
+
+        if x_sum.min == x_sum.max {
+            // Ensure that accumulated min queries are disjoint with max queries,
+            // by converting some of them into add queries.
+            let delta = (f - x_sum.max).max(0);
+            if delta != 0 {
+                // The following operations are semantically equivalent to:
+                // AddAction(delta, mult).try_apply_to_sum(m, x_count, x_sum);
+                x_sum.max = f;
+                x_sum.sub_max = NEG_INF;
+                x_sum.max_count = x_count;
+
+                x_sum.min = f;
+                x_sum.sub_min = INF;
+                x_sum.min_count = x_count;
+
+                x_sum.lazy_add += delta;
+                x_sum.lazy_addop_count += mult;
+                x_sum.n_mod += x_count as u64 * mult as u64;
+            }
+            return true;
+        }
+
+        if f < x_sum.sub_min {
+            x_sum.min = f;
+
+            x_sum.sub_max = x_sum.sub_max.max(f);
+
+            x_sum.n_mod += x_sum.min_count as u64 * mult as u64;
+            x_sum.lazy_maxop_count += mult;
+
+            return true;
+        }
+
+        false
+    }
+}
+
+struct NModQuery;
+
+impl Reducer<Op> for NModQuery {
+    type X = u64;
     fn id(_: &Op) -> Self::X {
         0
     }
@@ -312,14 +501,14 @@ impl Reducer<Op> for SumQuery {
         lhs + rhs
     }
     fn extract(_: &Op, x_sum: &NodeData) -> Self::X {
-        x_sum.sum
+        x_sum.n_mod
     }
 }
 
 struct MaxQuery;
 
 impl Reducer<Op> for MaxQuery {
-    type X = i32;
+    type X = i64;
     fn id(_: &Op) -> Self::X {
         NEG_INF
     }
@@ -338,21 +527,29 @@ fn main() {
     let n = input.value();
     let mut xs = SegTree::from_iter(n, (0..n).map(|_| NodeData::singleton(input.value())), Op);
 
-    for _ in 0..input.value() {
+    let q = input.value();
+    for _ in 0..q {
         let cmd = input.token();
         let l = input.value::<usize>() - 1;
         let r = input.value::<usize>() - 1;
         match cmd {
             "1" => {
-                let x: i32 = input.value();
-                xs.apply_range(l..r + 1, &MaxAction(x));
+                let x = input.value();
+                if x != 0 {
+                    xs.apply_range(l..r + 1, AddAction(x, 1));
+                }
             }
+
             "2" => {
-                let ans = xs.query_range::<MaxQuery>(l..r + 1);
-                writeln!(output, "{}", ans).unwrap();
+                let y = input.value();
+                xs.apply_range(l..r + 1, MaxAction(y, 1));
             }
             "3" => {
-                let ans = xs.query_range::<SumQuery>(l..r + 1);
+                let y = input.value();
+                xs.apply_range(l..r + 1, MinAction(y, 1));
+            }
+            "4" => {
+                let ans = xs.query_range::<NModQuery>(l..r + 1);
                 writeln!(output, "{}", ans).unwrap();
             }
             _ => panic!(),
