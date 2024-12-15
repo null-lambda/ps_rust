@@ -1,3 +1,38 @@
+use std::io::Write;
+
+use num_mod::{InvOp, ModOp, PowBy};
+
+mod simple_io {
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
 pub mod num_mod {
     use std::ops::*;
     pub trait ModOp<T> {
@@ -385,4 +420,77 @@ pub mod ntt {
             .collect();
         xs.copy_from_slice(&res);
     }
+}
+
+fn linear_sieve(n_max: u32) -> (Vec<u32>, Vec<u32>) {
+    let mut min_prime_factor = vec![0; n_max as usize + 1];
+    let mut primes = Vec::new();
+
+    for i in 2..=n_max {
+        if min_prime_factor[i as usize] == 0 {
+            primes.push(i);
+        }
+        for &p in primes.iter() {
+            if i * p > n_max {
+                break;
+            }
+            min_prime_factor[(i * p) as usize] = p;
+            if i % p == 0 {
+                break;
+            }
+        }
+    }
+
+    (min_prime_factor, primes)
+}
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    let n: usize = input.value();
+    let m: usize = input.value();
+    let k: u32 = input.value();
+    assert!(m.is_power_of_two());
+
+    // let (mpf, _) = linear_sieve(m as u32 -1);
+    // let mut residual_factor = vec![0; m];
+    // let mut euler
+
+    let p = 998_244_353;
+    let mont = num_mod::MontgomeryU32::new(p);
+    let gen = 3;
+    assert!((p - 1) % m as u32 == 0);
+    let proot = mont.pow(mont.transform(gen), (p - 1) / m as u32);
+    let proot_inv = mont.inv(proot);
+    let m_inv = mont.inv(mont.transform(m as u32));
+
+    let mut freq = vec![0; m];
+    for _ in 0..n {
+        let a: usize = input.value();
+        freq[a] += 1;
+    }
+
+    for f in &mut freq {
+        *f = mont.transform(*f as u32);
+    }
+    ntt::radix4(&mont, proot, &mut freq);
+
+    let naive = num_mod::NaiveModOp::new(p as u64 - 1);
+    let exp = naive.reduce(naive.pow(naive.transform(2), k));
+    for f in &mut freq {
+        *f = mont.pow(*f, exp);
+    }
+    ntt::radix4(&mont, proot_inv, &mut freq);
+    for f in &mut freq {
+        *f = mont.mul(*f, m_inv);
+    }
+
+    let mut ans = mont.zero();
+    for i in 0..m {
+        let i_trans = mont.transform(i as u32);
+        ans = mont.add(ans, mont.mul(freq[i], i_trans));
+    }
+    ans = mont.reduce(ans);
+    writeln!(output, "{}", ans).unwrap();
 }

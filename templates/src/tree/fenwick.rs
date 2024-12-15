@@ -8,7 +8,6 @@ pub mod fenwick_tree {
 
     pub struct FenwickTree<G: Group> {
         n: usize,
-        n_ceil: usize,
         group: G,
         data: Vec<G::Elem>,
     }
@@ -17,12 +16,7 @@ pub mod fenwick_tree {
         pub fn new(n: usize, group: G) -> Self {
             let n_ceil = n.next_power_of_two();
             let data = (0..n_ceil).map(|_| group.id()).collect();
-            Self {
-                n,
-                n_ceil,
-                group,
-                data,
-            }
+            Self { n, group, data }
         }
 
         pub fn add(&mut self, mut idx: usize, value: G::Elem) {
@@ -35,20 +29,21 @@ pub mod fenwick_tree {
             self.sum_range(idx..idx + 1)
         }
 
-        pub fn sum_range(&self, range: std::ops::Range<usize>) -> G::Elem {
+        pub fn sum_prefix(&self, idx: usize) -> G::Elem {
             let mut res = self.group.id();
-            let mut r = range.end;
+            let mut r = idx;
             while r > 0 {
                 self.group.add_assign(&mut res, self.data[r - 1].clone());
                 r &= r - 1;
             }
 
-            let mut l = range.start;
-            while l > 0 {
-                self.group.sub_assign(&mut res, self.data[l - 1].clone());
-                l &= l - 1;
-            }
+            res
+        }
 
+        pub fn sum_range(&self, range: std::ops::Range<usize>) -> G::Elem {
+            let mut res = self.sum_prefix(range.end);
+            self.group
+                .sub_assign(&mut res, self.sum_prefix(range.start));
             res
         }
     }
