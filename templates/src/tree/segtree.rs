@@ -36,7 +36,7 @@ pub mod segtree {
                 .chain(iter::repeat_with(|| monoid.id()))
                 .take(2 * n)
                 .collect();
-            for i in (0..n).rev() {
+            for i in (1..n).rev() {
                 sum[i] = monoid.op(&sum[i << 1], &sum[i << 1 | 1]);
             }
             Self { n, sum, monoid }
