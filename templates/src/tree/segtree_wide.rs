@@ -2,7 +2,6 @@ pub mod segtree_wide {
     // Cache-friendly segment tree, based on a B-ary tree.
     // https://en.algorithmica.org/hpc/data-structures/segment-trees/#wide-segment-trees
 
-    // TODO:
     // const CACHE_LINE_SIZE: usize = 64;
 
     // const fn adaptive_block_size<T>() -> usize {

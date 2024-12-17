@@ -16,6 +16,17 @@ pub mod iter {
         }
     }
 
+    fn accumulate<T: Clone>(
+        iter: impl IntoIterator<Item = T>,
+        init: T,
+        mut f: impl FnMut(T, T) -> T,
+    ) -> impl Iterator<Item = T> {
+        std::iter::once(init.clone()).chain(iter.into_iter().scan(init, move |acc, x| {
+            *acc = f(acc.clone(), x);
+            Some(acc.clone())
+        }))
+    }
+
     pub fn product<I, J>(i: I, j: J) -> impl Iterator<Item = (I::Item, J::Item)>
     where
         I: IntoIterator,
