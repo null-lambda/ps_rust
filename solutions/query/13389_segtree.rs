@@ -1,3 +1,76 @@
+use std::{collections::BTreeMap, io::Write};
+
+use segtree_lazy::{MonoidAction, SegTree};
+
+mod simple_io {
+    use std::string::*;
+
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
+use std::{collections::HashMap, hash::Hash};
+
+fn compress_coord<T: Ord + Clone + Hash>(
+    xs: impl IntoIterator<Item = T>,
+) -> (Vec<T>, HashMap<T, u32>) {
+    let mut x_map: Vec<T> = xs.into_iter().collect();
+    x_map.sort_unstable();
+    x_map.dedup();
+
+    let x_map_inv = x_map
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(i, x)| (x, i as u32))
+        .collect();
+
+    (x_map, x_map_inv)
+}
+
+// chunk_by in std >= 1.77
+fn group_by<T, P, F>(xs: &[T], mut pred: P, mut f: F)
+where
+    P: FnMut(&T, &T) -> bool,
+    F: FnMut(&[T]),
+{
+    let mut i = 0;
+    while i < xs.len() {
+        let mut j = i + 1;
+        while j < xs.len() && pred(&xs[j - 1], &xs[j]) {
+            j += 1;
+        }
+        f(&xs[i..j]);
+        i = j;
+    }
+}
+
 pub mod segtree_lazy {
     use std::{iter, ops::Range};
 
@@ -176,4 +249,134 @@ pub mod segtree_lazy {
             i - self.n
         }
     }
+}
+
+struct RangeMax {
+    neg_inf: i64,
+    inf: i64,
+}
+
+#[derive(Clone, Copy)]
+struct ApplyMin(i64);
+
+impl MonoidAction for RangeMax {
+    type X = i64;
+    type F = ApplyMin;
+
+    fn id(&self) -> Self::X {
+        self.neg_inf
+    }
+
+    fn combine(&self, lhs: &Self::X, rhs: &Self::X) -> Self::X {
+        (*lhs).max(*rhs)
+    }
+
+    fn id_action(&self) -> Self::F {
+        ApplyMin(self.inf)
+    }
+
+    fn combine_action(&self, lhs: &Self::F, rhs: &Self::F) -> Self::F {
+        ApplyMin(lhs.0.min(rhs.0))
+    }
+
+    fn apply_to_sum(&self, f: &Self::F, _x_count: u32, x_sum: &Self::X) -> Self::X {
+        f.0.min(*x_sum)
+    }
+}
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    let n: i64 = input.value();
+    let m: usize = input.value();
+
+    let mut queries = vec![];
+    for _ in 0..m {
+        let l: i64 = input.value();
+        let r: i64 = input.value();
+        let a: i64 = input.value();
+        queries.push((a, l, r));
+    }
+    queries.sort_unstable();
+
+    let mut queries_joined = vec![];
+    group_by(
+        &queries,
+        |t, s| t.0 == s.0,
+        |group| {
+            let (a, mut l_min, mut r_min) = group[0];
+            let (mut l_max, mut r_max) = (l_min, r_min);
+            for (_, l, r) in &group[1..] {
+                l_min = l_min.min(*l);
+                l_max = l_max.max(*l);
+                r_min = r_min.min(*r);
+                r_max = r_max.max(*r);
+            }
+            queries_joined.push((a, l_min, l_max, r_min, r_max));
+        },
+    );
+    let queries = queries_joined;
+
+    let mut xs = vec![];
+    xs.push(-1);
+    xs.push(0);
+    xs.push(1);
+    xs.push(2);
+    xs.push(n - 1);
+    xs.push(n);
+    xs.push(n + 1);
+    xs.push(n + 2);
+    for &(_, l_min, l_max, r_min, r_max) in &queries {
+        for p in [l_min, l_max, r_min, r_max] {
+            xs.push(p - 1);
+            xs.push(p);
+            xs.push(p + 1);
+        }
+    }
+
+    let (x_map, x_inv) = compress_coord(xs);
+    let x_bound = x_inv.len();
+
+    let inf = 2_000_000_000;
+    let neg_inf = 0;
+    let mut seq = SegTree::from_iter(
+        x_bound,
+        (0..x_bound).map(|_| inf),
+        RangeMax { neg_inf, inf },
+    );
+    let res = 'outer: {
+        for (a, l_min, l_max, r_min, r_max) in queries {
+            if l_max > r_min {
+                break 'outer false;
+            }
+            if seq.query_range(x_inv[&l_max] as usize..x_inv[&r_min] as usize + 1) != inf {
+                break 'outer false;
+            }
+            seq.apply_range(
+                x_inv[&l_min] as usize..x_inv[&r_max] as usize + 1,
+                ApplyMin(a),
+            );
+        }
+
+        let mut counter = BTreeMap::<i64, i64>::new();
+        for i in 0..x_bound as usize {
+            let a = seq.query_range(i..i + 1);
+            if a != inf {
+                *counter.entry(a).or_default() += x_map[i + 1] - x_map[i];
+            }
+        }
+
+        let mut freq_acc = 0;
+        for (a, f) in counter {
+            freq_acc += f;
+            if freq_acc > a {
+                break 'outer false;
+            }
+        }
+
+        true
+    };
+
+    writeln!(output, "{}", res as u8).unwrap();
 }
