@@ -1,0 +1,319 @@
+use std::io::Write;
+
+mod simple_io {
+    use std::string::*;
+
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
+use std::iter;
+
+pub fn preorder_edge_lazy<'a>(
+    neighbors: &'a [Vec<u32>],
+    node: usize,
+    parent: usize,
+) -> impl Iterator<Item = (usize, usize)> + 'a {
+    let mut stack = vec![(node as u32, parent as u32, neighbors[node as usize].iter())];
+    iter::from_fn(move || {
+        stack.pop().map(|(node, parent, mut iter_child)| {
+            let child = *iter_child.next()?;
+            stack.push((node, parent, iter_child));
+            if child == parent as u32 {
+                return None;
+            }
+            stack.push((child, node, neighbors[child as usize].iter()));
+            Some((child as usize, node as usize))
+        })
+    })
+    .flatten()
+}
+
+fn dfs_euler(
+    children: &[Vec<usize>],
+    ordered: &mut Vec<usize>,
+    enter: &mut [u32],
+    exit: &mut [u32],
+    current: &mut u32,
+    u: usize,
+) {
+    ordered.push(u);
+    enter[u] = *current;
+    *current += 1;
+
+    for &v in &children[u] {
+        dfs_euler(children, ordered, enter, exit, current, v);
+    }
+
+    ordered.push(u);
+    exit[u] = *current;
+    *current += 1;
+}
+
+pub mod lca {
+    const INF: u32 = u32::MAX;
+
+    fn log2(x: usize) -> u32 {
+        assert!(x > 0);
+        usize::BITS - x.leading_zeros() - 1
+    }
+
+    pub struct LCA {
+        n: usize,
+        euler: Vec<u32>,
+        euler_in: Vec<u32>,
+        euler_out: Vec<u32>,
+        sparse_table: Vec<Vec<u32>>,
+    }
+
+    impl LCA {
+        pub fn new(neighbors: &[Vec<u32>], root: usize) -> Self {
+            let n = neighbors.len();
+            let mut this = LCA {
+                n,
+                euler_in: vec![0; n],
+                euler_out: vec![0; n],
+                euler: vec![0; n],
+                sparse_table: vec![vec![INF; n]; log2(n) as usize + 1],
+            };
+            this.build_euler(&neighbors, &mut 0, root as u32, root as u32);
+            this.build_sparse();
+            println!("dfs_eulr : {:?}", this.euler);
+            println!("euler_in : {:?}", this.euler_in);
+            println!("euler_out : {:?}", this.euler_out);
+            this
+        }
+
+        fn build_euler(&mut self, neighbors: &[Vec<u32>], order: &mut u32, u: u32, p: u32) {
+            self.euler_in[u as usize] = *order;
+            self.euler[*order as usize] = u;
+            self.sparse_table[0][*order as usize] = self.euler_in[u as usize];
+
+            for &v in &neighbors[u as usize] {
+                if v == p {
+                    continue;
+                }
+                *order += 1;
+                self.build_euler(neighbors, order, v, u);
+                self.sparse_table[0][*order as usize] = self.euler_in[u as usize];
+            }
+
+            self.euler_out[u as usize] = *order;
+        }
+
+        fn build_sparse(&mut self) {
+            for exp in 1..=log2(self.n) as usize {
+                for j in 0..2 * self.n - (1 << exp) {
+                    self.sparse_table[exp][j] = self.sparse_table[exp - 1][j]
+                        .min(self.sparse_table[exp - 1][j + (1 << exp - 1)]);
+                }
+            }
+        }
+
+        pub fn get(&self, u: usize, v: usize) -> usize {
+            let l = self.euler_in[u as usize].min(self.euler_in[v as usize]) as usize;
+            let r = self.euler_out[u as usize].max(self.euler_out[v as usize]) as usize;
+            let exp = log2((r - l + 1) as usize) as usize;
+
+            let i_min =
+                self.sparse_table[exp][l].min(self.sparse_table[exp][r - (1 << exp) + 1]) as usize;
+            self.euler[i_min] as usize
+        }
+    }
+}
+
+pub mod mo {
+    pub fn even_odd_order(n: usize) -> impl Fn(u32, u32) -> (u32, i32) {
+        assert!(n > 0);
+        let bucket_size = (n as f64).sqrt() as u32;
+        move |l, r| {
+            let k = l / bucket_size;
+            let l = if k % 2 == 0 { r as i32 } else { -(r as i32) };
+            (k, l)
+        }
+    }
+
+    // Mo's algorithm with space filling curve
+    // https://codeforces.com/blog/entry/61203
+    // https://codeforces.com/blog/entry/115590
+    // use sort_with_cached_key instead of sort_unstable for better performance
+    pub fn hilbert_order(n: usize) -> impl Fn(u32, u32) -> i64 {
+        assert!(n > 0);
+        let log2n_ceil = usize::BITS - 1 - n.next_power_of_two().leading_zeros();
+
+        fn inner(mut x: u32, mut y: u32, mut exp: u32) -> i64 {
+            let mut res = 0;
+            let mut sign = 1;
+            let mut rot = 0;
+
+            while exp > 0 {
+                let w_half = 1 << exp - 1;
+                let quadrant = match (x < w_half, y < w_half) {
+                    (true, true) => (rot + 0) % 4,
+                    (false, true) => (rot + 1) % 4,
+                    (false, false) => (rot + 2) % 4,
+                    (true, false) => (rot + 3) % 4,
+                };
+                rot = match quadrant {
+                    0 => (rot + 3) % 4,
+                    1 => (rot + 0) % 4,
+                    2 => (rot + 0) % 4,
+                    3 => (rot + 1) % 4,
+                    _ => unsafe { std::hint::unreachable_unchecked() },
+                };
+
+                x &= !w_half;
+                y &= !w_half;
+
+                let square_area_half = 1 << 2 * exp - 2;
+                res += sign * quadrant as i64 * square_area_half;
+                if quadrant == 0 || quadrant == 3 {
+                    res += sign * (square_area_half - 1);
+                    sign = -sign;
+                };
+
+                exp -= 1;
+            }
+            res
+        }
+
+        move |l, r| {
+            debug_assert!(l < n as u32);
+            debug_assert!(r < n as u32);
+            inner(l, r, log2n_ceil as u32)
+        }
+    }
+}
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    let n: usize = input.value();
+    let ws: Vec<u32> = (0..n).map(|_| input.value()).collect();
+    let mut neighbors = vec![vec![]; n];
+    for _ in 0..n - 1 {
+        let u = input.value::<u32>() - 1;
+        let v = input.value::<u32>() - 1;
+        neighbors[u as usize].push(v);
+        neighbors[v as usize].push(u);
+    }
+
+    let root = 0;
+    let mut children = vec![vec![]; n];
+    for (u, p) in preorder_edge_lazy(&neighbors, root, root) {
+        children[p].push(u);
+    }
+
+    let mut enter = vec![0; n];
+    let mut exit = vec![0; n];
+    let mut ordered = vec![];
+    dfs_euler(&children, &mut ordered, &mut enter, &mut exit, &mut 0, root);
+
+    let lca = lca::LCA::new(&neighbors, 0);
+
+    let k = ordered.len();
+
+    let mut queries: Vec<_> = (0..input.value())
+        .map(|i| {
+            let mut u = input.value::<usize>() - 1;
+            let mut v = input.value::<usize>() - 1;
+            if enter[u] > enter[v] {
+                std::mem::swap(&mut u, &mut v);
+            }
+
+            let j = lca.get(u, v);
+            if j == u {
+                (enter[u], enter[v], None, i)
+            } else if j == v {
+                panic!()
+            } else {
+                (exit[u], enter[v], Some(enter[j]), i)
+            }
+        })
+        .collect();
+
+    let key = mo::even_odd_order(k);
+    queries.sort_by_cached_key(|&(l, r, ..)| key(l, r));
+
+    let mut ans = vec![i32::MAX; queries.len()];
+    let (mut start, mut end) = (1, 0);
+    let mut unique_count = 0i32;
+
+    let w_bound = *ws.iter().max().unwrap() as usize + 1;
+    let mut freq = vec![0; w_bound];
+    let mut parity = vec![false; n];
+    let mut toggle_state = |freq: &mut [i32], unique_count: &mut i32, j: usize| {
+        let u = ordered[j as usize] as usize;
+        let x = ws[u] as usize;
+        parity[u] ^= true;
+        if parity[u] {
+            freq[x] += 1;
+            if freq[x] == 1 {
+                *unique_count += 1;
+            }
+        } else {
+            if freq[x] == 1 {
+                *unique_count -= 1;
+            }
+            freq[x] -= 1;
+        }
+    };
+
+    for (l, r, j, i) in queries {
+        while start > l {
+            start -= 1;
+            toggle_state(&mut freq, &mut unique_count, start as usize);
+        }
+        while end < r {
+            end += 1;
+            toggle_state(&mut freq, &mut unique_count, end as usize);
+        }
+        while start < l {
+            toggle_state(&mut freq, &mut unique_count, start as usize);
+            start += 1;
+        }
+        while end > r {
+            toggle_state(&mut freq, &mut unique_count, end as usize);
+            end -= 1;
+        }
+
+        if let Some(j) = j {
+            toggle_state(&mut freq, &mut unique_count, j as usize);
+        }
+        ans[i] = unique_count;
+        if let Some(j) = j {
+            toggle_state(&mut freq, &mut unique_count, j as usize);
+        }
+    }
+
+    for a in ans {
+        writeln!(output, "{}", a).unwrap();
+    }
+}

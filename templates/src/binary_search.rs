@@ -25,17 +25,16 @@ where
     Err(left)
 }
 
-fn partition_point<P>(mut left: u32, mut right: u32, mut pred: P) -> u32
+fn partition_point<P>(left: u32, right: u32, mut pred: P) -> u32
 where
     P: FnMut(u32) -> bool,
 {
-    while left < right {
-        let mid = left + (right - left) / 2;
-        if pred(mid) {
-            left = mid + 1;
+    binary_search_by(left, right, |x| {
+        if pred(x) {
+            Ordering::Less
         } else {
-            right = mid;
+            Ordering::Greater
         }
-    }
-    left
+    })
+    .unwrap_or_else(|i| i)
 }
