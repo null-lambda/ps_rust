@@ -108,7 +108,7 @@ pub mod segtree_wide {
         }
 
         pub fn sum_range(&mut self, range: std::ops::Range<usize>) -> X {
-            debug_assert!(range.start <= range.end && range.end < self.n);
+            debug_assert!(range.start <= range.end && range.end <= self.n);
             let r = self.sum_prefix(range.end);
             let l = self.sum_prefix(range.start);
             r - l
