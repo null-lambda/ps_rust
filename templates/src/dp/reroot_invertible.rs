@@ -9,7 +9,7 @@ pub mod reroot {
             //   { p.pull_from(c2, inv2); p.pull_from(c1, inv1); }
             fn pull_from(&mut self, child: &Self, weight: &E, inv: bool);
 
-            fn finalize(&mut self);
+            fn finalize(&mut self) {}
         }
 
         fn get_two<T>(xs: &mut [T], i: usize, j: usize) -> Option<(&mut T, &mut T)> {
@@ -19,24 +19,6 @@ pub mod reroot {
             }
             let ptr = xs.as_mut_ptr();
             Some(unsafe { (&mut *ptr.add(i), &mut *ptr.add(j)) })
-        }
-
-        fn dfs_init<E, R: RootData<E>>(
-            neighbors: &[Vec<(usize, E)>],
-            data: &mut [R],
-            u: usize,
-            p: usize,
-        ) {
-            for (v, w) in &neighbors[u] {
-                if *v == p {
-                    continue;
-                }
-                dfs_init(neighbors, data, *v, u);
-                let (data_u, data_v) = unsafe { get_two(data, u, *v).unwrap_unchecked() };
-                data_u.pull_from(&data_v, &w, false);
-            }
-
-            data[u].finalize();
         }
 
         fn reroot_on_edge<E, R: RootData<E>>(data: &mut [R], u: usize, w: &E, p: usize) {
@@ -49,7 +31,7 @@ pub mod reroot {
         }
 
         fn dfs_reroot<E, R: RootData<E> + Clone>(
-            neighbors: &[Vec<(usize, E)>],
+            neighbors: &[Vec<(u32, E)>],
             data: &mut [R],
             yield_root_data: &mut impl FnMut(usize, &R),
             u: usize,
@@ -57,25 +39,47 @@ pub mod reroot {
         ) {
             yield_root_data(u, &data[u]);
             for (v, w) in &neighbors[u] {
-                if *v == p {
+                if *v as usize == p {
                     continue;
                 }
-                let data_u_old = data[u].clone();
-                let data_v_old = data[*v].clone();
-                reroot_on_edge(data, *v, w, u);
-                dfs_reroot(neighbors, data, yield_root_data, *v, u);
-                data[*v] = data_v_old;
-                data[u] = data_u_old;
+                reroot_on_edge(data, *v as usize, w, u);
+                dfs_reroot(neighbors, data, yield_root_data, *v as usize, u);
+                reroot_on_edge(data, u, w, *v as usize);
             }
         }
 
-        pub fn run<E, R: RootData<E> + Clone>(
-            neighbors: &[Vec<(usize, E)>],
+        pub fn run<E: Clone + Default, R: RootData<E> + Clone>(
+            neighbors: &[Vec<(u32, E)>],
             data: &mut [R],
             root_init: usize,
             yield_node_dp: &mut impl FnMut(usize, &R),
         ) {
-            dfs_init(neighbors, data, root_init, root_init);
+            let mut preorder = vec![]; // Reversed postorder
+            let mut parent = vec![(root_init, E::default()); neighbors.len()];
+            let mut stack = vec![(root_init, root_init)];
+            while let Some((u, p)) = stack.pop() {
+                preorder.push(u);
+                for (v, w) in &neighbors[u] {
+                    if *v as usize == p {
+                        continue;
+                    }
+                    parent[*v as usize] = (u, w.clone());
+                    stack.push((*v as usize, u));
+                }
+            }
+
+            // Init tree DP
+            for &u in preorder.iter().rev() {
+                data[u].finalize();
+
+                let (p, w) = &parent[u];
+                if u != root_init {
+                    let (data_u, data_p) = unsafe { get_two(data, u, *p).unwrap_unchecked() };
+                    data_p.pull_from(data_u, &w, false);
+                }
+            }
+
+            // Reroot
             dfs_reroot(neighbors, data, yield_node_dp, root_init, root_init);
         }
     }
