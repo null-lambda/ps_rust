@@ -10,6 +10,7 @@ pub mod hld {
         pub heavy_child: Vec<u32>,
         pub chain_top: Vec<u32>,
         pub euler_idx: Vec<u32>,
+        pub topological_order: Vec<u32>,
     }
 
     impl HLD {
@@ -32,6 +33,7 @@ pub mod hld {
                 xor_neighbors[u as usize] ^= v;
             }
 
+            // Toposort & upward propagation
             let mut size = vec![1; n];
             let mut heavy_child = vec![UNSET; n];
             degree[root] += 2;
@@ -60,6 +62,7 @@ pub mod hld {
             let mut parent = xor_neighbors;
             parent[root] = UNSET;
 
+            // Downward propagation
             let mut depth = vec![0; n];
             let mut chain_top = vec![root as u32; n];
             for &u in &topological_order[1..] {
@@ -88,6 +91,7 @@ pub mod hld {
                 heavy_child,
                 chain_top,
                 euler_idx,
+                topological_order,
             }
         }
 

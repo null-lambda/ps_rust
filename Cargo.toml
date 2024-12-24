@@ -5,7 +5,7 @@ authors = ["runner"]
 edition = "2021"
 
 [workspace]
-members = ["templates"]
+members = ["library"]
 
 [dependencies]
 # rand = "0.8.5"
