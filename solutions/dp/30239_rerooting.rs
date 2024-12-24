@@ -147,29 +147,6 @@ pub mod reroot {
         // O(n) rerooting dp for trees, with invertible pulling operation. (group action)
         use crate::jagged::Jagged;
 
-        pub trait AsBytes<const N: usize> {
-            unsafe fn as_bytes(self) -> [u8; N];
-            unsafe fn decode(bytes: [u8; N]) -> Self;
-        }
-
-        #[macro_export]
-        macro_rules! impl_as_bytes {
-            ($T:ty) => {
-                const N: usize = std::mem::size_of::<$T>();
-
-                impl crate::reroot::invertible::AsBytes<N> for $T {
-                    unsafe fn as_bytes(self) -> [u8; N] {
-                        std::mem::transmute::<$T, [u8; N]>(self)
-                    }
-
-                    unsafe fn decode(bytes: [u8; N]) -> $T {
-                        std::mem::transmute::<[u8; N], $T>(bytes)
-                    }
-                }
-            };
-        }
-        pub use impl_as_bytes;
-
         pub trait RootData<E> {
             fn pull_from(&mut self, child: &Self, weight: &E, inv: bool);
             fn finalize(&mut self) {}
@@ -211,91 +188,39 @@ pub mod reroot {
             }
         }
 
-        fn construct_parent<'a, const N: usize, E: Clone + Default + 'a>(
-            neighbors: &'a impl Jagged<'a, (u32, E)>,
-        ) -> (Vec<u32>, Vec<(u32, E)>)
-        where
-            E: AsBytes<N>,
-        {
-            // Fast tree reconstruction with XOR-linked tree traversal,
-            // which combines toposort with xor encoding.
-            // Restriction: The graph should be undirected i.e. (u, v, weight) in E <=> (v, u, weight) in E.
-            // https://codeforces.com/blog/entry/135239
-
-            let n = neighbors.len();
-            if n == 1 {
-                return (vec![0], vec![(0, E::default())]);
-            }
-
-            let mut degree = vec![0; n];
-            let mut xor: Vec<(u32, [u8; N])> = vec![(0u32, [0u8; N]); n];
-
-            fn xor_assign_bytes<const N: usize>(xs: &mut [u8; N], ys: [u8; N]) {
-                for (x, y) in xs.iter_mut().zip(&ys) {
-                    *x ^= *y;
-                }
-            }
-
-            for u in 0..n {
-                for (v, w) in neighbors.get(u) {
-                    degree[u] += 1;
-                    xor[u].0 ^= v;
-                    xor_assign_bytes(&mut xor[u].1, unsafe { AsBytes::as_bytes(w.clone()) });
-                }
-            }
-            degree[0] += 2;
-
-            let mut toposort = vec![];
-            for mut u in 0..n {
-                while degree[u] == 1 {
-                    let (v, w_encoded) = xor[u];
-                    toposort.push(u as u32);
-                    degree[u] = 0;
-                    degree[v as usize] -= 1;
-                    xor[v as usize].0 ^= u as u32;
-                    xor_assign_bytes(&mut xor[v as usize].1, w_encoded);
-                    u = v as usize;
-                }
-            }
-            toposort.push(0);
-            toposort.reverse();
-
-            // Note: Copying entire vec (from xor to parent) is necessary, since
-            // transmuting from (u32, [u8; N]) to (u32, E)
-            // or *const (u32, [u8; N]) to *const (u32, E) is UB. (tuples are
-            // #[align(rust)] struct and the field ordering is not guaranteed)
-            // We may try messing up with custom #[repr(C)] structs, or just trust the compiler.
-            let parent: Vec<(u32, E)> = xor
-                .into_iter()
-                .map(|(v, w)| (v, unsafe { AsBytes::decode(w) }))
-                .collect();
-            (toposort, parent)
-        }
-
-        pub fn run<'a, const N: usize, E: Clone + Default + 'a, R: RootData<E> + Clone>(
+        pub fn run<'a, E: Clone + Default + 'a, R: RootData<E> + Clone>(
             neighbors: &'a impl Jagged<'a, (u32, E)>,
             data: &mut [R],
+            root_init: usize,
             yield_node_dp: &mut impl FnMut(usize, &R),
-        ) where
-            E: AsBytes<N>,
-        {
-            let (order, parent) = construct_parent(neighbors);
-            let root = order[0] as usize;
+        ) {
+            let mut preorder = vec![]; // Reversed postorder
+            let mut parent = vec![(root_init, E::default()); neighbors.len()];
+            let mut stack = vec![(root_init, root_init)];
+            while let Some((u, p)) = stack.pop() {
+                preorder.push(u);
+                for (v, w) in neighbors.get(u) {
+                    if *v as usize == p {
+                        continue;
+                    }
+                    parent[*v as usize] = (u, w.clone());
+                    stack.push((*v as usize, u));
+                }
+            }
 
             // Init tree DP
-            for &u in order.iter().rev() {
-                data[u as usize].finalize();
+            for &u in preorder.iter().rev() {
+                data[u].finalize();
 
-                let (p, w) = &parent[u as usize];
-                if u as usize != root {
-                    let (data_u, data_p) =
-                        unsafe { get_two(data, u as usize, *p as usize).unwrap_unchecked() };
+                let (p, w) = &parent[u];
+                if u != root_init {
+                    let (data_u, data_p) = unsafe { get_two(data, u, *p).unwrap_unchecked() };
                     data_p.pull_from(data_u, &w, false);
                 }
             }
 
             // Reroot
-            rec_reroot(neighbors, data, yield_node_dp, root, root);
+            rec_reroot(neighbors, data, yield_node_dp, root_init, root_init);
         }
     }
 }
@@ -303,58 +228,60 @@ pub mod reroot {
 const P: u64 = 1_000_000_007;
 
 #[derive(Clone, Copy)]
-struct RollingHash {
-    digit: u64,
-    sum: u64,
-    size: u64,
+struct NodeDp {
+    value: u64,
+    size: u32,
+    cost: u64,
 }
 
-impl RollingHash {
+impl NodeDp {
     fn singleton(c: u64) -> Self {
         Self {
-            digit: c,
-            sum: c,
+            value: c,
             size: 1,
+            cost: 0,
         }
     }
 }
 
-impl reroot::invertible::RootData<()> for RollingHash {
+impl reroot::invertible::RootData<()> for NodeDp {
     fn pull_from(&mut self, child: &Self, _weight: &(), inv: bool) {
-        let delta = self.digit * child.size + child.sum * 10 % P;
+        let delta = (self.value ^ child.value) * child.size as u64 + child.cost;
         if !inv {
-            self.sum += delta;
+            self.cost += delta;
             self.size += child.size;
         } else {
-            self.sum -= delta;
+            self.cost -= delta;
             self.size -= child.size;
         }
     }
 }
 
-reroot::invertible::impl_as_bytes!(());
-
 fn main() {
     let mut input = simple_io::stdin();
     let mut output = simple_io::stdout();
 
-    let n: usize = input.value();
-    let mut data = (0..n)
-        .map(|_| RollingHash::singleton(input.value()))
-        .collect::<Vec<_>>();
+    for _ in 0..input.value() {
+        let n: usize = input.value();
 
-    let mut edges = vec![];
-    for _ in 0..n - 1 {
-        let u = input.value::<u32>() - 1;
-        let v = input.value::<u32>() - 1;
-        edges.push((u, (v, ())));
-        edges.push((v, (u, ())));
+        let mut a: Vec<_> = (0..n).map(|_| NodeDp::singleton(input.value())).collect();
+        let mut edges = vec![];
+        for _ in 0..n - 1 {
+            let u = input.value::<u32>() - 1;
+            let v = input.value::<u32>() - 1;
+            edges.push((u, (v, ())));
+            edges.push((v, (u, ())));
+        }
+        let neighbors = jagged::CSR::from_assoc_list(n, &edges);
+
+        let mut res = vec![0; n];
+        reroot::invertible::run(&neighbors, &mut a, 0, &mut |u, dp| {
+            res[u] = dp.cost;
+        });
+
+        for u in 0..n {
+            write!(output, "{} ", res[u]).unwrap();
+        }
+        writeln!(output).unwrap();
     }
-    let neighbors = jagged::CSR::from_assoc_list(n, &edges);
-
-    let mut res = 0u64;
-    reroot::invertible::run(&neighbors, &mut data, &mut |_, h| {
-        res = (res + h.sum) % P;
-    });
-    writeln!(output, "{}", res).unwrap();
 }

@@ -1,27 +1,49 @@
-pub mod collections {
+pub mod jagged {
     use std::fmt::Debug;
     use std::iter;
     use std::mem::MaybeUninit;
-    use std::ops::Index;
+
+    // Trait for painless switch between different representations of a jagged array
+    pub trait Jagged<'a, T: 'a> {
+        type ItemRef: ExactSizeIterator<Item = &'a T>;
+        fn len(&self) -> usize;
+        fn get(&'a self, u: usize) -> Self::ItemRef;
+    }
+
+    impl<'a, T, C> Jagged<'a, T> for C
+    where
+        C: AsRef<[Vec<T>]> + 'a,
+        T: 'a,
+    {
+        type ItemRef = std::slice::Iter<'a, T>;
+        fn len(&self) -> usize {
+            <Self as AsRef<[Vec<T>]>>::as_ref(self).len()
+        }
+        fn get(&'a self, u: usize) -> Self::ItemRef {
+            let res = <Self as AsRef<[Vec<T>]>>::as_ref(self)[u].iter();
+            res
+        }
+    }
 
     // Compressed sparse row format for jagged array
+    // Provides good locality for graph traversal, but works only for static ones.
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-    pub struct Jagged<T> {
+    pub struct CSR<T> {
         data: Vec<T>,
         head: Vec<u32>,
     }
 
-    impl<T> Debug for Jagged<T>
+    impl<T> Debug for CSR<T>
     where
         T: Debug,
     {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            let v: Vec<Vec<&T>> = (0..self.len()).map(|i| self[i].iter().collect()).collect();
+            let v: Vec<Vec<&T>> = (0..self.len()).map(|i| self.get(i).collect()).collect();
             v.fmt(f)
         }
     }
 
-    impl<T, I> FromIterator<I> for Jagged<T>
+    impl<T, I> FromIterator<I> for CSR<T>
     where
         I: IntoIterator<Item = T>,
     {
@@ -38,15 +60,16 @@ pub mod collections {
                 data.extend(row.into_iter().inspect(|_| cnt += 1));
                 head.push(cnt);
             }
-            Jagged { data, head }
+            CSR { data, head }
         }
     }
 
-    impl<T: Clone> Jagged<T> {
+    impl<T: Clone> CSR<T> {
         pub fn from_assoc_list(n: usize, pairs: &[(u32, T)]) -> Self {
             let mut head = vec![0u32; n + 1];
 
             for &(u, _) in pairs {
+                debug_assert!(u < n as u32);
                 head[u as usize + 1] += 1;
             }
             for i in 2..n + 1 {
@@ -67,54 +90,19 @@ pub mod collections {
                 Vec::from_raw_parts(data.as_ptr() as *mut T, data.len(), data.capacity())
             };
 
-            Jagged { data, head }
+            CSR { data, head }
         }
     }
 
-    impl<T> Jagged<T> {
-        pub fn len(&self) -> usize {
+    impl<'a, T: 'a> Jagged<'a, T> for CSR<T> {
+        type ItemRef = std::slice::Iter<'a, T>;
+
+        fn len(&self) -> usize {
             self.head.len() - 1
         }
-    }
 
-    impl<T> Index<usize> for Jagged<T> {
-        type Output = [T];
-        fn index(&self, index: usize) -> &[T] {
-            let start = self.head[index] as usize;
-            let end = self.head[index + 1] as usize;
-            &self.data[start..end]
-        }
-    }
-
-    impl<T> Jagged<T> {
-        pub fn iter(&self) -> Iter<T> {
-            Iter { src: self, pos: 0 }
-        }
-    }
-
-    impl<'a, T> IntoIterator for &'a Jagged<T> {
-        type Item = &'a [T];
-        type IntoIter = Iter<'a, T>;
-        fn into_iter(self) -> Self::IntoIter {
-            self.iter()
-        }
-    }
-
-    pub struct Iter<'a, T> {
-        src: &'a Jagged<T>,
-        pos: usize,
-    }
-
-    impl<'a, T> Iterator for Iter<'a, T> {
-        type Item = &'a [T];
-        fn next(&mut self) -> Option<Self::Item> {
-            if self.pos < self.src.len() {
-                let item = &self.src[self.pos];
-                self.pos += 1;
-                Some(item)
-            } else {
-                None
-            }
+        fn get(&'a self, u: usize) -> Self::ItemRef {
+            self.data[self.head[u] as usize..self.head[u + 1] as usize].iter()
         }
     }
 }

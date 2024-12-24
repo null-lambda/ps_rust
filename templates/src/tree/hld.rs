@@ -1,5 +1,5 @@
 pub mod hld {
-    use crate::collections::Jagged;
+    const UNSET: u32 = u32::MAX;
 
     // Heavy-Light Decomposition
     #[derive(Debug)]
@@ -17,58 +17,78 @@ pub mod hld {
             self.parent.len()
         }
 
-        fn dfs_size(&mut self, neighbors: &Jagged<u32>, u: usize) {
-            self.size[u] = 1;
-            for &v in &neighbors[u] {
-                if v == self.parent[u] {
-                    continue;
-                }
-                self.depth[v as usize] = self.depth[u] + 1;
-                self.parent[v as usize] = u as u32;
-                self.dfs_size(neighbors, v as usize);
-                self.size[u] += self.size[v as usize];
+        pub fn from_edges<'a>(
+            n: usize,
+            edges: impl IntoIterator<Item = (u32, u32)>,
+            root: usize,
+        ) -> Self {
+            // Fast tree reconstruction with XOR-linked tree traversal
+            // https://codeforces.com/blog/entry/135239
+            let mut degree = vec![0u32; n];
+            let mut xor_neighbors: Vec<u32> = vec![0u32; n];
+            for (u, v) in edges.into_iter().flat_map(|(u, v)| [(u, v), (v, u)]) {
+                debug_assert!(u != v);
+                degree[u as usize] += 1;
+                xor_neighbors[u as usize] ^= v;
             }
-            if let Some(h) = neighbors[u]
-                .iter()
-                .copied()
-                .filter(|&v| v != self.parent[u])
-                .max_by_key(|&v| self.size[v as usize])
-            {
-                self.heavy_child[u] = h;
-            }
-        }
 
-        fn dfs_decompose(&mut self, neighbors: &Jagged<u32>, u: usize, order: &mut u32) {
-            self.euler_idx[u] = *order;
-            *order += 1;
-            if self.heavy_child[u] == u32::MAX {
-                return;
-            }
-            let h = self.heavy_child[u];
-            self.chain_top[h as usize] = self.chain_top[u];
-            self.dfs_decompose(neighbors, h as usize, order);
-            for &v in neighbors[u].iter().filter(|&&v| v != h) {
-                if v == self.parent[u] {
-                    continue;
-                }
-                self.chain_top[v as usize] = v;
-                self.dfs_decompose(neighbors, v as usize, order);
-            }
-        }
+            let mut size = vec![1; n];
+            let mut heavy_child = vec![UNSET; n];
+            degree[root] += 2;
+            let mut topological_order = vec![];
+            for mut u in 0..n {
+                while degree[u] == 1 {
+                    let p = xor_neighbors[u];
+                    topological_order.push(u as u32);
+                    degree[u] = 0;
+                    degree[p as usize] -= 1;
+                    xor_neighbors[p as usize] ^= u as u32;
 
-        pub fn from_graph(neighbors: &Jagged<u32>) -> Self {
-            let n = neighbors.len();
-            let mut hld = Self {
-                size: vec![0; n],
-                depth: vec![0; n],
-                parent: vec![u32::MAX; n],
-                heavy_child: vec![u32::MAX; n],
-                chain_top: vec![0; n],
-                euler_idx: vec![0; n],
-            };
-            hld.dfs_size(neighbors, 0);
-            hld.dfs_decompose(neighbors, 0, &mut 0);
-            hld
+                    size[p as usize] += size[u as usize];
+                    let h = &mut heavy_child[p as usize];
+                    if *h == UNSET || size[*h as usize] < size[u as usize] {
+                        *h = u as u32;
+                    }
+
+                    u = p as usize;
+                }
+            }
+            topological_order.push(root as u32);
+            topological_order.reverse();
+            assert!(topological_order.len() == n, "Invalid tree structure");
+
+            let mut parent = xor_neighbors;
+            parent[root] = UNSET;
+
+            let mut depth = vec![0; n];
+            let mut chain_top = vec![root as u32; n];
+            for &u in &topological_order[1..] {
+                let p = parent[u as usize];
+                depth[u as usize] = depth[p as usize] + 1;
+
+                let h = heavy_child[p as usize];
+                chain_top[u as usize] = if u == h { chain_top[p as usize] } else { u };
+            }
+
+            let mut euler_idx = vec![UNSET; n];
+            let mut timer = 0;
+            for u in &topological_order {
+                let mut u = *u;
+                while u != UNSET && euler_idx[u as usize] == UNSET {
+                    euler_idx[u as usize] = timer;
+                    timer += 1;
+                    u = heavy_child[u as usize];
+                }
+            }
+
+            Self {
+                size,
+                depth,
+                parent,
+                heavy_child,
+                chain_top,
+                euler_idx,
+            }
         }
 
         pub fn for_each_path<F>(&self, mut u: usize, mut v: usize, mut visitor: F)
@@ -88,6 +108,30 @@ pub mod hld {
                 std::mem::swap(&mut u, &mut v);
             }
             visitor(u, v, true);
+        }
+
+        pub fn for_each_path_splitted<F>(&self, mut u: usize, mut v: usize, mut visit: F)
+        where
+            F: FnMut(usize, usize, bool, bool),
+        {
+            debug_assert!(u < self.len() && v < self.len());
+            if self.euler_idx[u] > self.euler_idx[v] {
+                std::mem::swap(&mut u, &mut v);
+            }
+            while self.chain_top[u] != self.chain_top[v] {
+                if self.depth[self.chain_top[u] as usize] > self.depth[self.chain_top[v] as usize] {
+                    visit(self.chain_top[u] as usize, u, true, false);
+                    u = self.parent[self.chain_top[u] as usize] as usize;
+                } else {
+                    visit(self.chain_top[v] as usize, v, false, false);
+                    v = self.parent[self.chain_top[v] as usize] as usize;
+                }
+            }
+            if self.depth[u] > self.depth[v] {
+                visit(v, u, true, true);
+            } else {
+                visit(u, v, false, true);
+            }
         }
 
         pub fn lca(&self, mut u: usize, mut v: usize) -> usize {
