@@ -21,7 +21,6 @@ pub mod segtree_lazy {
 
     impl<M: MonoidAction> SegTree<M> {
         pub fn with_size(n: usize, ma: M) -> Self {
-            let n = n.next_power_of_two();
             Self {
                 n,
                 max_height: usize::BITS - n.leading_zeros(),
@@ -35,7 +34,6 @@ pub mod segtree_lazy {
         where
             I: IntoIterator<Item = M::X>,
         {
-            let n = n.next_power_of_two();
             let mut sum: Vec<_> = (iter::repeat_with(|| ma.id()).take(n))
                 .chain(
                     iter.into_iter()

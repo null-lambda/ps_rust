@@ -50,8 +50,17 @@ pub mod lca {
     }
 
     impl LCA {
-        pub fn new(neighbors: &[Vec<u32>], root: usize) -> Self {
-            let n = neighbors.len();
+        pub fn from_graph(
+            n: usize,
+            edges: impl IntoIterator<Item = (u32, u32)>,
+            root: usize,
+        ) -> Self {
+            let mut neighbors = vec![vec![]; n];
+            for (u, v) in edges {
+                neighbors[u as usize].push(v);
+                neighbors[v as usize].push(u);
+            }
+
             let n_euler = 2 * n - 1;
             let block_size = (log2(n_euler as u32) as usize / 2).max(1);
             let n_blocks = n_euler.div_ceil(block_size);
@@ -175,6 +184,76 @@ pub mod lca {
             }
 
             res.1 as usize
+        }
+    }
+
+    // Build a max cartesian tree from inorder traversal
+    fn max_cartesian_tree<T>(
+        n: usize,
+        iter: impl IntoIterator<Item = (usize, T)>,
+    ) -> (Vec<u32>, usize)
+    where
+        T: Ord,
+    {
+        let mut parent = vec![UNSET; n];
+
+        // Monotone stack
+        let mut stack = vec![];
+        for (u, h) in iter {
+            let u = u as u32;
+
+            let mut c = None;
+            while let Some((prev, _)) = stack.last() {
+                if prev > &h {
+                    break;
+                }
+                c = stack.pop();
+            }
+            if let Some(&(_, p)) = stack.last() {
+                parent[u as usize] = p;
+            }
+            if let Some((_, c)) = c {
+                parent[c as usize] = u;
+            }
+            stack.push((h, u));
+        }
+        let root = stack.pop().unwrap().1 as usize;
+        (parent, root)
+    }
+
+    pub struct StaticRangeMax<T> {
+        xs: Vec<T>,
+        cartesian_tree: LCA,
+    }
+
+    impl<T: Ord> StaticRangeMax<T> {
+        pub fn from_iter(xs: impl IntoIterator<Item = T>) -> Self {
+            unimplemented!("WIP");
+
+            let xs: Vec<_> = xs.into_iter().collect();
+            let n = xs.len();
+            assert!(n >= 1);
+
+            let (parent, root) = max_cartesian_tree(xs.len(), xs.iter().enumerate());
+            Self {
+                xs,
+                cartesian_tree: LCA::from_graph(
+                    n,
+                    (0..n)
+                        .map(|i| (i as u32, parent[i]))
+                        .filter(|&(_, v)| v != UNSET),
+                    root,
+                ),
+            }
+        }
+
+        pub fn argmax_range(&self, range: std::ops::Range<usize>) -> usize {
+            debug_assert!(range.start < range.end && range.end <= self.xs.len());
+            self.cartesian_tree.get(range.start, range.end - 1)
+        }
+
+        pub fn max_range(&self, range: std::ops::Range<usize>) -> &T {
+            &self.xs[self.argmax_range(range)]
         }
     }
 }
