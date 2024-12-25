@@ -1,7 +1,6 @@
 pub mod reroot {
     pub mod invertible {
         // O(n) rerooting dp for trees, with invertible pulling operation. (group action)
-        use crate::jagged::Jagged;
 
         pub trait AsBytes<const N: usize> {
             unsafe fn as_bytes(self) -> [u8; N];
@@ -46,117 +45,70 @@ pub mod reroot {
             Some(unsafe { (&mut *ptr.add(i), &mut *ptr.add(j)) })
         }
 
-        fn reroot_on_edge<E, R: RootData<E>>(data: &mut [R], u: usize, w: &E, p: usize) {
-            let (data_u, data_p) = unsafe { get_two(data, u, p).unwrap_unchecked() };
-            data_p.pull_from(data_u, &w, true);
-            data_p.finalize();
-
-            data_u.pull_from(data_p, &w, false);
-            data_u.finalize();
+        fn xor_assign_bytes<const N: usize>(xs: &mut [u8; N], ys: [u8; N]) {
+            for (x, y) in xs.iter_mut().zip(&ys) {
+                *x ^= *y;
+            }
         }
 
-        fn rec_reroot<'a, E: 'a, R: RootData<E> + Clone>(
-            neighbors: &'a impl Jagged<'a, (u32, E)>,
+        pub fn run<
+            'a,
+            const N: usize,
+            E: Clone + Default + AsBytes<N> + 'a,
+            R: RootData<E> + Clone,
+        >(
+            n: usize,
+            edges: impl IntoIterator<Item = (u32, u32, E)>,
             data: &mut [R],
-            yield_root_data: &mut impl FnMut(usize, &R),
-            u: usize,
-            p: usize,
         ) {
-            yield_root_data(u, &data[u]);
-            for (v, w) in neighbors.get(u) {
-                if *v as usize == p {
-                    continue;
-                }
-                reroot_on_edge(data, *v as usize, w, u);
-                rec_reroot(neighbors, data, yield_root_data, *v as usize, u);
-                reroot_on_edge(data, u, w, *v as usize);
-            }
-        }
-
-        fn toposort<'a, const N: usize, E: Clone + Default + 'a>(
-            neighbors: &'a impl Jagged<'a, (u32, E)>,
-        ) -> (Vec<u32>, Vec<(u32, E)>)
-        where
-            E: AsBytes<N>,
-        {
-            // Fast tree reconstruction with XOR-linked tree traversal.
-            // Restriction: The graph should be undirected i.e. (u, v, weight) in E <=> (v, u, weight) in E.
+            // Fast tree reconstruction with XOR-linked tree traversal
             // https://codeforces.com/blog/entry/135239
-
-            let n = neighbors.len();
-            if n == 1 {
-                return (vec![0], vec![(0, E::default())]);
-            }
-
+            let root = 0;
             let mut degree = vec![0; n];
-            let mut xor: Vec<(u32, [u8; N])> = vec![(0u32, [0u8; N]); n];
-
-            fn xor_assign_bytes<const N: usize>(xs: &mut [u8; N], ys: [u8; N]) {
-                for (x, y) in xs.iter_mut().zip(&ys) {
-                    *x ^= *y;
-                }
+            let mut xor_neighbors: Vec<(u32, [u8; N])> = vec![(0u32, [0u8; N]); n];
+            for (u, v, w) in edges
+                .into_iter()
+                .flat_map(|(u, v, w)| [(u, v, w.clone()), (v, u, w)])
+            {
+                degree[u as usize] += 1;
+                xor_neighbors[u as usize].0 ^= v;
+                xor_assign_bytes(&mut xor_neighbors[u as usize].1, unsafe {
+                    AsBytes::as_bytes(w.clone())
+                });
             }
 
-            for u in 0..n {
-                for (v, w) in neighbors.get(u) {
-                    degree[u] += 1;
-                    xor[u].0 ^= v;
-                    xor_assign_bytes(&mut xor[u].1, unsafe { AsBytes::as_bytes(w.clone()) });
-                }
-            }
-            degree[0] += 2;
-
-            let mut toposort = vec![];
+            // Upward propagation
+            let mut topological_order = vec![];
+            degree[root] += 2;
             for mut u in 0..n {
                 while degree[u] == 1 {
-                    let (v, w_encoded) = xor[u];
-                    toposort.push(u as u32);
+                    let (p, w_encoded) = xor_neighbors[u];
                     degree[u] = 0;
-                    degree[v as usize] -= 1;
-                    xor[v as usize].0 ^= u as u32;
-                    xor_assign_bytes(&mut xor[v as usize].1, w_encoded);
-                    u = v as usize;
-                }
-            }
-            toposort.push(0);
-            toposort.reverse();
+                    degree[p as usize] -= 1;
+                    xor_neighbors[p as usize].0 ^= u as u32;
+                    xor_assign_bytes(&mut xor_neighbors[p as usize].1, w_encoded);
+                    let w = unsafe { AsBytes::decode(w_encoded) };
 
-            // Note: Copying entire vec (from xor to parent) is necessary, since
-            // transmuting from (u32, [u8; N]) to (u32, E)
-            // or *const (u32, [u8; N]) to *const (u32, E) is UB. (tuples are
-            // #[align(rust)] struct and the field ordering is not guaranteed)
-            // We may try messing up with custom #[repr(C)] structs, or just trust the compiler.
-            let parent: Vec<(u32, E)> = xor
-                .into_iter()
-                .map(|(v, w)| (v, unsafe { AsBytes::decode(w) }))
-                .collect();
-            (toposort, parent)
-        }
-
-        pub fn run<'a, const N: usize, E: Clone + Default + 'a, R: RootData<E> + Clone>(
-            neighbors: &'a impl Jagged<'a, (u32, E)>,
-            data: &mut [R],
-            yield_node_dp: &mut impl FnMut(usize, &R),
-        ) where
-            E: AsBytes<N>,
-        {
-            let (order, parent) = toposort(neighbors);
-            let root = order[0] as usize;
-
-            // Init tree DP
-            for &u in order.iter().rev() {
-                data[u as usize].finalize();
-
-                let (p, w) = &parent[u as usize];
-                if u as usize != root {
+                    data[u as usize].finalize();
                     let (data_u, data_p) =
-                        unsafe { get_two(data, u as usize, *p as usize).unwrap_unchecked() };
+                        unsafe { get_two(data, u as usize, p as usize).unwrap_unchecked() };
                     data_p.pull_from(data_u, &w, false);
+                    topological_order.push((u, (p, w)));
+
+                    u = p as usize;
                 }
             }
+            data[root].finalize();
 
-            // Reroot
-            rec_reroot(neighbors, data, yield_node_dp, root, root);
+            // Downward propagation
+            for (u, (p, w)) in topological_order.into_iter().rev() {
+                let mut data_p = data[p as usize].clone();
+                data_p.pull_from(&data[u], &w, true);
+                data_p.finalize();
+
+                data[u].pull_from(&data_p, &w, false);
+                data[u].finalize();
+            }
         }
     }
 }
