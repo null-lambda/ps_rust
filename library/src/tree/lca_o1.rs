@@ -217,7 +217,7 @@ pub mod lca {
             }
             stack.push((h, u));
         }
-        let root = stack.pop().unwrap().1 as usize;
+        let root = (0..n).find(|&i| parent[i] == UNSET).unwrap();
         (parent, root)
     }
 
@@ -227,14 +227,12 @@ pub mod lca {
     }
 
     impl<T: Ord> StaticRangeMax<T> {
-        pub fn from_iter(xs: impl IntoIterator<Item = T>) -> Self {
-            unimplemented!("WIP");
-
+        pub fn from_iter(xs: impl Iterator<Item = T>) -> Self {
             let xs: Vec<_> = xs.into_iter().collect();
             let n = xs.len();
             assert!(n >= 1);
 
-            let (parent, root) = max_cartesian_tree(xs.len(), xs.iter().enumerate());
+            let (parent, root) = max_cartesian_tree(n, xs.iter().enumerate());
             Self {
                 xs,
                 cartesian_tree: LCA::from_graph(

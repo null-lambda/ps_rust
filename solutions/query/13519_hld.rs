@@ -1,16 +1,19 @@
 use std::io::Write;
 
-use collections::Jagged;
-use segtree::{LazySegTree, MonoidAction};
+use segtree_lazy::MonoidAction;
 
-mod simple_io {
-    pub struct InputAtOnce<'a> {
-        _buf: String,
-        iter: std::str::SplitAsciiWhitespace<'a>,
+mod fast_io {
+    use std::fs::File;
+    use std::io::BufWriter;
+    use std::os::unix::io::FromRawFd;
+
+    pub struct InputAtOnce {
+        _buf: &'static str,
+        iter: std::str::SplitAsciiWhitespace<'static>,
     }
 
-    impl<'a> InputAtOnce<'a> {
-        pub fn token(&mut self) -> &'a str {
+    impl InputAtOnce {
+        pub fn token(&mut self) -> &'static str {
             self.iter.next().unwrap_or_default()
         }
 
@@ -22,110 +25,68 @@ mod simple_io {
         }
     }
 
-    pub fn stdin_at_once<'a>() -> InputAtOnce<'a> {
-        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+    extern "C" {
+        fn mmap(addr: usize, length: usize, prot: i32, flags: i32, fd: i32, offset: i64)
+            -> *mut u8;
+        fn fstat(fd: i32, stat: *mut usize) -> i32;
+    }
+
+    pub fn stdin() -> InputAtOnce {
+        let mut stat = [0; 18];
+        unsafe { fstat(0, (&mut stat).as_mut_ptr()) };
+        let _buf = unsafe { mmap(0, stat[6], 1, 2, 0, 0) };
+        let _buf =
+            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(_buf, stat[6])) };
         let iter = _buf.split_ascii_whitespace();
-        let iter = unsafe { std::mem::transmute(iter) };
         InputAtOnce { _buf, iter }
     }
 
-    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
-        std::io::BufWriter::new(std::io::stdout())
-    }
-}
-
-pub mod collections {
-    use std::fmt::Debug;
-    use std::ops::Index;
-
-    // compressed sparse row format for jagged array
-    #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-    pub struct Jagged<T> {
-        data: Vec<T>,
-        head: Vec<u32>,
+    pub fn stdout() -> BufWriter<File> {
+        let stdout = unsafe { File::from_raw_fd(1) };
+        BufWriter::with_capacity(1 << 16, stdout)
     }
 
-    impl<T> Debug for Jagged<T>
-    where
-        T: Debug,
-    {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            let v: Vec<Vec<&T>> = (0..self.len()).map(|i| self[i].iter().collect()).collect();
-            v.fmt(f)
-        }
+    pub struct IntScanner {
+        buf: &'static [u8],
     }
 
-    impl<T, I> FromIterator<I> for Jagged<T>
-    where
-        I: IntoIterator<Item = T>,
-    {
-        fn from_iter<J>(iter: J) -> Self
-        where
-            J: IntoIterator<Item = I>,
-        {
-            let mut data = vec![];
-            let mut head = vec![];
-            head.push(0);
-
-            let mut cnt = 0;
-            for row in iter {
-                data.extend(row.into_iter().inspect(|_| cnt += 1));
-                head.push(cnt);
+    impl IntScanner {
+        pub fn u32(&mut self) -> u32 {
+            loop {
+                match self.buf {
+                    &[] => panic!(),
+                    &[b'0'..=b'9', ..] => break,
+                    _ => self.buf = &self.buf[1..],
+                }
             }
-            Jagged { data, head }
-        }
-    }
 
-    impl<T> Jagged<T> {
-        pub fn len(&self) -> usize {
-            self.head.len() - 1
-        }
-    }
-
-    impl<T> Index<usize> for Jagged<T> {
-        type Output = [T];
-        fn index(&self, index: usize) -> &[T] {
-            let start = self.head[index] as usize;
-            let end = self.head[index + 1] as usize;
-            &self.data[start..end]
-        }
-    }
-
-    impl<T> Jagged<T> {
-        pub fn iter(&self) -> Iter<T> {
-            Iter { src: self, pos: 0 }
-        }
-    }
-
-    impl<'a, T> IntoIterator for &'a Jagged<T> {
-        type Item = &'a [T];
-        type IntoIter = Iter<'a, T>;
-        fn into_iter(self) -> Self::IntoIter {
-            self.iter()
-        }
-    }
-
-    pub struct Iter<'a, T> {
-        src: &'a Jagged<T>,
-        pos: usize,
-    }
-
-    impl<'a, T> Iterator for Iter<'a, T> {
-        type Item = &'a [T];
-        fn next(&mut self) -> Option<Self::Item> {
-            if self.pos < self.src.len() {
-                let item = &self.src[self.pos];
-                self.pos += 1;
-                Some(item)
-            } else {
-                None
+            let mut acc = 0;
+            loop {
+                match self.buf {
+                    &[] => panic!(),
+                    &[b'0'..=b'9', ..] => acc = acc * 10 + (self.buf[0] - b'0') as u32,
+                    _ => break,
+                }
+                self.buf = &self.buf[1..];
             }
+            acc
+        }
+    }
+
+    pub fn stdin_int() -> IntScanner {
+        let mut stat = [0; 18];
+        unsafe { fstat(0, (&mut stat).as_mut_ptr()) };
+        let buf = unsafe { mmap(0, stat[6], 1, 2, 0, 0) };
+        let buf =
+            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(buf, stat[6])) };
+        IntScanner {
+            buf: buf.as_bytes(),
         }
     }
 }
 
 pub mod hld {
-    use crate::collections::Jagged;
+    const UNSET: u32 = u32::MAX;
 
     // Heavy-Light Decomposition
     #[derive(Debug)]
@@ -135,7 +96,8 @@ pub mod hld {
         pub parent: Vec<u32>,
         pub heavy_child: Vec<u32>,
         pub chain_top: Vec<u32>,
-        pub euler_idx: Vec<u32>,
+        pub segmented_idx: Vec<u32>,
+        pub topological_order: Vec<u32>,
     }
 
     impl HLD {
@@ -143,58 +105,128 @@ pub mod hld {
             self.parent.len()
         }
 
-        fn dfs_size(&mut self, neighbors: &Jagged<u32>, u: usize) {
-            self.size[u] = 1;
-            for &v in &neighbors[u] {
-                if v == self.parent[u] {
-                    continue;
-                }
-                self.depth[v as usize] = self.depth[u] + 1;
-                self.parent[v as usize] = u as u32;
-                self.dfs_size(neighbors, v as usize);
-                self.size[u] += self.size[v as usize];
+        pub fn from_edges<'a>(
+            n: usize,
+            edges: impl IntoIterator<Item = (u32, u32)>,
+            root: usize,
+            use_dfs_ordering: bool,
+        ) -> Self {
+            // Fast tree reconstruction with XOR-linked tree traversal
+            // https://codeforces.com/blog/entry/135239
+            let mut degree = vec![0u32; n];
+            let mut xor_neighbors: Vec<u32> = vec![0u32; n];
+            for (u, v) in edges.into_iter().flat_map(|(u, v)| [(u, v), (v, u)]) {
+                debug_assert!(u != v);
+                degree[u as usize] += 1;
+                xor_neighbors[u as usize] ^= v;
             }
-            if let Some(h) = neighbors[u]
-                .iter()
-                .copied()
-                .filter(|&v| v != self.parent[u])
-                .max_by_key(|&v| self.size[v as usize])
-            {
-                self.heavy_child[u] = h;
-            }
-        }
 
-        fn dfs_decompose(&mut self, neighbors: &Jagged<u32>, u: usize, order: &mut u32) {
-            self.euler_idx[u] = *order;
-            *order += 1;
-            if self.heavy_child[u] == u32::MAX {
-                return;
-            }
-            let h = self.heavy_child[u];
-            self.chain_top[h as usize] = self.chain_top[u];
-            self.dfs_decompose(neighbors, h as usize, order);
-            for &v in neighbors[u].iter().filter(|&&v| v != h) {
-                if v == self.parent[u] {
-                    continue;
-                }
-                self.chain_top[v as usize] = v;
-                self.dfs_decompose(neighbors, v as usize, order);
-            }
-        }
+            let mut size = vec![1; n];
+            let mut heavy_child = vec![UNSET; n];
+            degree[root] += 2;
+            let mut topological_order = vec![];
+            for mut u in 0..n {
+                while degree[u] == 1 {
+                    // Topological sort
+                    let p = xor_neighbors[u];
+                    topological_order.push(u as u32);
+                    degree[u] = 0;
+                    degree[p as usize] -= 1;
+                    xor_neighbors[p as usize] ^= u as u32;
 
-        pub fn from_graph(neighbors: &Jagged<u32>) -> Self {
-            let n = neighbors.len();
-            let mut hld = Self {
-                size: vec![0; n],
-                depth: vec![0; n],
-                parent: vec![u32::MAX; n],
-                heavy_child: vec![u32::MAX; n],
-                chain_top: vec![0; n],
-                euler_idx: vec![0; n],
-            };
-            hld.dfs_size(neighbors, 0);
-            hld.dfs_decompose(neighbors, 0, &mut 0);
-            hld
+                    // Upward propagation
+                    size[p as usize] += size[u as usize];
+                    let h = &mut heavy_child[p as usize];
+                    if *h == UNSET || size[*h as usize] < size[u as usize] {
+                        *h = u as u32;
+                    }
+
+                    u = p as usize;
+                }
+            }
+            topological_order.push(root as u32);
+            topological_order.reverse();
+            assert!(topological_order.len() == n, "Invalid tree structure");
+
+            let mut parent = xor_neighbors;
+            parent[root] = UNSET;
+
+            // Downward propagation
+            let mut depth = vec![0; n];
+            let mut chain_top = vec![root as u32; n];
+            for &u in &topological_order[1..] {
+                let p = parent[u as usize];
+                depth[u as usize] = depth[p as usize] + 1;
+            }
+
+            let mut segmented_idx = vec![UNSET; n];
+            if !use_dfs_ordering {
+                // A rearranged topological index continuous in a chain, for path queries
+                let mut timer = 0;
+                for u in &topological_order {
+                    let mut u = *u;
+                    if segmented_idx[u as usize] != UNSET {
+                        continue;
+                    }
+
+                    chain_top[u as usize] = u;
+                    loop {
+                        segmented_idx[u as usize] = timer;
+                        timer += 1;
+                        let h = heavy_child[u as usize];
+                        if h == UNSET {
+                            break;
+                        }
+                        chain_top[h as usize] = chain_top[u as usize];
+                        u = h;
+                    }
+                }
+            } else {
+                // DFS ordering for path & subtree queries
+                let mut offset = vec![0; n];
+                for u in &topological_order {
+                    let mut u = *u;
+                    if segmented_idx[u as usize] != UNSET {
+                        continue;
+                    }
+
+                    let mut p = parent[u as usize];
+                    let mut timer = 0;
+                    if p != UNSET {
+                        timer = offset[p as usize] + 1;
+                        offset[p as usize] += size[u as usize] as u32;
+                    }
+                    segmented_idx[u as usize] = timer;
+                    offset[u as usize] = timer;
+                    chain_top[u as usize] = u;
+
+                    timer += 1;
+
+                    loop {
+                        p = u;
+                        u = heavy_child[u as usize];
+                        if u == UNSET {
+                            break;
+                        }
+
+                        chain_top[u as usize] = chain_top[p as usize];
+                        offset[p as usize] += size[u as usize] as u32;
+                        offset[u as usize] = timer;
+                        segmented_idx[u as usize] = timer;
+                        timer += 1;
+                    }
+                }
+            }
+
+            Self {
+                size,
+                depth,
+                parent,
+                heavy_child,
+                chain_top,
+                segmented_idx,
+                topological_order,
+            }
         }
 
         pub fn for_each_path<F>(&self, mut u: usize, mut v: usize, mut visitor: F)
@@ -210,7 +242,7 @@ pub mod hld {
                 visitor(self.chain_top[u] as usize, u, false);
                 u = self.parent[self.chain_top[u] as usize] as usize;
             }
-            if self.euler_idx[u] > self.euler_idx[v] {
+            if self.segmented_idx[u] > self.segmented_idx[v] {
                 std::mem::swap(&mut u, &mut v);
             }
             visitor(u, v, true);
@@ -221,7 +253,7 @@ pub mod hld {
             F: FnMut(usize, usize, bool, bool),
         {
             debug_assert!(u < self.len() && v < self.len());
-            if self.euler_idx[u] > self.euler_idx[v] {
+            if self.segmented_idx[u] > self.segmented_idx[v] {
                 std::mem::swap(&mut u, &mut v);
             }
             while self.chain_top[u] != self.chain_top[v] {
@@ -248,7 +280,7 @@ pub mod hld {
                 }
                 u = self.parent[self.chain_top[u] as usize] as usize;
             }
-            if self.euler_idx[u] > self.euler_idx[v] {
+            if self.segmented_idx[u] > self.segmented_idx[v] {
                 std::mem::swap(&mut u, &mut v);
             }
             u
@@ -256,7 +288,7 @@ pub mod hld {
     }
 }
 
-pub mod segtree {
+pub mod segtree_lazy {
     use std::{iter, ops::Range};
 
     pub trait MonoidAction {
@@ -269,7 +301,7 @@ pub mod segtree {
         fn apply_to_sum(&self, f: &Self::F, x_count: u32, x_sum: &Self::X) -> Self::X;
     }
 
-    pub struct LazySegTree<M: MonoidAction> {
+    pub struct SegTree<M: MonoidAction> {
         n: usize,
         max_height: u32,
         pub sum: Vec<M::X>,
@@ -277,9 +309,8 @@ pub mod segtree {
         pub ma: M,
     }
 
-    impl<M: MonoidAction> LazySegTree<M> {
+    impl<M: MonoidAction> SegTree<M> {
         pub fn with_size(n: usize, ma: M) -> Self {
-            let n = n.next_power_of_two();
             Self {
                 n,
                 max_height: usize::BITS - n.leading_zeros(),
@@ -293,7 +324,6 @@ pub mod segtree {
         where
             I: IntoIterator<Item = M::X>,
         {
-            let n = n.next_power_of_two();
             let mut sum: Vec<_> = (iter::repeat_with(|| ma.id()).take(n))
                 .chain(
                     iter.into_iter()
@@ -301,7 +331,7 @@ pub mod segtree {
                         .take(n),
                 )
                 .collect();
-            for i in (0..n).rev() {
+            for i in (1..n).rev() {
                 sum[i] = ma.combine(&sum[i << 1], &sum[i << 1 | 1]);
             }
             Self {
@@ -320,62 +350,75 @@ pub mod segtree {
             }
         }
 
-        fn push_lazy(&mut self, mut idx: usize) {
-            idx += self.n;
-            for height in (1..=self.max_height).rev() {
-                let node = idx >> height;
-                let width: u32 = 1 << (height - 1);
-                let value = unsafe { &*(&self.lazy[node] as *const _) };
-                self.apply(node << 1, width, value);
-                self.apply(node << 1 | 1, width, value);
-                self.lazy[node] = self.ma.id_action();
+        fn push_down(&mut self, width: u32, node: usize) {
+            let value = unsafe { &*(&self.lazy[node] as *const _) };
+            self.apply(node << 1, width, value);
+            self.apply(node << 1 | 1, width, value);
+            self.lazy[node] = self.ma.id_action();
+        }
+
+        fn push_range(&mut self, range: Range<usize>) {
+            let Range { mut start, mut end } = range;
+            start += self.n;
+            end += self.n;
+
+            let start_height = 1 + start.trailing_zeros();
+            let end_height = 1 + end.trailing_zeros();
+            for height in (start_height..=self.max_height).rev() {
+                let width = 1 << height - 1;
+                self.push_down(width, start >> height);
+            }
+            for height in (end_height..=self.max_height).rev().skip_while(|&height| {
+                height >= start_height && end - 1 >> height == start >> height
+            }) {
+                let width = 1 << height - 1;
+                self.push_down(width, end - 1 >> height);
             }
         }
 
-        fn pull_sum(&mut self, node: usize, width: u32) {
+        fn pull_up(&mut self, node: usize) {
             self.sum[node] = (self.ma).combine(&self.sum[node << 1], &self.sum[node << 1 | 1]);
-            self.sum[node] = (self.ma).apply_to_sum(&self.lazy[node], width, &self.sum[node]);
         }
 
         pub fn apply_range(&mut self, range: Range<usize>, value: M::F) {
             let Range { mut start, mut end } = range;
-            debug_assert!(start <= end);
-            debug_assert!(end <= self.n);
+            debug_assert!(start <= end && end <= self.n);
             if start == end {
                 return;
             }
-            self.push_lazy(start);
-            self.push_lazy(end - 1);
+
+            self.push_range(range);
             start += self.n;
             end += self.n;
             let mut width: u32 = 1;
-            let (mut update_left, mut update_right) = (false, false);
+            let (mut pull_start, mut pull_end) = (false, false);
             while start < end {
-                if update_left {
-                    self.pull_sum(start - 1, width);
+                if pull_start {
+                    self.pull_up(start - 1);
                 }
-                if update_right {
-                    self.pull_sum(end, width);
+                if pull_end {
+                    self.pull_up(end);
                 }
                 if start & 1 != 0 {
                     self.apply(start, width, &value);
-                    update_left = true;
+                    start += 1;
+                    pull_start = true;
                 }
                 if end & 1 != 0 {
                     self.apply(end - 1, width, &value);
-                    update_right = true;
+                    pull_end = true;
                 }
-                start = (start + 1) >> 1;
+                start >>= 1;
                 end >>= 1;
                 width <<= 1;
             }
             start -= 1;
             while end > 0 {
-                if update_left {
-                    self.pull_sum(start, width);
+                if pull_start {
+                    self.pull_up(start);
                 }
-                if update_right && !(update_left && start == end) {
-                    self.pull_sum(end, width);
+                if pull_end && !(pull_start && start == end) {
+                    self.pull_up(end);
                 }
                 start >>= 1;
                 end >>= 1;
@@ -385,8 +428,8 @@ pub mod segtree {
 
         pub fn query_range(&mut self, range: Range<usize>) -> M::X {
             let Range { mut start, mut end } = range;
-            self.push_lazy(start);
-            self.push_lazy(end - 1);
+
+            self.push_range(range);
             start += self.n;
             end += self.n;
             let (mut result_left, mut result_right) = (self.ma.id(), self.ma.id());
@@ -454,7 +497,7 @@ impl IntervalSum {
 
 struct IntervalSumOp;
 
-impl MonoidAction for IntervalSumOp {
+impl segtree_lazy::MonoidAction for IntervalSumOp {
     type X = IntervalSum;
     type F = Option<i32>;
     fn id(&self) -> Self::X {
@@ -497,29 +540,21 @@ impl MonoidAction for IntervalSumOp {
 }
 
 fn main() {
-    let mut input = simple_io::stdin_at_once();
-    let mut output = simple_io::stdout();
+    let mut input = fast_io::stdin();
+    let mut output = fast_io::stdout();
 
     let n: usize = input.value();
     let weights: Vec<i32> = (0..n).map(|_| input.value()).collect();
 
-    let mut neighbors = vec![vec![]; n];
-    for _ in 0..n - 1 {
-        let u = input.value::<usize>() - 1;
-        let v = input.value::<usize>() - 1;
-        neighbors[u].push(v as u32);
-        neighbors[v].push(u as u32);
-    }
-
-    let neighbors: Jagged<_> = neighbors.into_iter().collect();
-    let hld = hld::HLD::from_graph(&neighbors);
-    let mut euler_idx_inv = vec![0; n];
+    let edges = (0..n - 1).map(|_| (input.value::<u32>() - 1, input.value::<u32>() - 1));
+    let hld = hld::HLD::from_edges(n, edges, 0, false);
+    let mut weights_reindexed = vec![0; n];
     for i in 0..n {
-        euler_idx_inv[hld.euler_idx[i] as usize] = i;
+        weights_reindexed[hld.segmented_idx[i] as usize] = weights[i];
     }
-    let mut weights = LazySegTree::from_iter(
+    let mut weights = segtree_lazy::SegTree::from_iter(
         n,
-        (0..n).map(|i| IntervalSum::new(weights[euler_idx_inv[i] as usize])),
+        weights_reindexed.into_iter().map(IntervalSum::new),
         IntervalSumOp,
     );
 
@@ -533,7 +568,7 @@ fn main() {
                 let mut res_left = weights.ma.id();
                 let mut res_right = weights.ma.id();
                 hld.for_each_path_splitted(u, v, |u, v, is_left_path, _has_lca| {
-                    let (u, v) = (hld.euler_idx[u] as usize, hld.euler_idx[v] as usize);
+                    let (u, v) = (hld.segmented_idx[u] as usize, hld.segmented_idx[v] as usize);
                     let x = weights.query_range(u..v + 1);
                     if is_left_path {
                         res_left = weights.ma.combine(&x, &res_left);
@@ -547,7 +582,7 @@ fn main() {
             "2" => {
                 let w = input.value();
                 hld.for_each_path(u, v, |u, v, _is_lca| {
-                    let (u, v) = (hld.euler_idx[u] as usize, hld.euler_idx[v] as usize);
+                    let (u, v) = (hld.segmented_idx[u] as usize, hld.segmented_idx[v] as usize);
                     weights.apply_range(u..v + 1, Some(w));
                 });
             }

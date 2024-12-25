@@ -1,17 +1,33 @@
 pub mod hld {
+    // Heavy-Light Decomposition
+    #[inline(always)]
+    pub unsafe fn assert_unchecked(b: bool) {
+        if !b {
+            std::hint::unreachable_unchecked();
+        }
+    }
+
+    #[inline(always)]
+    pub fn likely(b: bool) -> bool {
+        #[cold]
+        #[inline(always)]
+        pub fn cold() {}
+
+        if !b {
+            cold();
+        }
+        b
+    }
+
     const UNSET: u32 = u32::MAX;
 
-    // Heavy-Light Decomposition
     #[derive(Debug)]
     pub struct HLD {
         pub size: Vec<u32>,
-        pub depth: Vec<u32>,
         pub parent: Vec<u32>,
         pub heavy_child: Vec<u32>,
         pub chain_top: Vec<u32>,
-        // pub segmented_idx: Vec<u32>,
-        pub euler_in: Vec<u32>,
-        pub topological_order: Vec<u32>,
+        pub segmented_idx: Vec<u32>,
     }
 
     impl HLD {
@@ -23,6 +39,7 @@ pub mod hld {
             n: usize,
             edges: impl IntoIterator<Item = (u32, u32)>,
             root: usize,
+            use_dfs_ordering: bool,
         ) -> Self {
             // Fast tree reconstruction with XOR-linked tree traversal
             // https://codeforces.com/blog/entry/135239
@@ -37,7 +54,7 @@ pub mod hld {
             let mut size = vec![1; n];
             let mut heavy_child = vec![UNSET; n];
             degree[root] += 2;
-            let mut topological_order = vec![];
+            let mut topological_order = Vec::with_capacity(n);
             for mut u in 0..n {
                 while degree[u] == 1 {
                     // Topological sort
@@ -54,81 +71,76 @@ pub mod hld {
                         *h = u as u32;
                     }
 
+                    assert!(u != p as usize);
                     u = p as usize;
                 }
             }
             topological_order.push(root as u32);
-            topological_order.reverse();
             assert!(topological_order.len() == n, "Invalid tree structure");
 
             let mut parent = xor_neighbors;
             parent[root] = UNSET;
 
             // Downward propagation
-            let mut depth = vec![0; n];
             let mut chain_top = vec![root as u32; n];
-            for &u in &topological_order[1..] {
-                let p = parent[u as usize];
-                depth[u as usize] = depth[p as usize] + 1;
-            }
-
-            // // Rearranged topological index continuous in a chain, for path queries
-            // let mut segmented_idx = vec![UNSET; n];
-            // let mut timer = 0;
-            // for u in &topological_order {
-            //     let mut u = *u;
-            //     while u != UNSET && segmented_idx[u as usize] == UNSET {
-            //         segmented_idx[u as usize] = timer;
-            //         timer += 1;
-            //         u = heavy_child[u as usize];
-            //     }
-            // }
-
-            // Dfs ordering for path & subtree queries
-            let mut euler_in = vec![UNSET; n];
-            let mut offset = vec![0; n];
-            for u in &topological_order {
-                let mut u = *u;
-                if euler_in[u as usize] != UNSET {
-                    continue;
-                }
-
-                let mut p = parent[u as usize];
+            let mut segmented_idx = vec![UNSET; n];
+            if !use_dfs_ordering {
+                // A rearranged topological index continuous in a chain, for path queries
                 let mut timer = 0;
-                if p != UNSET {
-                    timer = offset[p as usize] + 1;
-                    offset[p as usize] += size[u as usize] as u32;
+                for mut u in topological_order.into_iter().rev() {
+                    if segmented_idx[u as usize] != UNSET {
+                        continue;
+                    }
+                    let u0 = u;
+                    loop {
+                        chain_top[u as usize] = u0;
+                        segmented_idx[u as usize] = timer;
+                        timer += 1;
+                        u = heavy_child[u as usize];
+                        if u == UNSET {
+                            break;
+                        }
+                    }
                 }
-                euler_in[u as usize] = timer;
-                offset[u as usize] = timer;
-                chain_top[u as usize] = u;
-
-                timer += 1;
-
-                loop {
-                    p = u;
-                    u = heavy_child[u as usize];
-                    if u == UNSET {
-                        break;
+            } else {
+                // DFS ordering for path & subtree queries
+                let mut offset = vec![0; n];
+                for mut u in topological_order.into_iter().rev() {
+                    if segmented_idx[u as usize] != UNSET {
+                        continue;
                     }
 
-                    chain_top[u as usize] = chain_top[p as usize];
-                    offset[p as usize] += size[u as usize] as u32;
-                    offset[u as usize] = timer;
-                    euler_in[u as usize] = timer;
-                    timer += 1;
+                    let mut p = parent[u as usize];
+                    let mut timer = 0;
+                    if likely(p != UNSET) {
+                        timer = offset[p as usize] + 1;
+                        offset[p as usize] += size[u as usize] as u32;
+                    }
+
+                    let u0 = u;
+                    loop {
+                        chain_top[u as usize] = u0;
+                        offset[u as usize] = timer;
+                        segmented_idx[u as usize] = timer;
+                        timer += 1;
+
+                        p = u as u32;
+                        u = heavy_child[p as usize];
+                        unsafe { assert_unchecked(u != p) };
+                        if u == UNSET {
+                            break;
+                        }
+                        offset[p as usize] += size[u as usize] as u32;
+                    }
                 }
             }
 
             Self {
                 size,
-                depth,
                 parent,
                 heavy_child,
                 chain_top,
-                // segmented_idx,
-                euler_in,
-                topological_order,
+                segmented_idx,
             }
         }
 
@@ -139,13 +151,15 @@ pub mod hld {
             debug_assert!(u < self.len() && v < self.len());
 
             while self.chain_top[u] != self.chain_top[v] {
-                if self.depth[self.chain_top[u] as usize] < self.depth[self.chain_top[v] as usize] {
+                if self.segmented_idx[self.chain_top[u] as usize]
+                    < self.segmented_idx[self.chain_top[v] as usize]
+                {
                     std::mem::swap(&mut u, &mut v);
                 }
                 visitor(self.chain_top[u] as usize, u, false);
                 u = self.parent[self.chain_top[u] as usize] as usize;
             }
-            if self.euler_in[u] > self.euler_in[v] {
+            if self.segmented_idx[u] > self.segmented_idx[v] {
                 std::mem::swap(&mut u, &mut v);
             }
             visitor(u, v, true);
@@ -156,11 +170,13 @@ pub mod hld {
             F: FnMut(usize, usize, bool, bool),
         {
             debug_assert!(u < self.len() && v < self.len());
-            if self.euler_in[u] > self.euler_in[v] {
+            if self.segmented_idx[u] > self.segmented_idx[v] {
                 std::mem::swap(&mut u, &mut v);
             }
             while self.chain_top[u] != self.chain_top[v] {
-                if self.depth[self.chain_top[u] as usize] > self.depth[self.chain_top[v] as usize] {
+                if self.segmented_idx[self.chain_top[u] as usize]
+                    > self.segmented_idx[self.chain_top[v] as usize]
+                {
                     visit(self.chain_top[u] as usize, u, true, false);
                     u = self.parent[self.chain_top[u] as usize] as usize;
                 } else {
@@ -168,7 +184,7 @@ pub mod hld {
                     v = self.parent[self.chain_top[v] as usize] as usize;
                 }
             }
-            if self.depth[u] > self.depth[v] {
+            if self.segmented_idx[u] > self.segmented_idx[v] {
                 visit(v, u, true, true);
             } else {
                 visit(u, v, false, true);
@@ -178,12 +194,14 @@ pub mod hld {
         pub fn lca(&self, mut u: usize, mut v: usize) -> usize {
             debug_assert!(u < self.len() && v < self.len());
             while self.chain_top[u] != self.chain_top[v] {
-                if self.depth[self.chain_top[u] as usize] < self.depth[self.chain_top[v] as usize] {
+                if self.segmented_idx[self.chain_top[u] as usize]
+                    < self.segmented_idx[self.chain_top[v] as usize]
+                {
                     std::mem::swap(&mut u, &mut v);
                 }
                 u = self.parent[self.chain_top[u] as usize] as usize;
             }
-            if self.euler_in[u] > self.euler_in[v] {
+            if self.segmented_idx[u] > self.segmented_idx[v] {
                 std::mem::swap(&mut u, &mut v);
             }
             u
