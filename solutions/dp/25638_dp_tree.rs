@@ -1,3 +1,38 @@
+use std::io::Write;
+
+mod simple_io {
+    use std::string::*;
+
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
 pub mod reroot {
     pub mod invertible {
         // O(n) rerooting dp for trees, with invertible pulling operation. (group action)
@@ -93,12 +128,12 @@ pub mod reroot {
                     xor_neighbors[p as usize].0 ^= u as u32;
                     xor_assign_bytes(&mut xor_neighbors[p as usize].1, w_encoded);
                     let w = unsafe { AsBytes::decode(w_encoded) };
-                    topological_order.push((u as u32, (p, w)));
 
                     data[u as usize].finalize();
                     let (data_u, data_p) =
                         unsafe { get_two(data, u as usize, p as usize).unwrap_unchecked() };
                     data_p.pull_from(data_u, &w, false);
+                    topological_order.push((u, (p, w)));
 
                     u = p as usize;
                 }
@@ -112,5 +147,73 @@ pub mod reroot {
                 data_u.reroot_on_edge(&data_p, &w);
             }
         }
+    }
+}
+
+#[derive(Clone)]
+struct NodeData {
+    count: [u32; 2],
+    sum_sq: u64,
+}
+
+impl NodeData {
+    fn new(color: u8) -> Self {
+        let count = match color {
+            0 => [1, 0],
+            1 => [0, 1],
+            _ => panic!(),
+        };
+        Self { count, sum_sq: 0 }
+    }
+}
+
+impl reroot::invertible::RootData<()> for NodeData {
+    fn pull_from(&mut self, child: &Self, (): &(), inv: bool) {
+        if !inv {
+            for i in 0..2 {
+                self.count[i] += child.count[i];
+            }
+            self.sum_sq += child.count[0] as u64 * child.count[1] as u64;
+        } else {
+            unsafe { std::hint::unreachable_unchecked() };
+        }
+    }
+
+    fn reroot_on_edge(&mut self, old_root: &Self, weight: &()) {
+        let mut old_root = old_root.clone();
+        for i in 0..2 {
+            old_root.count[i] -= self.count[i];
+        }
+
+        self.pull_from(&old_root, weight, false);
+    }
+}
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    let n: usize = input.value();
+
+    let weights = (0..n).map(|_| input.value::<u8>());
+    let weights: Vec<NodeData> = weights.map(NodeData::new).collect();
+    let mut dp = weights.clone();
+
+    let edges: Vec<_> = (0..n - 1)
+        .map(|_| (input.value::<u32>() - 1, input.value::<u32>() - 1, ()))
+        .collect();
+
+    reroot::invertible::run(n, edges.iter().cloned(), &mut dp);
+    let mut ans = vec![0u64; n];
+    for i in 0..n {
+        let s0 = dp[i].count[0] - weights[i].count[0];
+        let s1 = dp[i].count[1] - weights[i].count[1];
+        ans[i] = s0 as u64 * s1 as u64 - dp[i].sum_sq;
+    }
+
+    let q: usize = input.value();
+    for _ in 0..q {
+        let u = input.value::<usize>() - 1;
+        writeln!(output, "{}", ans[u]).unwrap();
     }
 }

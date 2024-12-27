@@ -41,7 +41,7 @@ mod fast_io {
 
     pub fn stdout() -> BufWriter<File> {
         let stdout = unsafe { File::from_raw_fd(1) };
-        BufWriter::new(stdout)
+        BufWriter::with_capacity(1 << 16, stdout)
     }
 
     pub struct IntScanner {
@@ -49,25 +49,41 @@ mod fast_io {
     }
 
     impl IntScanner {
-        pub fn u32(&mut self) -> u32 {
+        fn skip(&mut self) {
             loop {
                 match self.buf {
-                    &[] => panic!(),
-                    &[b'0'..=b'9', ..] => break,
-                    _ => self.buf = &self.buf[1..],
+                    &[..=b' ', ..] => self.buf = &self.buf[1..],
+                    _ => break,
                 }
             }
+        }
 
+        fn u32_noskip(&mut self) -> u32 {
             let mut acc = 0;
             loop {
                 match self.buf {
-                    &[] => panic!(),
                     &[b'0'..=b'9', ..] => acc = acc * 10 + (self.buf[0] - b'0') as u32,
                     _ => break,
                 }
                 self.buf = &self.buf[1..];
             }
             acc
+        }
+
+        pub fn u32(&mut self) -> u32 {
+            self.skip();
+            self.u32_noskip()
+        }
+
+        pub fn i32(&mut self) -> i32 {
+            self.skip();
+            match self.buf {
+                &[b'-', ..] => {
+                    self.buf = &self.buf[1..];
+                    -(self.u32_noskip() as i32)
+                }
+                _ => self.u32_noskip() as i32,
+            }
         }
     }
 

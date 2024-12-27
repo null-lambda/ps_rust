@@ -1,3 +1,38 @@
+use std::io::Write;
+
+mod simple_io {
+    use std::string::*;
+
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
 pub mod reroot {
     pub mod lazy {
         // O(n) rerooting dp for trees, with combinable pulling operation. (Monoid action)
@@ -35,6 +70,7 @@ pub mod reroot {
         pub trait RootData {
             type E: Clone; // edge weight
             type F: Clone; // pulling operation (edge dp)
+
             fn lift_to_action(&self, weight: &Self::E) -> Self::F;
             fn id_action() -> Self::F;
             fn combine_action(&self, lhs: &mut Self::F, rhs: &Self::F);
@@ -74,7 +110,7 @@ pub mod reroot {
             edges: impl IntoIterator<Item = (u32, u32, E)>,
             data: &mut [R],
             yield_edge_dp: &mut impl FnMut(usize, &R::F, &R::F, &E),
-        ) {
+        ) -> Vec<(u32, E)> {
             // Fast tree reconstruction with XOR-linked traversal
             // https://codeforces.com/blog/entry/135239
             let root = 0;
@@ -123,6 +159,8 @@ pub mod reroot {
                     u = p as usize;
                 }
             }
+            let mut parent = xor_neighbors;
+            parent[root as usize].0 = UNSET;
             topological_order.push((root as u32, UNSET, E::default()));
             data[root].finalize();
 
@@ -166,6 +204,71 @@ pub mod reroot {
                     });
                 }
             }
+
+            let parent = parent
+                .into_iter()
+                .map(|(u, w)| (u, unsafe { AsBytes::decode(w) }))
+                .collect();
+            parent
         }
+    }
+}
+
+#[derive(Clone, Default, Debug)]
+struct NodeDp {
+    diam: u32,
+    depth: u32,
+}
+
+impl reroot::lazy::RootData for NodeDp {
+    type E = ();
+    type F = NodeDp;
+
+    fn lift_to_action(&self, (): &()) -> NodeDp {
+        NodeDp {
+            diam: self.diam,
+            depth: self.depth + 1,
+        }
+    }
+
+    fn id_action() -> NodeDp {
+        NodeDp { diam: 0, depth: 0 }
+    }
+
+    fn combine_action(&self, lhs: &mut NodeDp, rhs: &NodeDp) {
+        lhs.apply(rhs);
+    }
+
+    fn apply(&mut self, action: &NodeDp) {
+        self.diam = self.diam.max(action.diam).max(self.depth + action.depth);
+        self.depth = self.depth.max(action.depth);
+    }
+
+    fn finalize(&mut self) {}
+}
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    let n: usize = input.value();
+    let q: usize = input.value();
+    let edges = (0..n - 1).map(|_| (input.value::<u32>() - 1, input.value::<u32>() - 1, ()));
+
+    let mut ans = vec![0; n];
+    let parent = reroot::lazy::run(
+        n,
+        edges,
+        &mut vec![NodeDp::default(); n],
+        &mut |u, e1, e2, ()| {
+            ans[u] = e1.diam + e2.diam + 1;
+        },
+    );
+
+    for _ in 0..q {
+        let u = input.value::<u32>() - 1;
+        let v = input.value::<u32>() - 1;
+        let x = if parent[u as usize].0 == v { u } else { v };
+        writeln!(output, "{}", ans[x as usize]).unwrap();
     }
 }
