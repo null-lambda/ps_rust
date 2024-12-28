@@ -1,6 +1,6 @@
-use std::{io::Write, mem::MaybeUninit};
+use std::{io::Write, ops::Range};
 
-use segtree::{Monoid, SegTree};
+use fenwick_tree::{FenwickTree, Group};
 
 mod fast_io {
     use std::fs::File;
@@ -125,16 +125,17 @@ pub mod hld {
     const UNSET: u32 = u32::MAX;
 
     #[derive(Debug)]
-    pub struct PathHLD {
+    pub struct HLD {
         pub size: Vec<u32>,
         pub parent: Vec<u32>,
         pub heavy_child: Vec<u32>,
         pub chain_top: Vec<u32>,
         pub chain_bottom: Vec<u32>,
         pub segmented_idx: Vec<u32>,
+        pub topological_order: Vec<u32>,
     }
 
-    impl PathHLD {
+    impl HLD {
         pub fn len(&self) -> usize {
             self.parent.len()
         }
@@ -206,7 +207,7 @@ pub mod hld {
             if !use_dfs_ordering {
                 // A rearranged topological index continuous in a chain, for path queries
                 let mut timer = 0;
-                for mut u in topological_order.into_iter().rev() {
+                for mut u in topological_order.iter().copied().rev() {
                     if segmented_idx[u as usize] != UNSET {
                         continue;
                     }
@@ -224,7 +225,7 @@ pub mod hld {
             } else {
                 // DFS ordering for path & subtree queries
                 let mut offset = vec![0; n];
-                for mut u in topological_order.into_iter().rev() {
+                for mut u in topological_order.iter().copied().rev() {
                     if segmented_idx[u as usize] != UNSET {
                         continue;
                     }
@@ -261,6 +262,7 @@ pub mod hld {
                 chain_top,
                 chain_bottom,
                 segmented_idx,
+                topological_order,
             }
         }
 
@@ -329,158 +331,174 @@ pub mod hld {
     }
 }
 
-pub mod segtree {
-    use std::{mem::MaybeUninit, ops::Range};
-
-    pub trait Monoid {
-        type X;
+pub mod fenwick_tree {
+    pub trait Group {
+        type X: Clone;
         fn id(&self) -> Self::X;
-        fn combine(&self, a: &Self::X, b: &Self::X) -> Self::X;
+        fn add_assign(&self, lhs: &mut Self::X, rhs: Self::X);
+        fn sub_assign(&self, lhs: &mut Self::X, rhs: Self::X);
     }
 
-    #[derive(Debug)]
-    pub struct SegTree<'a, M>
-    where
-        M: Monoid,
-    {
+    #[derive(Clone)]
+    pub struct FenwickTree<G: Group> {
         n: usize,
-        sum: &'a mut [M::X],
-        monoid: M,
+        group: G,
+        sum: Vec<G::X>,
     }
 
-    impl<'a, M: Monoid> SegTree<'a, M> {
-        pub fn new_in(
-            n: usize,
-            monoid: M,
-            buffer: &'a mut [MaybeUninit<M::X>],
-        ) -> Option<(Self, &'a mut [MaybeUninit<M::X>])> {
-            let n = n.next_power_of_two();
-            let n_sum = 2 * n;
-            if buffer.len() < n_sum {
-                return None;
-            }
-            let (sum, rest) = buffer.split_at_mut(n_sum);
-            for i in 0..n_sum {
-                sum[i].write(monoid.id());
-            }
-            let sum = unsafe { std::mem::transmute::<&mut [MaybeUninit<M::X>], &mut [M::X]>(sum) };
-            Some((Self { n, sum, monoid }, rest))
+    impl<G: Group> FenwickTree<G> {
+        pub fn new(n: usize, group: G) -> Self {
+            let n = n.next_power_of_two(); // Required for binary search
+            let sum = (0..n).map(|_| group.id()).collect();
+            Self { n, group, sum }
         }
 
-        pub fn modify(&mut self, mut idx: usize, f: impl FnOnce(&mut M::X)) {
+        pub fn from_iter(iter: impl IntoIterator<Item = G::X>, group: G) -> Self {
+            let mut sum: Vec<_> = iter.into_iter().collect();
+            let n = sum.len();
+
+            let n = n.next_power_of_two(); // Required for binary search
+            sum.resize_with(n, || group.id());
+
+            for i in 1..n {
+                let prev = sum[i - 1].clone();
+                group.add_assign(&mut sum[i], prev);
+            }
+            for i in (1..n).rev() {
+                let j = i & (i + 1);
+                if j >= 1 {
+                    let prev = sum[j - 1].clone();
+                    group.sub_assign(&mut sum[i], prev);
+                }
+            }
+
+            Self { n, group, sum }
+        }
+
+        pub fn add(&mut self, mut idx: usize, value: G::X) {
             debug_assert!(idx < self.n);
-            idx += self.n;
-            f(&mut self.sum[idx]);
-            while idx > 1 {
-                idx >>= 1;
-                self.sum[idx] = self
-                    .monoid
-                    .combine(&self.sum[idx << 1], &self.sum[idx << 1 | 1]);
+            while idx < self.n {
+                self.group.add_assign(&mut self.sum[idx], value.clone());
+                idx |= idx + 1;
             }
         }
 
-        pub fn get(&self, idx: usize) -> &M::X {
-            &self.sum[idx + self.n]
-        }
-
-        pub fn query_range(&self, range: Range<usize>) -> M::X {
-            let Range { mut start, mut end } = range;
-            debug_assert!(start < self.n && end <= self.n);
-            start += self.n;
-            end += self.n;
-            let (mut result_left, mut result_right) = (self.monoid.id(), self.monoid.id());
-            while start < end {
-                if start & 1 != 0 {
-                    result_left = self.monoid.combine(&result_left, &self.sum[start]);
-                }
-                if end & 1 != 0 {
-                    result_right = self.monoid.combine(&self.sum[end - 1], &result_right);
-                }
-                start = (start + 1) >> 1;
-                end >>= 1;
+        // Exclusive prefix sum (0..idx)
+        pub fn sum_prefix(&self, idx: usize) -> G::X {
+            debug_assert!(idx <= self.n);
+            let mut res = self.group.id();
+            let mut r = idx;
+            while r > 0 {
+                self.group.add_assign(&mut res, self.sum[r - 1].clone());
+                r &= r - 1;
             }
-
-            self.monoid.combine(&result_left, &result_right)
+            res
         }
 
-        pub fn query_all(&self) -> &M::X {
-            // Warning: works only if n is power of two (otherwise we have a forest, not tree)
-            &self.sum[1]
+        pub fn sum_range(&self, range: std::ops::Range<usize>) -> G::X {
+            debug_assert!(range.start <= range.end && range.end <= self.n);
+            let mut res = self.sum_prefix(range.end);
+            self.group
+                .sub_assign(&mut res, self.sum_prefix(range.start));
+            res
+        }
+
+        pub fn get(&self, idx: usize) -> G::X {
+            self.sum_range(idx..idx + 1)
+        }
+
+        // find the first i, such that equiv pred(sum_range(0..=i)) == false
+        pub fn partition_point_prefix(&self, mut pred: impl FnMut(&G::X) -> bool) -> usize {
+            let p1_log2 = usize::BITS - self.n.leading_zeros();
+            let mut idx = 0;
+            let mut sum = self.group.id();
+            for i in (0..p1_log2).rev() {
+                let idx_next = idx | (1 << i);
+                if idx_next > self.n {
+                    continue;
+                }
+                let mut sum_next = sum.clone();
+                self.group
+                    .add_assign(&mut sum_next, self.sum[idx_next - 1].clone());
+                if pred(&sum_next) {
+                    sum = sum_next;
+                    idx = idx_next;
+                }
+            }
+            idx
         }
     }
 }
 
-const INF: i32 = 1_000_000;
+#[derive(Clone, Copy, Debug)]
+struct Additive;
 
-#[derive(Clone, Copy)]
-struct ChainAgg([[i32; 2]; 2]);
-
-impl ChainAgg {
-    const fn singleton(color: u8) -> Self {
-        Self(match color {
-            1 => [[0, INF], [INF, INF]],
-            2 => [[INF, INF], [INF, 0]],
-            3 => [[0, INF], [INF, 0]],
-            _ => panic!(),
-        })
-    }
-
-    fn min_cost(&self) -> i32 {
-        *self.0.iter().flatten().min().unwrap()
-    }
-}
-
-struct ChainOp;
-
-impl Monoid for ChainOp {
-    type X = ChainAgg;
+impl Group for Additive {
+    type X = i32;
 
     fn id(&self) -> Self::X {
-        ChainAgg::singleton(3)
+        0
     }
 
-    fn combine(&self, lhs: &Self::X, rhs: &Self::X) -> Self::X {
-        ChainAgg(std::array::from_fn(|s| {
-            std::array::from_fn(|e| {
-                INF.min(lhs.0[s][0] + rhs.0[0][e])
-                    .min(lhs.0[s][0] + rhs.0[1][e] + 1)
-                    .min(lhs.0[s][1] + rhs.0[0][e] + 1)
-                    .min(lhs.0[s][1] + rhs.0[1][e])
-            })
-        }))
+    fn add_assign(&self, lhs: &mut Self::X, rhs: Self::X) {
+        *lhs += rhs;
+    }
+
+    fn sub_assign(&self, lhs: &mut Self::X, rhs: Self::X) {
+        *lhs -= rhs;
     }
 }
 
-#[derive(Clone, Copy)]
-struct LightTreeAgg([i32; 2]);
+// A compressed chain, as an action acting on a chain top's parent node.
+#[derive(Clone, Debug)]
+struct LightEdgeData {
+    prefix_count: i32,
+}
 
-impl LightTreeAgg {
-    fn zero() -> Self {
-        Self([0; 2])
+impl LightEdgeData {
+    fn id() -> Self {
+        Self { prefix_count: 0 }
     }
 
-    fn pull_from(&mut self, light: &ChainAgg, inv: bool) {
-        let collapsed: [_; 2] = std::array::from_fn(|i| light.0[i][0].min(light.0[i][1]));
-        let delta = [
-            collapsed[0].min(collapsed[1] + 1),
-            collapsed[1].min(collapsed[0] + 1),
-        ];
+    // Invertible rake operation
+    fn combine(&mut self, other: &Self, inv: bool) {
         if !inv {
-            self.0 = [self.0[0] + delta[0], self.0[1] + delta[1]];
+            self.prefix_count += other.prefix_count;
         } else {
-            self.0 = [self.0[0] - delta[0], self.0[1] - delta[1]];
+            self.prefix_count -= other.prefix_count;
         }
     }
 
-    fn push_up(&self, heavy: &mut ChainAgg) {
-        if heavy.0[0][0] != INF {
-            heavy.0[0][0] = self.0[0];
-        }
-        if heavy.0[1][1] != INF {
-            heavy.0[1][1] = self.0[1];
-        }
+    fn lifted(count_heavy: &[FenwickTree<Additive>], color: usize, chain: Range<usize>) -> Self {
+        let Range { start, end } = chain;
+
+        let dual = 1 - color;
+        let base = count_heavy[dual].sum_prefix(start);
+        let prefix = count_heavy[dual]
+            .partition_point_prefix(|&sum| sum <= base)
+            .min(end)
+            .max(start);
+        let prefix_count = count_heavy[color].sum_range(start..prefix);
+
+        Self { prefix_count }
+    }
+
+    fn apply(
+        &self,
+        count_in_chain: &FenwickTree<Additive>,
+        count_heavy: &mut FenwickTree<Additive>,
+        u: usize,
+    ) {
+        let old = count_heavy.get(u);
+        let new = if count_in_chain.get(u) != 0 {
+            1 + self.prefix_count
+        } else {
+            0
+        };
+        count_heavy.add(u, new - old);
     }
 }
+
 fn main() {
     let mut input = fast_io::stdin_int();
     let mut output = fast_io::stdout();
@@ -488,62 +506,120 @@ fn main() {
     let n = input.u32() as usize;
     let edges = (0..n - 1).map(|_| (input.u32() - 1, input.u32() - 1));
     let root = 0;
-    let hld = hld::PathHLD::from_edges(n, edges, root, false);
+    let hld = hld::HLD::from_edges(n, edges, root, false);
     let sid = |u: usize| hld.segmented_idx[u] as usize;
-    let idx_in_chain = |u: usize| sid(u) - sid(hld.chain_top[u] as usize);
-    let chain_len = |u: usize| {
-        let top = hld.chain_top[u] as usize;
-        let bottom = hld.chain_bottom[u] as usize;
-        sid(bottom) - sid(top) + 1
-    };
 
-    let mut buffer = vec![MaybeUninit::uninit(); 4 * n];
-    let mut view = buffer.as_mut_slice();
-    let mut dp_heavy: Vec<_> = (0..n).map(|_| MaybeUninit::uninit()).collect();
-    for u in 0..n {
-        if u != hld.chain_top[u] as usize {
+    let mut count_in_chain = vec![
+        FenwickTree::from_iter((0..n).map(|_| 1), Additive),
+        FenwickTree::new(n, Additive),
+    ]; // Track connectivity of a path
+    let mut count_heavy = vec![FenwickTree::new(n, Additive); 2];
+    let mut action_upward = vec![vec![LightEdgeData::id(); n]; 2];
+    let mut action_agg = vec![vec![LightEdgeData::id(); n]; 2];
+    for &u in &hld.topological_order[..n - 1] {
+        if u != hld.chain_top[u as usize] {
             continue;
         }
-        let (tree, view_rest) = SegTree::new_in(chain_len(u), ChainOp, view).unwrap();
-        view = view_rest;
-        dp_heavy[u] = MaybeUninit::new(tree);
+        let p = hld.parent[u as usize];
+        action_upward[0][u as usize] = {
+            LightEdgeData {
+                prefix_count: hld.size[u as usize] as i32,
+            }
+        };
+        action_agg[0][p as usize].combine(&action_upward[0][u as usize], false);
+    }
+    for u in 0..n {
+        action_agg[0][u].apply(&count_in_chain[0], &mut count_heavy[0], sid(u));
     }
 
-    let mut dp_light = vec![LightTreeAgg::zero(); n];
-
     for _ in 0..input.u32() {
-        let mut color = Some(input.u32() as u8);
-        let mut u = input.u32() as usize - 1;
+        match input.u32() {
+            1 => {
+                let mut u = input.u32() as usize - 1;
 
-        let update_heavy = |heavy: &mut ChainAgg, light: LightTreeAgg, color: &mut Option<u8>| {
-            if let Some(color) = color.take() {
-                *heavy = ChainAgg::singleton(color)
+                // Update vertex data
+                for color in 0..2 {
+                    let old = count_in_chain[color].get(sid(u));
+                    let new = 1 - old;
+                    count_in_chain[color].add(sid(u), new - old);
+                    action_agg[color][u].apply(
+                        &count_in_chain[color],
+                        &mut count_heavy[color],
+                        sid(u),
+                    );
+                }
+
+                // Ascend to the root, and update light edge data
+                loop {
+                    let top = hld.chain_top[u] as usize;
+                    if top == root {
+                        break;
+                    }
+                    let p = hld.parent[top] as usize;
+                    let bottom = hld.chain_bottom[u] as usize;
+
+                    for color in 0..2 {
+                        action_agg[color][p].combine(&action_upward[color][top], true);
+                        action_upward[color][top] =
+                            LightEdgeData::lifted(&count_heavy, color, sid(top)..sid(bottom) + 1);
+                        action_agg[color][p].combine(&action_upward[color][top], false);
+                        action_agg[color][p].apply(
+                            &count_in_chain[color],
+                            &mut count_heavy[color],
+                            sid(p),
+                        );
+                    }
+                    u = p;
+                }
             }
-            light.push_up(heavy);
-        };
+            2 => {
+                let mut u = input.u32() as usize - 1;
+                let color = (count_in_chain[0].sum_range(sid(u)..sid(u) + 1) == 0) as usize;
+                let dual = 1 - color;
 
-        loop {
-            let top = hld.chain_top[u] as usize;
-            if top == root {
-                break;
+                // Ascend through the connected connected component of u, to find a node in the topmost chain
+                loop {
+                    let top = hld.chain_top[u] as usize;
+                    if top == root {
+                        break;
+                    }
+                    let p = hld.parent[top] as usize;
+
+                    let prefix_len = sid(u) - sid(top) + 2;
+                    let prefix_count = count_in_chain[color].sum_range(sid(top)..sid(u) + 1)
+                        + count_in_chain[color].sum_range(sid(p)..sid(p) + 1);
+                    if prefix_len != prefix_count as usize {
+                        break;
+                    }
+                    u = hld.parent[top] as usize;
+                }
+
+                let su = sid(u);
+                let s_top = sid(hld.chain_top[u] as usize);
+                let s_bottom = sid(hld.chain_bottom[u] as usize);
+
+                debug_assert!(count_in_chain[color].sum_range(su..su + 1) != 0);
+                debug_assert!(count_in_chain[dual].sum_range(su..su + 1) == 0);
+
+                let base = count_in_chain[dual].sum_prefix(su);
+                let left = if base == 0 {
+                    0
+                } else {
+                    (count_in_chain[dual].partition_point_prefix(|&sum| sum < base) + 1)
+                        .max(s_top)
+                        .min(su)
+                };
+
+                let base = count_in_chain[dual].sum_prefix(su + 1);
+                let right = count_in_chain[dual]
+                    .partition_point_prefix(|&sum| sum <= base)
+                    .max(su + 1)
+                    .min(s_bottom + 1);
+
+                let ans = count_heavy[color].sum_range(left..right);
+                writeln!(output, "{}", ans).unwrap();
             }
-            let p = hld.parent[top] as usize;
-
-            let chain = unsafe { dp_heavy[top].assume_init_mut() };
-            dp_light[p].pull_from(chain.query_all(), true);
-            chain.modify(idx_in_chain(u), |h| {
-                update_heavy(h, dp_light[u], &mut color)
-            });
-            dp_light[p].pull_from(chain.query_all(), false);
-
-            u = p;
+            _ => panic!(),
         }
-        let top = root;
-        let chain = unsafe { dp_heavy[top].assume_init_mut() };
-        chain.modify(idx_in_chain(u), |h| {
-            update_heavy(h, dp_light[u], &mut color)
-        });
-        let ans = chain.query_all().min_cost();
-        writeln!(output, "{}", ans).unwrap();
     }
 }

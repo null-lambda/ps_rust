@@ -2,7 +2,7 @@ pub mod segtree {
     use std::{iter, ops::Range};
 
     pub trait Monoid {
-        type Elem;
+        type X;
         fn id(&self) -> Self::X;
         fn combine(&self, a: &Self::X, b: &Self::X) -> Self::X;
     }
@@ -28,8 +28,10 @@ pub mod segtree {
 
         pub fn from_iter<I>(iter: I, monoid: M) -> Self
         where
-            I: ExactSizeIterator<Item = M::X>,
+            I: IntoIterator<Item = M::X>,
+            I::IntoIter: ExactSizeIterator,
         {
+            let iter = iter.into_iter();
             let n = iter.len();
             let mut sum: Vec<_> = (0..n)
                 .map(|_| monoid.id())
