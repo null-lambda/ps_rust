@@ -1,169 +1,3 @@
-use std::io::Write;
-
-mod fast_io {
-    use std::fs::File;
-    use std::io::BufWriter;
-    use std::os::unix::io::FromRawFd;
-
-    pub struct InputAtOnce {
-        _buf: &'static str,
-        iter: std::str::SplitAsciiWhitespace<'static>,
-    }
-
-    impl InputAtOnce {
-        pub fn token(&mut self) -> &'static str {
-            self.iter.next().unwrap_or_default()
-        }
-
-        pub fn value<T: std::str::FromStr>(&mut self) -> T
-        where
-            T::Err: std::fmt::Debug,
-        {
-            self.token().parse().unwrap()
-        }
-    }
-
-    extern "C" {
-        fn mmap(addr: usize, length: usize, prot: i32, flags: i32, fd: i32, offset: i64)
-            -> *mut u8;
-        fn fstat(fd: i32, stat: *mut usize) -> i32;
-    }
-
-    pub fn stdin() -> InputAtOnce {
-        let mut stat = [0; 18];
-        unsafe { fstat(0, (&mut stat).as_mut_ptr()) };
-        let _buf = unsafe { mmap(0, stat[6], 1, 2, 0, 0) };
-        let _buf =
-            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(_buf, stat[6])) };
-        let iter = _buf.split_ascii_whitespace();
-        InputAtOnce { _buf, iter }
-    }
-
-    pub fn stdout() -> BufWriter<File> {
-        let stdout = unsafe { File::from_raw_fd(1) };
-        BufWriter::with_capacity(1 << 16, stdout)
-    }
-
-    pub struct IntScanner {
-        buf: &'static [u8],
-    }
-
-    impl IntScanner {
-        fn skip(&mut self) {
-            loop {
-                match self.buf {
-                    &[..=b' ', ..] => self.buf = &self.buf[1..],
-                    _ => break,
-                }
-            }
-        }
-
-        fn u32_noskip(&mut self) -> u32 {
-            let mut acc = 0;
-            loop {
-                match self.buf {
-                    &[b'0'..=b'9', ..] => acc = acc * 10 + (self.buf[0] - b'0') as u32,
-                    _ => break,
-                }
-                self.buf = &self.buf[1..];
-            }
-            acc
-        }
-
-        pub fn u32(&mut self) -> u32 {
-            self.skip();
-            self.u32_noskip()
-        }
-
-        pub fn i32(&mut self) -> i32 {
-            self.skip();
-            match self.buf {
-                &[b'-', ..] => {
-                    self.buf = &self.buf[1..];
-                    -(self.u32_noskip() as i32)
-                }
-                _ => self.u32_noskip() as i32,
-            }
-        }
-    }
-
-    pub fn stdin_int() -> IntScanner {
-        let mut stat = [0; 18];
-        unsafe { fstat(0, (&mut stat).as_mut_ptr()) };
-        let buf = unsafe { mmap(0, stat[6], 1, 2, 0, 0) };
-        let buf =
-            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(buf, stat[6])) };
-        IntScanner {
-            buf: buf.as_bytes(),
-        }
-    }
-}
-
-mod dset {
-    use core::{cell::Cell, mem};
-
-    pub struct DisjointSet {
-        // Represents parent if >= 0, size if < 0
-        parent_or_size: Vec<Cell<i32>>,
-    }
-
-    impl DisjointSet {
-        pub fn new(n: usize) -> Self {
-            Self {
-                parent_or_size: vec![Cell::new(-1); n],
-            }
-        }
-
-        fn get_parent_or_size(&self, u: usize) -> Result<usize, u32> {
-            let x = self.parent_or_size[u].get();
-            if x >= 0 {
-                Ok(x as usize)
-            } else {
-                Err((-x) as u32)
-            }
-        }
-
-        fn set_parent(&self, u: usize, p: usize) {
-            self.parent_or_size[u].set(p as i32);
-        }
-
-        fn set_size(&self, u: usize, s: u32) {
-            self.parent_or_size[u].set(-(s as i32));
-        }
-
-        pub fn find_root_with_size(&self, u: usize) -> (usize, u32) {
-            match self.get_parent_or_size(u) {
-                Ok(p) => {
-                    let (root, size) = self.find_root_with_size(p);
-                    self.set_parent(u, root);
-                    (root, size)
-                }
-                Err(size) => (u, size),
-            }
-        }
-
-        pub fn find_root(&self, u: usize) -> usize {
-            self.find_root_with_size(u).0
-        }
-
-        // Returns true if two sets were previously disjoint
-        pub fn merge(&mut self, u: usize, v: usize) -> bool {
-            let (mut u, size_u) = self.find_root_with_size(u);
-            let (mut v, size_v) = self.find_root_with_size(v);
-            if u == v {
-                return false;
-            }
-
-            if size_u < size_v {
-                mem::swap(&mut u, &mut v);
-            }
-            self.set_parent(v, u);
-            self.set_size(u, size_u + size_v);
-            true
-        }
-    }
-}
-
 pub mod mst {
     use std::collections::BTreeMap;
 
@@ -261,10 +95,10 @@ pub mod mst {
     /// [https://cp-algorithms.com/geometry/manhattan-distance.html#farthest-pair-of-points-in-manhattan-distance]
     pub fn manhattan_mst_candidates(
         ps: impl IntoIterator<Item = (u32, u32)>,
-    ) -> Vec<(u32, u32, u32)> {
+        mut yield_edge: impl FnMut(u32, u32, u32),
+    ) {
         let mut ps: Vec<(i32, i32)> = ps.into_iter().map(|(x, y)| (x as i32, y as i32)).collect();
         let mut indices: Vec<_> = (0..ps.len() as u32).collect();
-        let mut edges = vec![];
 
         let dist = |(x1, y1): (i32, i32), (x2, y2): (i32, i32)| ((x1 - x2).abs() + (y1 - y2).abs());
 
@@ -286,7 +120,7 @@ pub mod mst {
                         ps[i as usize].0 >= ps[j as usize].0
                             && ps[i as usize].1 >= ps[j as usize].1
                     );
-                    edges.push((i, j, dist(ps[i as usize], ps[j as usize]) as u32));
+                    yield_edge(i, j, dist(ps[i as usize], ps[j as usize]) as u32);
                     to_remove.push(x);
                 }
                 for x in to_remove {
@@ -303,26 +137,5 @@ pub mod mst {
                 }
             }
         }
-
-        edges
     }
-}
-
-pub fn main() {
-    let mut input = fast_io::stdin_int();
-    let mut output = fast_io::stdout();
-
-    let _n = input.u32() as usize;
-    let k = input.u32() as usize;
-    let ps: Vec<(u32, u32)> = (0..k).map(|_| (input.u32(), input.u32())).collect();
-    let mut edges = mst::manhattan_mst_candidates(ps.iter().cloned());
-    let mut max_edge = 0;
-    mst::filter_kruskal(
-        &mut (k - 1),
-        &mut dset::DisjointSet::new(k),
-        &mut |_, _, w| max_edge = w,
-        &mut edges,
-    );
-    let ans = max_edge / 2;
-    writeln!(output, "{}", ans).unwrap();
 }
