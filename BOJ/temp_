@@ -1,0 +1,135 @@
+use std::{
+    collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet},
+    io::Write,
+};
+
+mod simple_io {
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
+fn get_two<T>(xs: &mut [T], i: usize, j: usize) -> Option<(&mut T, &mut T)> {
+    debug_assert!(i < xs.len() && j < xs.len());
+    if i == j {
+        return None;
+    }
+    let ptr = xs.as_mut_ptr();
+    Some(unsafe { (&mut *ptr.add(i), &mut *ptr.add(j)) })
+}
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    for _ in 0..input.value() {
+        let n: usize = input.value();
+        let m: usize = input.value();
+        let k: usize = input.value();
+
+        let mut residual_freq = vec![0; n + 2];
+        let mut freq = vec![BTreeMap::<i32, u32>::new(); n + 2];
+        for i in 1..=n {
+            for _ in 0..m {
+                let x = input.value::<i32>();
+                if x == -1 {
+                    residual_freq[i] += 1u32;
+                } else {
+                    *freq[i].entry(x).or_default() += 1;
+                }
+            }
+        }
+
+        let mut pq = BinaryHeap::new();
+        let mut current_coeff = vec![HashMap::<i32, u32>::new(); n + 2];
+        for i in 1..=n {
+            let upper = &freq[i - 1];
+            let lower = &freq[i + 1];
+
+            let upper_keys = upper.keys().copied().collect::<BTreeSet<_>>();
+            let lower_keys = lower.keys().copied().collect::<BTreeSet<_>>();
+
+            for &u in upper_keys.union(&lower_keys) {
+                let coeff = upper.get(&u).unwrap_or(&0) + lower.get(&u).unwrap_or(&0);
+                current_coeff[i].insert(u, coeff);
+                pq.push((coeff, i, u));
+            }
+        }
+
+        let mut total_residual_freq = residual_freq.iter().sum::<u32>();
+
+        while let Some((coeff, i, u)) = pq.pop() {
+            if total_residual_freq == 0 {
+                break;
+            }
+            if residual_freq[i] == 0 {
+                continue;
+            }
+            if current_coeff[i].get(&u) != Some(&coeff) {
+                continue;
+            }
+
+            residual_freq[i] -= 1;
+            total_residual_freq -= 1;
+
+            let f = freq[i].entry(u).or_default();
+            *f += 1;
+            pq.push((coeff, i, u));
+            if i > 1 {
+                let upper_coeff = freq[i - 2].get(&u).unwrap_or(&0) + freq[i].get(&u).unwrap_or(&0);
+                current_coeff[i - 1].insert(u, upper_coeff);
+                pq.push((upper_coeff, i - 1, u));
+            }
+            if i < n {
+                let lower_coeff = freq[i + 2].get(&u).unwrap_or(&0) + freq[i].get(&u).unwrap_or(&0);
+                current_coeff[i + 1].insert(u, lower_coeff);
+                pq.push((lower_coeff, i + 1, u));
+            }
+        }
+
+        assert!(total_residual_freq == 0);
+
+        println!("{:?}", freq);
+
+        let mut acc = 0u64;
+        for i in 1..=n - 1 {
+            let base = &freq[i];
+            let lower = &freq[i + 1];
+
+            let upper_keys = base.keys().copied().collect::<BTreeSet<_>>();
+            let lower_keys = lower.keys().copied().collect::<BTreeSet<_>>();
+
+            for &u in upper_keys.intersection(&lower_keys) {
+                let v1 = *base.get(&u).unwrap_or(&0);
+                let v2 = *lower.get(&u).unwrap_or(&0);
+                acc += v1 as u64 * v2 as u64;
+            }
+        }
+        writeln!(output, "{}", acc).unwrap();
+    }
+}

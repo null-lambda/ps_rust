@@ -92,8 +92,8 @@ pub mod reroot {
                     degree[p as usize] -= 1;
                     xor_neighbors[p as usize].0 ^= u as u32;
                     xor_assign_bytes(&mut xor_neighbors[p as usize].1, w_encoded);
-                    let w = unsafe { AsBytes::decode(w_encoded) };
-                    topological_order.push((u as u32, (p, w)));
+                    let w: E = unsafe { AsBytes::decode(w_encoded) };
+                    topological_order.push((u as u32, (p, w.clone())));
 
                     data[u as usize].finalize();
                     let (data_u, data_p) =

@@ -1,7 +1,7 @@
 #[macro_use]
 mod mem_static {
-    /// Note: If you can apply maximum optimization flags to the compiler, prefer using
-    /// vectors or stack-allocated arrays instead of static memory allocations.
+    /// Note: If you can apply maximum optimization flags to the compiler (e.g. opt-level=3),
+    /// prefer using vectors or stack-allocated arrays instead of static memory allocations.
     ///
     /// A wrapper around a statically allocated array (`static mut [T; N]`), providing a static bump allocator.
     /// This provides a safer interface than raw `static mut`, but does not guarantee UB-freeness.

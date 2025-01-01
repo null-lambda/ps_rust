@@ -8,7 +8,7 @@ pub mod simd {
     pub unsafe fn prefix_sum_exact_i32(xs: &mut [i32]) {
         assert_eq!(xs.len() % 4, 0);
 
-        let mut carry = _mm_set1_epi32(0);
+        let mut carry = _mm_set1_epi32(0); // carry = [0,0,0,0]
         for block in xs.chunks_exact_mut(4) {
             let mut x = _mm_loadu_si128(block.as_mut_ptr() as *const __m128i); // x=[a,b,c,d]
 
