@@ -1,99 +1,85 @@
 pub mod centroid {
-    // Centroid Decomposition
+    /// Centroid Decomposition
+    use crate::jagged::Jagged;
 
-    fn reroot_on_edge(size: &mut [u32], u: usize, p: usize) {
-        size[p] -= size[u];
-        size[u] += size[p];
-    }
-
-    fn find_centroid<E>(
-        neighbors: &[Vec<(u32, E)>],
+    pub fn init_size<'a, E: 'a>(
+        neighbors: &'a impl Jagged<'a, (u32, E)>,
         size: &mut [u32],
-        visited: &[bool],
-        n_half: u32,
-        path: &mut Vec<u32>,
-        u: usize,
-        p: usize,
-    ) -> usize {
-        path.push(u as u32);
-        for &(v, _) in &neighbors[u] {
-            if v as usize == p || visited[v as usize] {
-                continue;
-            }
-            if size[v as usize] > n_half {
-                reroot_on_edge(size, v as usize, u);
-                return find_centroid(neighbors, size, visited, n_half, path, v as usize, u);
-            }
-        }
-        u
-    }
-
-    fn update_size<E>(
-        neighbors: &[Vec<(u32, E)>],
-        size: &mut [u32],
-        visited: &[bool],
         u: usize,
         p: usize,
     ) {
         size[u] = 1;
-        for &(v, _) in &neighbors[u] {
-            if v as usize == p || visited[v as usize] {
+        for &(v, _) in neighbors.get(u) {
+            if v as usize == p {
                 continue;
             }
-            update_size(neighbors, size, visited, v as usize, u);
+            init_size(neighbors, size, v as usize, u);
             size[u] += size[v as usize];
         }
     }
 
-    pub fn init_size<E>(
-        neighbors: &[Vec<(u32, E)>],
+    fn reroot_to_centroid<'a, _E: 'a>(
+        neighbors: &'a impl Jagged<'a, (u32, _E)>,
         size: &mut [u32],
-        visited: &mut [bool],
-        init: usize,
-    ) {
-        update_size(neighbors, size, visited, init, init); // TODO
+        visited: &[bool],
+        mut u: usize,
+    ) -> usize {
+        let threshold = (size[u] + 1) / 2;
+        let mut p = u;
+        'outer: loop {
+            for &(v, _) in neighbors.get(u) {
+                if v as usize == p || visited[v as usize] {
+                    continue;
+                }
+                if size[v as usize] >= threshold {
+                    size[u] -= size[v as usize];
+                    size[v as usize] += size[u];
+
+                    p = u;
+                    u = v as usize;
+                    continue 'outer;
+                }
+            }
+            return u;
+        }
     }
 
-    pub fn dnc<E, F>(
-        neighbors: &[Vec<(u32, E)>],
+    pub fn dnc<'a, E: 'a + Clone>(
+        neighbors: &'a impl Jagged<'a, (u32, E)>,
         size: &mut [u32],
         visited: &mut [bool],
-        rooted_solver: &mut F,
+        yield_rooted_tree: &mut impl FnMut(&[u32], &[bool], usize),
         init: usize,
-    ) where
-        F: FnMut(&[Vec<(u32, E)>], &[u32], &[bool], usize),
-    {
-        println!("init: {:?}", size);
-
-        update_size(neighbors, size, visited, init, init);
-        let mut path = vec![];
-        let root = find_centroid(
-            neighbors,
-            size,
-            visited,
-            size[init] / 2,
-            &mut path,
-            init,
-            init,
-        );
-
+    ) {
+        let root = reroot_to_centroid(neighbors, size, visited, init);
         visited[root] = true;
-        rooted_solver(neighbors, size, visited, root);
-
-        for &(v, _) in &neighbors[root] {
+        yield_rooted_tree(size, visited, root);
+        for &(v, _) in neighbors.get(root) {
             if visited[v as usize] {
                 continue;
             }
-            dnc(neighbors, size, visited, rooted_solver, v as usize);
+            dnc(neighbors, size, visited, yield_rooted_tree, v as usize)
         }
+    }
 
-        loop {
-            match &path[..] {
-                [.., p, u] => reroot_on_edge(size, *p as usize, *u as usize),
-                _ => break,
+    pub fn build_centroid_tree<'a, _E: 'a + Clone>(
+        neighbors: &'a impl Jagged<'a, (u32, _E)>,
+        size: &mut [u32],
+        visited: &mut [bool],
+        parent_centroid: &mut [u32],
+        init: usize,
+    ) -> usize {
+        let root = reroot_to_centroid(neighbors, size, visited, init);
+        visited[root] = true;
+
+        for &(v, _) in neighbors.get(root) {
+            if visited[v as usize] {
+                continue;
             }
-            path.pop();
+            let sub_root =
+                build_centroid_tree(neighbors, size, visited, parent_centroid, v as usize);
+            parent_centroid[sub_root] = root as u32;
         }
-        path.clear();
+        root
     }
 }
