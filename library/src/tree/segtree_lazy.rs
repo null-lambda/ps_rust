@@ -4,19 +4,20 @@ pub mod segtree_lazy {
     pub trait MonoidAction {
         type X;
         type F;
+        const IS_X_COMMUTATIVE: bool = false; // TODO
         fn id(&self) -> Self::X;
         fn combine(&self, lhs: &Self::X, rhs: &Self::X) -> Self::X;
         fn id_action(&self) -> Self::F;
         fn combine_action(&self, lhs: &Self::F, rhs: &Self::F) -> Self::F;
-        fn apply_to_sum(&self, f: &Self::F, x_count: u32, x_sum: &Self::X) -> Self::X;
+        fn apply_to_sum(&self, f: &Self::F, x_count: u32, x_sum: &mut Self::X);
     }
 
     pub struct SegTree<M: MonoidAction> {
         n: usize,
         max_height: u32,
-        pub sum: Vec<M::X>,
-        pub lazy: Vec<M::F>,
-        pub ma: M,
+        sum: Vec<M::X>,
+        lazy: Vec<M::F>,
+        ma: M,
     }
 
     impl<M: MonoidAction> SegTree<M> {
@@ -30,10 +31,13 @@ pub mod segtree_lazy {
             }
         }
 
-        pub fn from_iter<I>(n: usize, iter: I, ma: M) -> Self
+        pub fn from_iter<I>(iter: I, ma: M) -> Self
         where
             I: IntoIterator<Item = M::X>,
+            I::IntoIter: ExactSizeIterator,
         {
+            let iter = iter.into_iter();
+            let n = iter.len();
             let mut sum: Vec<_> = (iter::repeat_with(|| ma.id()).take(n))
                 .chain(
                     iter.into_iter()
@@ -54,7 +58,7 @@ pub mod segtree_lazy {
         }
 
         fn apply(&mut self, idx: usize, width: u32, value: &M::F) {
-            self.sum[idx] = self.ma.apply_to_sum(&value, width, &self.sum[idx]);
+            self.ma.apply_to_sum(&value, width, &mut self.sum[idx]);
             if idx < self.n {
                 self.lazy[idx] = self.ma.combine_action(&value, &self.lazy[idx]);
             }
@@ -142,36 +146,41 @@ pub mod segtree_lazy {
             self.push_range(range);
             start += self.n;
             end += self.n;
-            let (mut result_left, mut result_right) = (self.ma.id(), self.ma.id());
-            while start < end {
-                if start & 1 != 0 {
-                    result_left = self.ma.combine(&result_left, &self.sum[start]);
+            if M::IS_X_COMMUTATIVE {
+                let mut result = self.ma.id();
+                while start < end {
+                    if start & 1 != 0 {
+                        result = self.ma.combine(&result, &self.sum[start]);
+                        start += 1;
+                    }
+                    if end & 1 != 0 {
+                        end -= 1;
+                        result = self.ma.combine(&result, &self.sum[end]);
+                    }
+                    start >>= 1;
+                    end >>= 1;
                 }
-                if end & 1 != 0 {
-                    result_right = self.ma.combine(&self.sum[end - 1], &result_right);
+                result
+            } else {
+                let (mut result_left, mut result_right) = (self.ma.id(), self.ma.id());
+                while start < end {
+                    if start & 1 != 0 {
+                        result_left = self.ma.combine(&result_left, &self.sum[start]);
+                    }
+                    if end & 1 != 0 {
+                        result_right = self.ma.combine(&self.sum[end - 1], &result_right);
+                    }
+                    start = (start + 1) >> 1;
+                    end >>= 1;
                 }
-                start = (start + 1) >> 1;
-                end >>= 1;
+                self.ma.combine(&result_left, &result_right)
             }
-
-            self.ma.combine(&result_left, &result_right)
         }
 
-        pub fn partition_point(&mut self, mut pred: impl FnMut(&M::X, u32) -> bool) -> usize {
-            let mut i = 1;
-            let mut width = self.n as u32;
-            while i < self.n {
-                width >>= 1;
-                let value = unsafe { &*(&self.lazy[i] as *const _) };
-                self.apply(i << 1, width, value);
-                self.apply(i << 1 | 1, width, value);
-                self.lazy[i] = self.ma.id_action();
-                i <<= 1;
-                if pred(&self.sum[i], width) {
-                    i |= 1;
-                }
-            }
-            i - self.n
+        pub fn query_all(&mut self) -> &M::X {
+            assert!(self.n.is_power_of_two());
+            self.push_down(self.n as u32, 1);
+            &self.sum[1]
         }
     }
 }
