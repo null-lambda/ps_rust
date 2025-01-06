@@ -1,3 +1,38 @@
+use std::io::Write;
+
+mod simple_io {
+    use std::string::*;
+
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
 pub mod segtree {
     use std::ops::Range;
 
@@ -112,4 +147,87 @@ pub mod segtree {
             self.mapped_sum_range(range, &self.monoid, |x| x.clone())
         }
     }
+}
+
+struct MaxOp;
+
+impl segtree::Monoid for MaxOp {
+    type X = u32;
+
+    fn id(&self) -> u32 {
+        u32::MIN
+    }
+    fn op(&self, a: &u32, b: &u32) -> u32 {
+        (*a).max(*b)
+    }
+}
+
+fn partition_point<P>(mut left: i64, mut right: i64, mut pred: P) -> i64
+where
+    P: FnMut(i64) -> bool,
+{
+    while left < right {
+        let mid = left + (right - left) / 2;
+        if pred(mid) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+    left
+}
+
+use std::{collections::HashMap, hash::Hash};
+
+fn compress_coord<T: Ord + Clone + Hash>(
+    xs: impl IntoIterator<Item = T>,
+) -> (Vec<T>, HashMap<T, u32>) {
+    let mut x_map: Vec<T> = xs.into_iter().collect();
+    x_map.sort_unstable();
+    x_map.dedup();
+
+    let x_map_inv = x_map
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(i, x)| (x, i as u32))
+        .collect();
+
+    (x_map, x_map_inv)
+}
+
+fn lis_prefix(xs: impl Iterator<Item = i64> + Clone, shift: i64) -> impl Iterator<Item = u32> {
+    let (_, x_inv) = compress_coord(xs.clone().flat_map(|x| [x, x + shift]));
+    let x_bound = x_inv.len();
+
+    let mut counter = segtree::SegTree::with_size(x_bound as usize, MaxOp);
+    xs.into_iter().map(move |x| {
+        let old_lis_len =
+            counter.sum_range(0..(x_inv[&(x + shift)] as usize + 1).min(x_bound)) as u32;
+        counter.modify(x_inv[&x] as usize, |v| *v = old_lis_len + 1);
+        old_lis_len + 1
+    })
+}
+
+pub fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    let n: usize = input.value();
+    let m: u32 = input.value();
+    let cs: Vec<i64> = (0..n).map(|_| input.value()).collect();
+    let c_max = *cs.iter().max().unwrap();
+    let c_min = *cs.iter().min().unwrap();
+
+    let satisfiable = |shift| {
+        let prefix = lis_prefix(cs.iter().copied(), shift);
+        let suffix = lis_prefix(cs.iter().copied().rev(), shift)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev();
+        suffix.zip(prefix).any(|(a, b)| a + b - 1 + m >= n as u32)
+    };
+
+    let ans = partition_point(0, c_max - c_min, |x| !satisfiable(x));
+    writeln!(output, "{}", ans).unwrap();
 }

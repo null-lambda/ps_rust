@@ -61,3 +61,20 @@ where
     }
     Err(left)
 }
+
+fn ternary_search<F, K>(mut left: i64, mut right: i64, mut f: F) -> i64
+where
+    K: Ord,
+    F: FnMut(&i64) -> K,
+{
+    while right - left > 3 {
+        let m1 = left + (right - left) / 3;
+        let m2 = right - (right - left) / 3;
+        if f(&m1) <= f(&m2) {
+            right = m2;
+        } else {
+            left = m1;
+        }
+    }
+    (left..=right).min_by_key(|&x| f(&x)).unwrap()
+}

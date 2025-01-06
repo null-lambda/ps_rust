@@ -1,3 +1,40 @@
+use std::io::Write;
+
+use segtree::Monoid;
+
+mod simple_io {
+    use std::string::*;
+
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
 pub mod segtree {
     use std::ops::Range;
 
@@ -112,4 +149,75 @@ pub mod segtree {
             self.mapped_sum_range(range, &self.monoid, |x| x.clone())
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MinPrefix {
+    sum: i32,
+    min_prefix: i32,
+}
+
+impl MinPrefix {
+    fn from_char(b: u8) -> Self {
+        match b {
+            b'(' => MinPrefix {
+                sum: 1,
+                min_prefix: 0,
+            },
+            b')' => MinPrefix {
+                sum: -1,
+                min_prefix: -1,
+            },
+            _ => panic!(),
+        }
+    }
+
+    fn flip_single(&self) -> Self {
+        MinPrefix {
+            sum: -self.sum,
+            min_prefix: (-self.sum).min(0),
+        }
+    }
+}
+
+struct MinPrefixMonoid;
+
+impl segtree::Monoid for MinPrefixMonoid {
+    type X = MinPrefix;
+    fn id(&self) -> Self::X {
+        MinPrefix {
+            sum: 0,
+            min_prefix: 0,
+        }
+    }
+    fn op(&self, a: &Self::X, b: &Self::X) -> Self::X {
+        MinPrefix {
+            sum: a.sum + b.sum,
+            min_prefix: a.min_prefix.min(a.sum + b.min_prefix),
+        }
+    }
+}
+
+pub fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    let s = input.token().as_bytes();
+    let n = s.len();
+    let mut tree = segtree::SegTree::from_iter(
+        (0..n.next_power_of_two()).map(|i| {
+            s.get(i)
+                .map_or(MinPrefixMonoid.id(), |&b| MinPrefix::from_char(b))
+        }),
+        MinPrefixMonoid,
+    );
+
+    let mut acc = 0;
+    for _ in 0..input.value() {
+        let u = input.value::<usize>() - 1;
+        tree.modify(u, |x| *x = x.flip_single());
+        let agg = tree.sum_all();
+        acc += (agg.sum == 0 && agg.min_prefix == 0) as i32;
+    }
+    writeln!(output, "{}", acc).unwrap();
 }
