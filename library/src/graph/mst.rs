@@ -1,6 +1,8 @@
 pub mod mst {
-    use super::dset::DisjointSet;
     use std::collections::BTreeMap;
+
+    use super::dset::DisjointSet;
+
     fn partition_in_place<T>(xs: &mut [T], mut pred: impl FnMut(&T) -> bool) -> usize {
         let n = xs.len();
         let mut i = 0;
@@ -13,7 +15,7 @@ pub mod mst {
         i
     }
 
-    fn kruskal_internal<E: Ord + Copy>(
+    pub fn kruskal<E: Ord + Copy>(
         remained_edges: &mut usize,
         dset: &mut DisjointSet,
         yield_mst_edge: &mut impl FnMut(u32, u32, E),
@@ -54,20 +56,19 @@ pub mod mst {
         edges: &mut [(u32, u32, E)],
     ) {
         // A heuristic. should be asymptotically O(V)
-        let threshold = (*remained_edges * 2).max(20);
+        let threshold = *remained_edges * 2;
         if edges.len() <= threshold {
-            kruskal_internal(remained_edges, dset, yield_mst_edge, edges);
+            kruskal(remained_edges, dset, yield_mst_edge, edges);
             return;
         }
 
         // Take the median as a pivot in O(n).
-        // The authors of Filter-Kruskal paper suggest optimizing via a sqrt N-sized random sample median.
         let pivot = edges.len() / 2;
         let (lower, mid, upper) = edges.select_nth_unstable_by_key(pivot, |&(_, _, w)| w);
-
         filter_kruskal(remained_edges, dset, yield_mst_edge, lower);
+
         {
-            // Inlined version of filter_kruskal_rec(.., &mut [*mid]);
+            // Inlined version of kruskal(.., &mut [*mid]);
             if *remained_edges == 0 {
                 return;
             }
@@ -95,42 +96,57 @@ pub mod mst {
         ps: impl IntoIterator<Item = (i32, i32)>,
         mut yield_edge: impl FnMut(u32, u32, i32),
     ) {
-        let mut ps: Vec<(i32, i32)> = ps.into_iter().map(|(x, y)| (x as i32, y as i32)).collect();
-        let mut indices: Vec<_> = (0..ps.len() as u32).collect();
+        let mut ps: Vec<_> = ps
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| (p, i as u32))
+            .collect();
 
+        let mut buffer = vec![];
+        ps.sort_unstable_by_key(|&((x, y), _)| x + y);
+        solve_half_quadrant(&mut buffer, &mut yield_edge, ps.iter().copied());
+        solve_half_quadrant(
+            &mut buffer,
+            &mut yield_edge,
+            ps.iter().map(|&((x, y), i)| ((y, x), i)),
+        );
+
+        ps.sort_unstable_by_key(|&((x, y), _)| y - x);
+        solve_half_quadrant(
+            &mut buffer,
+            &mut yield_edge,
+            ps.iter().map(|&((x, y), i)| ((-x, y), i)),
+        );
+        solve_half_quadrant(
+            &mut buffer,
+            &mut yield_edge,
+            ps.iter().map(|&((x, y), i)| ((y, -x), i)),
+        );
+    }
+
+    fn solve_half_quadrant(
+        buffer: &mut Vec<i32>,
+        mut yield_edge: impl FnMut(u32, u32, i32),
+        ps: impl IntoIterator<Item = ((i32, i32), u32)>,
+    ) {
+        let v = |(x, y)| x - y;
         let dist = |(x1, y1): (i32, i32), (x2, y2): (i32, i32)| ((x1 - x2).abs() + (y1 - y2).abs());
 
-        // Rotate by pi/4
-        let u = |(x, y)| x + y;
-        let v = |(x, y)| x - y;
-        for rot in 0..4 {
-            indices.sort_unstable_by_key(|&i| u(ps[i as usize]));
-            let mut active: BTreeMap<i32, u32> = BTreeMap::new();
-            for &i in &indices {
-                let mut to_remove = vec![];
-                for (&x, &j) in active.range(..=ps[i as usize].0).rev() {
-                    if v(ps[i as usize]) > v(ps[j as usize]) {
-                        break;
-                    }
-                    debug_assert!(
-                        ps[i as usize].0 >= ps[j as usize].0
-                            && ps[i as usize].1 >= ps[j as usize].1
-                    );
-                    yield_edge(i, j, dist(ps[i as usize], ps[j as usize]));
-                    to_remove.push(x);
-                }
-                for x in to_remove {
-                    active.remove(&x);
-                }
-                active.insert(ps[i as usize].0, i);
+        let to_remove = buffer;
+        let mut active: BTreeMap<i32, _> = BTreeMap::new();
+        for (pi, i) in ps {
+            to_remove.extend(
+                active
+                    .range(..=pi.0)
+                    .rev()
+                    .take_while(|&(_, &(pj, _))| v(pi) <= v(pj))
+                    .inspect(|&(_, &(pj, j))| yield_edge(i, j, dist(pi, pj)))
+                    .map(|(&x, _)| x),
+            );
+            for x in to_remove.drain(..) {
+                active.remove(&x);
             }
-            for p in ps.iter_mut() {
-                if rot % 2 == 1 {
-                    p.0 = -p.0;
-                } else {
-                    std::mem::swap(&mut p.0, &mut p.1);
-                }
-            }
+            active.insert(pi.0, (pi, i));
         }
     }
 }
