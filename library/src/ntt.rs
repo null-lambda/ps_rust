@@ -166,13 +166,17 @@ pub mod num_mod {
             }
 
             impl $type {
-                pub fn new(m: $single) -> Self {
+                pub const fn new(m: $single) -> Self {
                     debug_assert!(m % 2 == 1, "modulus must be coprime with 2");
                     let mut m_inv = $one;
                     let two = $one + $one;
-                    for _ in 0..$log2_exp {
+
+                    let mut iter = 0;
+                    while iter < $log2_exp {
                         m_inv = m_inv.wrapping_mul(two.wrapping_sub(m.wrapping_mul(m_inv)));
+                        iter += 1;
                     }
+
                     let r = m.wrapping_neg() % m;
                     let r2 = ((r as $double * r as $double % m as $double) as $single);
 
