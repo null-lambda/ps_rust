@@ -2,6 +2,8 @@ pub mod lca {
     // O(1) LCA with O(n) preprocessing
     // Farach-Colton and Bender algorithm
     // https://cp-algorithms.com/graph/lca_farachcoltonbender.html
+    //
+    // Note: Has a large constant factor, and is often slower than sparse tables or HLD.
     const UNSET: u32 = u32::MAX;
     const INF: u32 = u32::MAX;
 
