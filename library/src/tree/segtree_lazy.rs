@@ -182,5 +182,36 @@ pub mod segtree_lazy {
             self.push_down(self.n as u32, 1);
             &self.sum[1]
         }
+
+        // The following two lines are equivalent.
+        // partition_point(0, n, |i| pred(segtree.query_range(0..i+1)));
+        // segtree.partition_point_prefix(|prefix| pred(prefix));
+        pub fn partition_point_prefix(&mut self, mut pred: impl FnMut(&M::X) -> bool) -> usize {
+            assert!(self.n >= 1 && self.n.is_power_of_two());
+
+            let mut u = 1;
+            let mut width = self.n as u32;
+            let mut prefix = self.ma.id();
+
+            while u < self.n {
+                width >>= 1;
+                self.push_down(width, u);
+
+                let new_prefix = self.ma.combine(&prefix, &self.sum[u << 1]);
+                u = if pred(&new_prefix) {
+                    prefix = new_prefix;
+                    u << 1 | 1
+                } else {
+                    u << 1
+                };
+            }
+
+            let idx = u - self.n;
+            if pred(&self.ma.combine(&prefix, &self.sum[u])) {
+                idx + 1
+            } else {
+                idx
+            }
+        }
     }
 }
