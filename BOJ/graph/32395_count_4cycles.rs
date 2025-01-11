@@ -1,4 +1,3 @@
-
 use std::io::Write;
 
 mod simple_io {
