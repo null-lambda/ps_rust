@@ -1,3 +1,38 @@
+use std::io::Write;
+
+use num_mod_static::{ByU64, CommRing, NaiveModInt, PowBy};
+
+mod simple_io {
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
 pub mod num_mod_static {
     use std::ops::*;
 
@@ -465,4 +500,48 @@ pub mod ntt {
             k += 2;
         }
     }
+}
+
+const P: u64 = 998_244_353;
+const GEN: u64 = 3;
+type ModP = NaiveModInt<ByU64<P>>;
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    const K_MAX: usize = 200_000;
+    const X_BOUND: usize = (K_MAX * 2 + 1).next_power_of_two();
+    let proot = ModP::from(GEN).pow((P - 1) / X_BOUND as u64);
+    let proot_inv = proot.pow(P - 2);
+
+    let xs: Vec<_> = (0..3).map(|_| input.value::<i64>()).collect();
+    let k: u32 = input.value();
+    let _p: u32 = input.value();
+
+    let mut base = vec![ModP::zero(); X_BOUND];
+    base[..3].fill(ModP::from(3).pow(P - 2));
+    ntt::radix4(proot, &mut base);
+    for x in &mut base {
+        *x = x.pow(k);
+    }
+    ntt::radix4(proot_inv, &mut base);
+
+    let x_bound_inv = ModP::from(X_BOUND as u64).pow(P - 2);
+    for x in &mut base {
+        *x *= x_bound_inv;
+    }
+
+    let d_expected = |dx: i64| {
+        let mut acc = ModP::zero();
+        for i in 0..2 * k as usize + 1 {
+            acc += base[i] * ModP::from((i as i64 - dx.abs() - k as i64).abs() as u64);
+        }
+
+        acc
+    };
+
+    let ans = (d_expected(xs[0] - xs[1]) + d_expected(xs[1] - xs[2]) + d_expected(xs[2] - xs[0]))
+        * ModP::from(2).pow(P - 2);
+    writeln!(output, "{}", u64::from(ans)).unwrap();
 }
