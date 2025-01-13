@@ -1,3 +1,36 @@
+use std::{collections::HashSet, io::Write};
+
+mod simple_io {
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
 pub mod suffix_trie {
     // O(N) suffix array construction with suffix automaton
     // https://cp-algorithms.com/string/suffix-automaton.html#implementation
@@ -210,4 +243,58 @@ pub mod suffix_trie {
         }
         sa
     }
+}
+
+fn parse_char(b: u8) -> u8 {
+    b - b'a'
+}
+
+fn combine_bound(a: (u32, u32), b: (u32, u32)) -> (u32, u32) {
+    (a.0.min(b.0), a.1.max(b.1))
+}
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    let mut automaton = suffix_trie::SuffixAutomaton::new();
+    for b in input.token().bytes().map(parse_char) {
+        automaton.push(b);
+    }
+
+    let n_nodes = automaton.nodes.len();
+    let mut degree = vec![1; n_nodes];
+    for u in 1..n_nodes {
+        degree[automaton.nodes[u].rev_parent as usize] += 1;
+    }
+    degree[0] += 2;
+
+    const INF: u32 = 1 << 30;
+    let mut ans = 0u64;
+    let mut subtree_depth_bound = vec![(INF, 0); n_nodes];
+    for mut u in 0..n_nodes as u32 {
+        while degree[u as usize] == 1 {
+            let node = &automaton.nodes[u as usize];
+            let p = node.rev_parent;
+            degree[u as usize] -= 1;
+            degree[p as usize] -= 1;
+
+            let l0 = automaton.nodes[p as usize].rev_depth + 1;
+            let l1 = node.rev_depth;
+            if node.is_rev_terminal() {
+                subtree_depth_bound[u as usize] =
+                    combine_bound((l1, l1), subtree_depth_bound[u as usize]);
+            }
+            let delta = subtree_depth_bound[u as usize].1 - subtree_depth_bound[u as usize].0;
+            ans += l1.min(delta).saturating_sub(l0 - 1) as u64;
+
+            subtree_depth_bound[p as usize] = combine_bound(
+                subtree_depth_bound[p as usize],
+                subtree_depth_bound[u as usize],
+            );
+
+            u = p;
+        }
+    }
+    writeln!(output, "{}", ans).unwrap();
 }

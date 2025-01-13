@@ -1,11 +1,44 @@
-pub mod suffix_trie {
-    /// O(N) representation of a suffix trie using a suffix automaton.
-    /// References: https://cp-algorithms.com/string/suffix-automaton.html
+use std::io::Write;
 
-    pub type T = u8;
+mod simple_io {
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
+pub mod suffix_trie {
+    // O(N) suffix array construction with suffix automaton
+    // https://cp-algorithms.com/string/suffix-automaton.html#implementation
+
+    type T = u8;
 
     pub type NodeRef = u32;
-    pub const UNSET: NodeRef = 1 << 30;
+    pub const UNSET: NodeRef = !0 - 1; // Prevent overflow during an increment operation
 
     // HashMap-based transition table, for generic types
     // #[derive(Clone, Debug, Default)]
@@ -21,7 +54,8 @@ pub mod suffix_trie {
     //     }
     // }
 
-    // array-based transition table, for small set of alphabets.
+    // SmallMap-based transition table, for small set of alphabets.
+
     pub const N_ALPHABET: usize = 26;
 
     // Since the number of transition is O(N), Most transitions tables are slim.
@@ -76,14 +110,13 @@ pub mod suffix_trie {
 
     #[derive(Debug, Default)]
     pub struct Node {
-        /// DAWG of the string
+        // DAWG of the string
         pub children: TransitionTable,
 
-        /// Suffix tree of the reversed string (equivalent to the compressed trie of the reversed prefixes)
+        // Suffix tree of the reversed string
         pub rev_depth: u32,
         pub rev_parent: NodeRef,
 
-        /// An auxilary tag for the substring reconstruction
         pub first_endpos: u32,
     }
 
@@ -162,53 +195,47 @@ pub mod suffix_trie {
             }
         }
     }
+}
 
-    /// O(N) suffix array construction with suffix automaton
-    pub fn suffix_array<S>(s: &[S], mut f: impl FnMut(&S) -> T) -> Vec<u32> {
-        let mut automaton = SuffixAutomaton::new();
-        for b in s.iter().map(|b| f(b)).rev() {
-            automaton.push(b);
-        }
+fn parse_char(b: u8) -> u8 {
+    b - b'a'
+}
 
-        let n_nodes = automaton.nodes.len();
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
 
-        // Construct CSR of the suffix tree of reversed string
-        let mut head = vec![0u32; n_nodes + 1];
-        for u in 1..n_nodes {
-            head[1 + automaton.nodes[u].rev_parent as usize] += 1;
-        }
-        for u in 1..n_nodes {
-            head[u + 1] += head[u];
-        }
-        let mut cursor = head[..n_nodes].to_vec();
-
-        let mut rev_children = vec![(T::default(), 0u32); head[n_nodes] as usize];
-        for (u, node) in automaton.nodes.iter().enumerate().skip(1) {
-            let parent = &automaton.nodes[node.rev_parent as usize];
-            let b = &s[s.len() - 1 - (node.first_endpos - parent.rev_depth) as usize];
-
-            let p = node.rev_parent as usize;
-            rev_children[cursor[p] as usize] = (f(b), u as u32);
-            cursor[p] += 1;
-        }
-
-        // Inorder traversal
-        let mut stack = vec![(0, 0)];
-        let mut sa = Vec::with_capacity(s.len());
-        while let Some((u, iv)) = stack.pop() {
-            if iv == 0 {
-                rev_children[head[u] as usize..head[u + 1] as usize].sort_unstable();
-                let node = &automaton.nodes[u];
-                if node.is_rev_terminal() {
-                    sa.push(s.len() as u32 - node.rev_depth);
-                }
-            }
-            if iv < head[u + 1] - head[u] {
-                let (_c, v) = rev_children[head[u] as usize..][iv as usize];
-                stack.push((u, iv + 1));
-                stack.push((v as usize, 0));
-            }
-        }
-        sa
+    let mut automaton = suffix_trie::SuffixAutomaton::new();
+    for b in input.token().bytes().map(parse_char) {
+        automaton.push(b);
     }
+
+    let n_nodes = automaton.nodes.len();
+    let mut degree = vec![1; n_nodes];
+    for u in 1..n_nodes {
+        degree[automaton.nodes[u].rev_parent as usize] += 1;
+    }
+    degree[0] += 2;
+
+    let mut ans = 0u64;
+    let mut n_occurrences = vec![0; n_nodes];
+    for mut u in 0..n_nodes as u32 {
+        while degree[u as usize] == 1 {
+            let node = &automaton.nodes[u as usize];
+            let p = node.rev_parent;
+            degree[u as usize] -= 1;
+            degree[p as usize] -= 1;
+
+            if node.is_rev_terminal() {
+                n_occurrences[u as usize] += 1;
+            }
+
+            ans = ans.max(n_occurrences[u as usize] as u64 * node.rev_depth as u64);
+
+            n_occurrences[p as usize] += n_occurrences[u as usize];
+
+            u = p;
+        }
+    }
+    writeln!(output, "{}", ans).unwrap();
 }
