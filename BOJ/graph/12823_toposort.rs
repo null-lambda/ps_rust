@@ -21,7 +21,7 @@ mod simple_io {
         }
     }
 
-    pub fn stdin_at_once<'a>() -> InputAtOnce<'a> {
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
         let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
         let iter = _buf.split_ascii_whitespace();
         let iter = unsafe { std::mem::transmute(iter) };
@@ -142,83 +142,85 @@ pub mod jagged {
     }
 }
 
-fn cut_edges<'a>(
-    n: usize,
-    neighbors: &'a impl Jagged<'a, (u32, ())>,
-    init: usize,
-) -> Vec<(u32, u32)> {
-    let mut dfs_order = vec![0; n];
-    let mut low = vec![0; n];
-    let mut cut_edges = vec![];
+const INF: u32 = 1 << 30;
 
-    // let mut stack = vec![(init as u32, 0u32, init as u32)]; // u, iv, p
-
-    fn dfs<'a>(
-        neighbors: &'a impl Jagged<'a, (u32, ())>,
-        dfs_order: &mut Vec<u32>,
-        cut_edges: &mut Vec<(u32, u32)>,
-        low: &mut Vec<u32>,
-        timer: &mut u32,
-        u: u32,
-        p: u32,
-    ) {
-        if dfs_order[u as usize] != 0 {
-            low[p as usize] = low[p as usize].min(dfs_order[u as usize]);
-            return;
+// chunk_by in std >= 1.77
+fn group_by<T, P, F>(xs: &[T], mut pred: P, mut f: F)
+where
+    P: FnMut(&T, &T) -> bool,
+    F: FnMut(&[T]),
+{
+    let mut i = 0;
+    while i < xs.len() {
+        let mut j = i + 1;
+        while j < xs.len() && pred(&xs[j - 1], &xs[j]) {
+            j += 1;
         }
-
-        *timer += 1;
-        dfs_order[u as usize] = *timer;
-        low[u as usize] = *timer;
-        for &(v, ()) in neighbors.get(u as usize) {
-            if p == v {
-                continue;
-            }
-            dfs(neighbors, dfs_order, cut_edges, low, timer, v, u);
-        }
-
-        if low[u as usize] > dfs_order[p as usize] {
-            cut_edges.push((p, u));
-        }
-        low[p as usize] = low[p as usize].min(low[u as usize]);
+        f(&xs[i..j]);
+        i = j;
     }
-
-    dfs(
-        neighbors,
-        &mut dfs_order,
-        &mut cut_edges,
-        &mut low,
-        &mut 0,
-        init as u32,
-        init as u32,
-    );
-    cut_edges
 }
 
 fn main() {
-    let mut input = simple_io::stdin_at_once();
+    let mut input = simple_io::stdin();
     let mut output = simple_io::stdout();
 
     let n: usize = input.value();
     let m: usize = input.value();
     let mut edges = vec![];
+    let mut indegree = vec![0; n];
     for _ in 0..m {
         let u = input.value::<u32>() - 1;
         let v = input.value::<u32>() - 1;
         edges.push((u, (v, ())));
-        edges.push((v, (u, ())));
+        indegree[v as usize] += 1;
     }
-    let neighbors = jagged::CSR::from_assoc_list(n, &edges);
+    let children = jagged::CSR::from_assoc_list(n, &edges);
 
-    let mut cut_edges = cut_edges(n, &neighbors, 0);
-    writeln!(output, "{}", cut_edges.len()).unwrap();
-    for (u, v) in &mut cut_edges {
-        if u > v {
-            std::mem::swap(u, v);
+    let mut depth = vec![0u32; n];
+    let mut topological_order: Vec<_> = (0..n as u32)
+        .filter(|&u| indegree[u as usize] == 0)
+        .collect();
+    let mut timer = 0;
+    while let Some(&u) = topological_order.get(timer) {
+        timer += 1;
+        for &(v, ()) in children.get(u as usize) {
+            depth[v as usize] = depth[v as usize].max(depth[u as usize] + 1);
+
+            indegree[v as usize] -= 1;
+            if indegree[v as usize] == 0 {
+                topological_order.push(v);
+            }
         }
     }
-    cut_edges.sort_unstable();
-    for (u, v) in cut_edges {
-        writeln!(output, "{} {}", u + 1, v + 1).unwrap();
+
+    let mut critical = vec![false; n];
+    let mut alt_depth = 0;
+    group_by(
+        &topological_order,
+        |&u, &v| depth[u as usize] == depth[v as usize],
+        |group| {
+            if group.len() == 1 {
+                let u = group[0] as usize;
+                let d = depth[u];
+                if alt_depth <= d {
+                    critical[u] = true;
+                }
+            }
+            for &u in group {
+                let mut a = INF;
+                for &(v, ()) in children.get(u as usize) {
+                    a = a.min(depth[v as usize]);
+                }
+                alt_depth = alt_depth.max(a);
+            }
+        },
+    );
+
+    let ans: Vec<_> = (0..n as u32).filter(|&u| critical[u as usize]).collect();
+    writeln!(output, "{}", ans.len()).unwrap();
+    for u in ans {
+        write!(output, "{} ", u + 1).unwrap();
     }
+    writeln!(output).unwrap();
 }

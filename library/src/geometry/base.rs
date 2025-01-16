@@ -11,9 +11,7 @@ mod geometry {
         + Mul<Output = Self>
         + Neg<Output = Self>
         + PartialEq
-        + Eq
         + PartialOrd
-        + Ord
         + Default
     {
         fn zero() -> Self {
@@ -54,6 +52,10 @@ mod geometry {
         pub fn rot(self) -> Self {
             Point([-self[1], self[0]])
         }
+
+        pub fn map(self, f: impl FnMut(T) -> T) -> Self {
+            Point(self.0.map(f))
+        }
     }
 
     impl<T: Scalar> From<[T; 2]> for Point<T> {
@@ -75,12 +77,19 @@ mod geometry {
         }
     }
 
+    impl<T: Scalar> Neg for Point<T> {
+        type Output = Self;
+        fn neg(self) -> Self::Output {
+            Point(self.0.map(T::neg))
+        }
+    }
+
     macro_rules! impl_binop {
         ($trait:ident, $fn:ident) => {
             impl<T: Scalar> $trait for Point<T> {
                 type Output = Self;
                 fn $fn(self, other: Self) -> Self::Output {
-                    Point([self[0].$fn(other[0]), self[1].$fn(other[1])])
+                    Point(std::array::from_fn(|i| self[i].$fn(other[i])))
                 }
             }
         };
