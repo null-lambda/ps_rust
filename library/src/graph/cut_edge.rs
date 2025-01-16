@@ -1,45 +1,50 @@
-fn cut_edges<'a, _E: 'a, F>(neighbors: &'a impl Jagged<'a, (u32, _E)>, mut yield_edge: F)
-where
-    F: FnMut(u32, u32),
-{
-    const UNSET: u32 = u32::MAX;
-    let n = neighbors.len();
+fn cut_edges<'a>(
+    n: usize,
+    neighbors: &'a impl Jagged<'a, (u32, ())>,
+    init: usize,
+) -> Vec<(u32, u32)> {
+    let mut dfs_order = vec![0; n];
+    let mut low = vec![0; n];
+    let mut cut_edges = vec![];
 
-    fn rec<'a, _E: 'a>(
-        order: &mut [u32],
+    fn dfs<'a>(
+        neighbors: &'a impl Jagged<'a, (u32, ())>,
+        dfs_order: &mut Vec<u32>,
+        cut_edges: &mut Vec<(u32, u32)>,
+        low: &mut Vec<u32>,
         timer: &mut u32,
-        neighbors: &'a impl Jagged<'a, (u32, _E)>,
-        visit_edge: &mut impl FnMut(u32, u32),
         u: u32,
         p: u32,
-    ) -> u32 {
-        order[u as usize] = *timer;
+    ) {
+        if dfs_order[u as usize] != 0 {
+            low[p as usize] = low[p as usize].min(dfs_order[u as usize]);
+            return;
+        }
+
         *timer += 1;
-        let mut low_u = *timer;
-        for (v, _) in neighbors.get(u as usize) {
-            let v = *v;
+        dfs_order[u as usize] = *timer;
+        low[u as usize] = *timer;
+        for &(v, ()) in neighbors.get(u as usize) {
             if p == v {
                 continue;
             }
-            if order[v as usize] != 0 {
-                low_u = low_u.min(order[v as usize]);
-            } else {
-                let low_v = rec(order, timer, neighbors, visit_edge, v, u);
-                if low_v > order[u as usize] {
-                    visit_edge(u, v);
-                }
-                low_u = low_u.min(low_v);
-            }
+            dfs(neighbors, dfs_order, cut_edges, low, timer, v, u);
         }
-        low_u
+
+        if low[u as usize] > dfs_order[p as usize] {
+            cut_edges.push((p, u));
+        }
+        low[p as usize] = low[p as usize].min(low[u as usize]);
     }
 
-    rec(
-        &mut vec![0; n],
-        &mut 1,
+    dfs(
         neighbors,
-        &mut yield_edge,
-        0,
-        UNSET,
+        &mut dfs_order,
+        &mut cut_edges,
+        &mut low,
+        &mut 0,
+        init as u32,
+        init as u32,
     );
+    cut_edges
 }
