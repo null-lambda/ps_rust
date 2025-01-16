@@ -76,7 +76,7 @@ pub mod segtree_wide {
     }
 
     impl<const B: usize> SegTree<B> {
-        pub fn new(n: usize) -> Self {
+        pub fn with_size(n: usize) -> Self {
             assert!(B >= 2 && B.is_power_of_two());
             let max_height = height::<B>(n);
             Self {
@@ -87,7 +87,8 @@ pub mod segtree_wide {
             }
         }
 
-        pub fn add(&mut self, mut idx: usize, value: X) {
+        #[target_feature(enable = "avx2")] // Required. __mm256 has significant performance benefits over __m128.
+        unsafe fn add_avx2(&mut self, mut idx: usize, value: X) {
             debug_assert!(idx < self.n);
             for (_, offset) in self.offsets.iter().enumerate() {
                 let block = &mut self.sum[offset + round::<B>(idx)..];
@@ -95,6 +96,12 @@ pub mod segtree_wide {
                     *b += value & m;
                 }
                 idx >>= log::<B>();
+            }
+        }
+
+        pub fn add(&mut self, idx: usize, value: X) {
+            unsafe {
+                self.add_avx2(idx, value);
             }
         }
 
