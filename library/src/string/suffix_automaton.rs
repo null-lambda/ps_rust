@@ -74,7 +74,7 @@ pub mod suffix_trie {
         }
     }
 
-    #[derive(Debug, Default)]
+    #[derive(Debug, Default, Clone)]
     pub struct Node {
         /// DAWG of the string
         pub children: TransitionTable,
@@ -138,11 +138,8 @@ pub mod suffix_trie {
                         self.nodes[u as usize].rev_parent = c;
                     } else {
                         let c_cloned = self.alloc(Node {
-                            children: self.nodes[c as usize].children.clone(),
-                            rev_parent: self.nodes[c as usize].rev_parent,
                             rev_depth: self.nodes[p as usize].rev_depth + 1,
-
-                            first_endpos: self.nodes[c as usize].first_endpos,
+                            ..self.nodes[c as usize].clone()
                         });
 
                         self.nodes[u as usize].rev_parent = c_cloned;
@@ -163,7 +160,6 @@ pub mod suffix_trie {
         }
     }
 
-    /// O(N) suffix array construction with suffix automaton
     pub fn suffix_array<S>(s: &[S], mut f: impl FnMut(&S) -> T) -> Vec<u32> {
         let mut automaton = SuffixAutomaton::new();
         for b in s.iter().map(|b| f(b)).rev() {
@@ -172,7 +168,7 @@ pub mod suffix_trie {
 
         let n_nodes = automaton.nodes.len();
 
-        // Construct CSR of the suffix tree of reversed string
+        // Construct CSR of the suffix tree
         let mut head = vec![0u32; n_nodes + 1];
         for u in 1..n_nodes {
             head[1 + automaton.nodes[u].rev_parent as usize] += 1;
