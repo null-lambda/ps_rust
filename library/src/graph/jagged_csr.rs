@@ -7,7 +7,7 @@ pub mod jagged {
     pub trait Jagged<'a, T: 'a> {
         type ItemRef: ExactSizeIterator<Item = &'a T>;
         fn len(&self) -> usize;
-        fn get(&'a self, u: usize) -> Self::ItemRef;
+        fn get(&'a self, u: usize) -> &'a [T];
     }
 
     impl<'a, T, C> Jagged<'a, T> for C
@@ -19,9 +19,8 @@ pub mod jagged {
         fn len(&self) -> usize {
             <Self as AsRef<[Vec<T>]>>::as_ref(self).len()
         }
-        fn get(&'a self, u: usize) -> Self::ItemRef {
-            let res = <Self as AsRef<[Vec<T>]>>::as_ref(self)[u].iter();
-            res
+        fn get(&'a self, u: usize) -> &'a [T] {
+            &self.as_ref()[u]
         }
     }
 
@@ -38,7 +37,9 @@ pub mod jagged {
         T: Debug,
     {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            let v: Vec<Vec<&T>> = (0..self.len()).map(|i| self.get(i).collect()).collect();
+            let v: Vec<Vec<&T>> = (0..self.len())
+                .map(|i| self.get(i).iter().collect())
+                .collect();
             v.fmt(f)
         }
     }
@@ -101,8 +102,8 @@ pub mod jagged {
             self.head.len() - 1
         }
 
-        fn get(&'a self, u: usize) -> Self::ItemRef {
-            self.data[self.head[u] as usize..self.head[u + 1] as usize].iter()
+        fn get(&'a self, u: usize) -> &'a [T] {
+            &self.data[self.head[u] as usize..self.head[u + 1] as usize]
         }
     }
 }
