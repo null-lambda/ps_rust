@@ -1,4 +1,4 @@
-fn gen_scc(neighbors: &Jagged<u32>) -> (usize, Vec<u32>) {
+fn gen_scc<'a>(neighbors: &'a impl jagged::Jagged<'a, u32>) -> (usize, Vec<u32>) {
     // Tarjan algorithm, iterative
     let n = neighbors.len();
 
@@ -35,11 +35,11 @@ fn gen_scc(neighbors: &Jagged<u32>) -> (usize, Vec<u32>) {
                 path_stack.push(u);
             }
 
-            if iv < neighbors[u as usize].len() as u32 {
+            if iv < neighbors.get(u as usize).len() as u32 {
                 // Iterate neighbors
                 dfs_stack.push((u, iv + 1));
 
-                let v = neighbors[u as usize][iv as usize];
+                let v = neighbors.get(u as usize)[iv as usize];
                 if order[v as usize] == 0 {
                     dfs_stack.push((u, v | UPDATE_LOW_LINK));
                     dfs_stack.push((v, 0));
@@ -104,7 +104,7 @@ impl TwoSat {
 
     pub fn solve(&self) -> Option<Vec<bool>> {
         let (scc_count, scc_index) =
-            gen_scc(&Jagged::from_assoc_list(self.n_props * 2, &self.edges));
+            gen_scc(&jagged::CSR::from_assoc_list(self.n_props * 2, &self.edges));
 
         let mut scc = vec![vec![]; scc_count];
         for (i, &scc_idx) in scc_index.iter().enumerate() {

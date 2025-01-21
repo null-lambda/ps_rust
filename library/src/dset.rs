@@ -33,10 +33,6 @@ mod dset {
         pub fn find_root_with_size(&self, u: usize) -> (usize, u32) {
             match self.get_parent_or_size(u) {
                 Ok(p) => {
-                    // In most cases, (e.g. in the context of Kruskal MST of dense graphs)
-                    // the path to the root is already compressed.
-                    super::branch::likely(true);
-
                     let (root, size) = self.find_root_with_size(p);
                     self.set_parent(u, root);
                     (root, size)
