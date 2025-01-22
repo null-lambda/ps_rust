@@ -1,5 +1,9 @@
-const UNSET: u32 = u32::MAX;
-fn bipartite_match(n: usize, m: usize, neighbors: &Jagged<u32>) -> [Vec<u32>; 2] {
+const UNSET: u32 = !0;
+fn bipartite_match<'a>(
+    n: usize,
+    m: usize,
+    neighbors: &'a impl jagged::Jagged<'a, u32>,
+) -> [Vec<u32>; 2] {
     // Hopcroft-Karp
     const INF: u32 = u32::MAX / 2;
 
@@ -17,7 +21,7 @@ fn bipartite_match(n: usize, m: usize, neighbors: &Jagged<u32>) -> [Vec<u32>; 2]
         }
 
         while let Some(u) = queue.pop_front() {
-            for &v in &neighbors[u as usize] {
+            for &v in neighbors.get(u as usize) {
                 let w = assignment[1][v as usize];
                 if w == UNSET || left_level[w as usize] != INF {
                     continue;
@@ -27,13 +31,13 @@ fn bipartite_match(n: usize, m: usize, neighbors: &Jagged<u32>) -> [Vec<u32>; 2]
             }
         }
 
-        fn dfs(
+        fn dfs<'a>(
             u: u32,
-            neighbors: &Jagged<u32>,
+            neighbors: &'a impl jagged::Jagged<'a, u32>,
             assignment: &mut [Vec<u32>; 2],
             left_level: &Vec<u32>,
         ) -> bool {
-            for &v in &neighbors[u as usize] {
+            for &v in neighbors.get(u as usize) {
                 let w = assignment[1][v as usize];
                 if w == UNSET
                     || left_level[w as usize] == left_level[u as usize] + 1
