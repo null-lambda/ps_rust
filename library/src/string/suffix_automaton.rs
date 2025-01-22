@@ -207,4 +207,27 @@ pub mod suffix_trie {
         }
         sa
     }
+
+    pub fn lcp_array<S>(s: &[S], mut f: impl FnMut(&S) -> T, suffix_array: &[u32]) -> Vec<u32> {
+        let n = s.len();
+        let mut rank = vec![0u32; n];
+        let mut lcp_len = vec![0u32; n];
+        for i in 0..n as u32 {
+            rank[suffix_array[i as usize] as usize] = i;
+        }
+
+        let mut k = 0;
+        for i in 0..n as u32 {
+            if rank[i as usize] == 0 {
+                continue;
+            }
+            let j = suffix_array[(rank[i as usize] - 1) as usize];
+            while k < n as u32 - i.max(j) && f(&s[(i + k) as usize]) == f(&s[(j + k) as usize]) {
+                k += 1;
+            }
+            lcp_len[rank[i as usize] as usize] = k;
+            k = k.saturating_sub(1);
+        }
+        lcp_len
+    }
 }
