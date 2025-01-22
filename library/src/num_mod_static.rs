@@ -339,7 +339,7 @@ pub mod num_mod_static {
 
         impl<M: ModSpec> CommRing for Montgomery<M> {
             fn one() -> Self {
-                todo!()
+                Self(1.into()) * Self(M::R2)
             }
         }
 
