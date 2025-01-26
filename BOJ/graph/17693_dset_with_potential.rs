@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::{cmp::Reverse, collections::BTreeSet, io::Write};
 
 use segtree::{Monoid, SegTree};
 
@@ -285,20 +285,6 @@ impl<T: Ord + Clone> Monoid for MinOp<T> {
     }
 }
 
-const P: u64 = 1_000_000_007;
-
-fn mod_pow(mut base: u64, mut exp: u64) -> u64 {
-    let mut res = 1;
-    while exp > 0 {
-        if exp & 1 == 1 {
-            res = res * base % P;
-        }
-        base = base * base % P;
-        exp >>= 1;
-    }
-    res
-}
-
 const INF: u32 = 1 << 30;
 const UNSET: u32 = 1 << 30;
 
@@ -307,42 +293,61 @@ fn main() {
     let mut output = simple_io::stdout();
 
     let n: usize = input.value();
-    let mut intervals: Vec<(u32, u32)> = (0..n).map(|_| (input.value(), input.value())).collect();
-    intervals.sort_unstable_by_key(|&(_, e)| e);
-    let mut dsu = dset::potential::DisjointSet::<bool>::with_size(n);
+    let k: usize = input.value();
+    let mut intervals: Vec<(u32, u32, _)> = (0..k)
+        .map(|u| (input.value(), input.value(), u as u32))
+        .collect();
+    // println!("{:?}", intervals);
+    intervals.sort_unstable_by_key(|&(s, e, _)| (e, Reverse(s)));
+    let mut dsu = dset::potential::DisjointSet::<bool>::with_size(k);
 
     let inf_entry = (INF, INF, UNSET);
-    let mut active = SegTree::with_size(2 * n + 1, MinOp { inf: inf_entry });
+    let mut active_min_s = SegTree::with_size(n + 1, MinOp { inf: inf_entry });
+    let mut active = vec![BTreeSet::new(); n + 1];
 
-    for u in 0..n {
-        let (su, eu) = intervals[u];
+    for u in 0..k {
+        let (su, eu, _) = intervals[u];
 
         let mut acc_dual = (INF, 0, UNSET);
         loop {
-            // Find all active intervals containing su (There are at most two, one for each parity,
-            // since each same-colored set of intervals is disjoint.)
-            let (sv, ev, v) = active.sum_range(su as usize..2 * n + 1);
-            if sv > su {
+            let (sv, ev, v) = active_min_s.sum_range(su as usize + 1..eu as usize);
+            if sv >= su {
                 break;
             }
             match dsu.merge(u, v as usize, true) {
                 Ok(_) => {
-                    active.modify(ev as usize, |x| *x = inf_entry);
+                    active[ev as usize].remove(&(sv, ev, v));
+                    active_min_s.modify(ev as usize, |x| {
+                        *x = *active[ev as usize].first().unwrap_or(&inf_entry)
+                    });
                     acc_dual = (acc_dual.0.min(sv), acc_dual.1.max(ev), v);
                 }
                 Err(()) => {
-                    writeln!(output, "0").unwrap();
+                    writeln!(output, "NIE").unwrap();
                     return;
                 }
             }
         }
 
-        active.modify(eu as usize, |x| *x = (su, eu, u as u32));
+        active[eu as usize].insert((su, eu, u as u32));
+        active_min_s.modify(eu as usize, |x| {
+            *x = *active[eu as usize].first().unwrap_or(&inf_entry)
+        });
         if acc_dual.2 != UNSET {
-            active.modify(acc_dual.1 as usize, |x| *x = acc_dual);
+            active[acc_dual.1 as usize].insert(acc_dual);
+            active_min_s.modify(acc_dual.1 as usize, |x| {
+                *x = *active[acc_dual.1 as usize].first().unwrap_or(&inf_entry)
+            });
         }
     }
 
-    let n_components = (0..n).filter(|&u| dsu.find_root(u) == u).count() as u64;
-    writeln!(output, "{}", mod_pow(2, n_components)).unwrap();
+    let mut ans = vec![false; k];
+    for u in 0..k {
+        let (_, _, i) = intervals[u];
+        ans[i as usize] = dsu.find_root_with_size(u).1;
+    }
+
+    for a in ans {
+        writeln!(output, "{}", if a { 'S' } else { 'N' }).unwrap();
+    }
 }
