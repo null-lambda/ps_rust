@@ -1,3 +1,36 @@
+use std::{io::Write, mem::MaybeUninit};
+
+mod simple_io {
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
 pub mod cht {
     use core::{num::NonZeroU32, ops::RangeInclusive};
 
@@ -13,6 +46,7 @@ pub mod cht {
         fn eval(&self, x: &Self::X) -> Self::Y;
     }
 
+    #[derive(Clone)]
     pub struct Line<V> {
         pub slope: V,
         pub intercept: V,
@@ -149,4 +183,110 @@ pub mod cht {
             }
         }
     }
+}
+
+struct NodeAgg {
+    lines: Vec<cht::Line<i64>>,
+    neg_hull: cht::LiChaoTree<cht::Line<i64>>,
+    delta: i64,
+
+    min_cost: i64,
+}
+
+impl NodeAgg {
+    fn empty() -> Self {
+        Self {
+            lines: Vec::new(),
+            neg_hull: cht::LiChaoTree::new(0..=1_000_001),
+            delta: 0,
+            min_cost: 0,
+        }
+    }
+
+    fn finalize(&mut self, weight: i32) {
+        self.delta += self.min_cost;
+        if self.lines.is_empty() {
+            let l = cht::Line::new(-weight as i64, 0);
+            self.lines.push(l.clone());
+            self.neg_hull.insert(l);
+        }
+    }
+
+    fn pull_from(&mut self, weight: i32, mut child: Self) {
+        let child_arm = child.delta - child.neg_hull.eval(&(weight as i64));
+        self.min_cost += child_arm;
+        child.delta -= child_arm;
+
+        if self.lines.len() < child.lines.len() {
+            std::mem::swap(&mut self.lines, &mut child.lines);
+            std::mem::swap(&mut self.neg_hull, &mut child.neg_hull);
+            std::mem::swap(&mut self.delta, &mut child.delta);
+        }
+
+        let delta = child.delta - self.delta;
+        for mut l in child.lines {
+            l.intercept -= delta;
+            self.lines.push(l.clone());
+            self.neg_hull.insert(l);
+        }
+    }
+}
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    let n: usize = input.value();
+    let mut degree = vec![1u32; n];
+    let mut parents = vec![0];
+    for _ in 1..n {
+        let p = input.value::<u32>() - 1;
+        parents.push(p);
+        degree[p as usize] += 1;
+    }
+    degree[0] += 2;
+    let weights: Vec<i32> = (0..n).map(|_| input.value()).collect();
+
+    let mut dp: Vec<_> = (0..n).map(|_| MaybeUninit::new(NodeAgg::empty())).collect();
+    for mut u in 0..n as u32 {
+        while degree[u as usize] == 1 {
+            let p = parents[u as usize];
+            degree[p as usize] -= 1;
+            degree[u as usize] -= 1;
+
+            unsafe {
+                let mut dp_u =
+                    std::mem::replace(&mut dp[u as usize], MaybeUninit::uninit()).assume_init();
+                dp_u.finalize(weights[u as usize]);
+
+                {
+                    // print!("u = {}, min_cost: {} hull: ", u, dp_u.min_cost);
+                    // for x in 0..=10 {
+                    //     print!("{} ", dp_u.delta - dp_u.neg_hull.eval(&x));
+                    // }
+                    // println!();
+                }
+
+                dp[p as usize]
+                    .assume_init_mut()
+                    .pull_from(weights[p as usize], dp_u);
+            }
+
+            u = p;
+        }
+    }
+    let dp_root = unsafe { dp[0].assume_init_mut() };
+    dp_root.finalize(weights[0]);
+    let ans = dp_root.min_cost;
+    writeln!(output, "{}", ans).unwrap();
+
+    // {
+    //     let u = 0;
+    //     let dp_u = dp_root;
+    //     print!("u = {}, hull: ", u);
+    //     for x in 0..=10 {
+    //         print!("{} ", dp_u.delta - dp_u.neg_hull.eval(&x));
+    //     }
+    //     println!();
+    // }
 }

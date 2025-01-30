@@ -1,3 +1,103 @@
+use std::io::Write;
+
+use link_cut::{IntrusiveNode, Link, LinkCutForest, NodeSpec};
+
+mod fast_io {
+    use std::fs::File;
+    use std::io::BufWriter;
+    use std::os::unix::io::FromRawFd;
+
+    extern "C" {
+        fn mmap(addr: usize, length: usize, prot: i32, flags: i32, fd: i32, offset: i64)
+            -> *mut u8;
+        fn fstat(fd: i32, stat: *mut usize) -> i32;
+    }
+
+    pub struct InputAtOnce {
+        buf: &'static [u8],
+    }
+
+    impl InputAtOnce {
+        fn skip(&mut self) {
+            loop {
+                match self.buf {
+                    &[..=b' ', ..] => self.buf = &self.buf[1..],
+                    _ => break,
+                }
+            }
+        }
+
+        fn u32_noskip(&mut self) -> u32 {
+            let mut acc = 0;
+            loop {
+                match self.buf {
+                    &[b'0'..=b'9', ..] => acc = acc * 10 + (self.buf[0] - b'0') as u32,
+                    _ => break,
+                }
+                self.buf = &self.buf[1..];
+            }
+            acc
+        }
+
+        pub fn token(&mut self) -> &'static str {
+            self.skip();
+            let start = self.buf.as_ptr();
+            loop {
+                match self.buf {
+                    &[..=b' ', ..] => break,
+                    _ => self.buf = &self.buf[1..],
+                }
+            }
+            let end = self.buf.as_ptr();
+            unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    start,
+                    end.offset_from(start) as usize,
+                ))
+            }
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+
+        pub fn u32(&mut self) -> u32 {
+            self.skip();
+            self.u32_noskip()
+        }
+
+        pub fn i32(&mut self) -> i32 {
+            self.skip();
+            match self.buf {
+                &[b'-', ..] => {
+                    self.buf = &self.buf[1..];
+                    -(self.u32_noskip() as i32)
+                }
+                _ => self.u32_noskip() as i32,
+            }
+        }
+    }
+
+    pub fn stdin() -> InputAtOnce {
+        let mut stat = [0; 18];
+        unsafe { fstat(0, (&mut stat).as_mut_ptr()) };
+        let buf = unsafe { mmap(0, stat[6], 1, 2, 0, 0) };
+        let buf =
+            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(buf, stat[6])) };
+        InputAtOnce {
+            buf: buf.as_bytes(),
+        }
+    }
+
+    pub fn stdout() -> BufWriter<File> {
+        let stdout = unsafe { File::from_raw_fd(1) };
+        BufWriter::with_capacity(1 << 16, stdout)
+    }
+}
+
 pub mod link_cut {
     use std::{
         fmt::{self, Debug},
@@ -282,6 +382,135 @@ pub mod link_cut {
             self.reroot(path_top);
             self.access(path_bot);
             self.splay(path_top);
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct Node {
+    value: u32,
+    sum: u64,
+
+    next: u32,
+
+    link: Link,
+}
+
+impl Node {
+    pub fn new(value: u32, idx: u32) -> Self {
+        Self {
+            value,
+            sum: value as u64,
+            next: idx,
+            link: Link::default(),
+        }
+    }
+}
+
+impl IntrusiveNode for Node {
+    fn link(&self) -> &Link {
+        &self.link
+    }
+    fn link_mut(&mut self) -> &mut Link {
+        &mut self.link
+    }
+}
+
+impl NodeSpec for Node {
+    fn pull_up(&mut self, children: [Option<&mut Self>; 2]) {
+        self.sum = self.value as u64;
+        for child in children.iter().flatten() {
+            self.sum += child.sum;
+        }
+    }
+}
+
+fn main() {
+    let mut input = fast_io::stdin();
+    let mut output = fast_io::stdout();
+
+    let n: usize = input.value();
+    let q: usize = input.value();
+    let mut forest = LinkCutForest::<Node>::new();
+
+    let next: Vec<_> = (0..n).map(|_| input.u32() - 1).collect();
+    let xs: Vec<_> = (0..n).map(|_| input.u32()).collect();
+
+    let nodes: Vec<_> = (0..n)
+        .map(|u| forest.add_root(Node::new(xs[u], next[u])))
+        .collect();
+
+    for u in 0..n {
+        let e = nodes[next[u] as usize];
+        let u = nodes[u];
+        debug_assert!(forest.find_root(u) == u);
+
+        if forest.find_root(e) != u {
+            forest.link_root(e, u);
+        }
+    }
+
+    for _ in 0..q {
+        match input.token() {
+            "1" => {
+                let u = input.u32() - 1;
+                let next = input.u32() - 1;
+
+                let u = nodes[u as usize];
+                unsafe { forest.get_node_mut(u) }.next = next;
+                let next = nodes[next as usize];
+
+                let cycle_head = forest.find_root(u);
+                let cycle_tail = nodes[forest.get_node(cycle_head).next as usize];
+                let entry = forest.get_lca(u, cycle_tail);
+
+                if u != cycle_head {
+                    forest.cut(u);
+                    if u == entry {
+                        forest.link_root(cycle_tail, cycle_head);
+                        forest.reroot(u);
+                    }
+                }
+
+                debug_assert!(forest.find_root(u) == u);
+
+                if forest.find_root(next) != u {
+                    forest.link_root(next, u);
+                }
+            }
+            "2" => {
+                let u = input.u32() - 1;
+                let value: u32 = input.value();
+                forest.access(nodes[u as usize]);
+                unsafe { forest.get_node_mut(nodes[u as usize]) }.value = value;
+            }
+            "3" => {
+                let u = input.u32() - 1;
+                let u = nodes[u as usize];
+                let cycle_head = forest.find_root(u);
+                let cycle_tail = nodes[forest.get_node(cycle_head).next as usize];
+                let entry = forest.get_lca(u, cycle_tail);
+
+                let mut res = 0;
+                if entry != u {
+                    forest.access_vertex_path(entry, u);
+                    forest.get_node(entry).link().children[link_cut::Branch::Right.usize()].map(
+                        |v| {
+                            res += forest.get_node(v).sum;
+                        },
+                    );
+                }
+
+                forest.access_vertex_path(cycle_head, cycle_tail);
+                res += if cycle_head == cycle_tail {
+                    forest.get_node(cycle_head).value as u64
+                } else {
+                    forest.get_node(cycle_head).sum
+                };
+
+                writeln!(output, "{}", res).unwrap();
+            }
+            _ => panic!(),
         }
     }
 }

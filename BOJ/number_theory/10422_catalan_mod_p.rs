@@ -1,3 +1,34 @@
+use std::io::Write;
+
+use num_mod_static::PowBy;
+
+mod simple_io {
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin_at_once<'a>() -> InputAtOnce<'a> {
+        let buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf: buf, iter }
+    }
+}
+
 pub mod num_mod_static {
     use std::ops::*;
 
@@ -367,106 +398,29 @@ pub mod num_mod_static {
     }
 }
 
-// Example
-const P: u64 = 998_244_353;
-type ModP = num_mod_static::NaiveModInt<num_mod_static::ByU64<P>>;
+const P: u64 = 1_000_000_007;
+type Mod<const P: u64> = num_mod_static::NaiveModInt<num_mod_static::ByU64<P>>;
 
-pub mod ntt {
-    use crate::num_mod_static::{CommRing, PowBy};
-
-    fn bit_reversal_perm<T>(xs: &mut [T]) {
-        let n = xs.len();
-        let n_log2 = u32::BITS - (n as u32).leading_zeros() - 1;
-
-        for i in 0..n as u32 {
-            let rev = i.reverse_bits() >> (u32::BITS - n_log2);
-            if i < rev {
-                xs.swap(i as usize, rev as usize);
-            }
-        }
+fn gen_catalan<const P: u64>(n_max: usize) -> Vec<Mod<P>> {
+    let mut res = vec![Mod::from(1); n_max + 1];
+    for i in 2..=n_max {
+        res[i] = res[i - 1] * Mod::from((4 * i - 2) as u64) * Mod::from(i as u64 + 1).pow(P - 2);
     }
+    res
+}
 
-    pub fn radix4<T: CommRing + PowBy<u32>>(proot: T, xs: &mut [T])
-    where
-        T: Copy,
-    {
-        let n = xs.len();
-        assert!(n.is_power_of_two());
-        let n_log2 = u32::BITS - (n as u32).leading_zeros() - 1;
-        bit_reversal_perm(xs);
+fn main() {
+    let mut input = simple_io::stdin_at_once();
+    let mut output = std::io::BufWriter::new(std::io::stdout().lock());
 
-        let base: Vec<_> = (0..n_log2)
-            .scan(proot, |acc, _| {
-                let prev = *acc;
-                *acc *= *acc;
-                Some(prev)
-            })
-            .collect();
-
-        let mut proot_pow: Vec<T> = vec![T::zero(); n]; // Cache-friendly twiddle factors
-        proot_pow[0] = T::one();
-
-        let quartic_root = proot.pow(n as u32 / 4);
-
-        let update_proot_pow = |proot_pow: &mut [T], k: u32| {
-            let step = 1 << k;
-            let base = base[(n_log2 - k - 1) as usize];
-            for i in (0..step).rev() {
-                proot_pow[i * 2 + 1] = proot_pow[i] * base;
-                proot_pow[i * 2] = proot_pow[i];
-            }
+    let catalan = gen_catalan::<P>(5000 / 2);
+    for _ in 0..input.value() {
+        let n: usize = input.value();
+        let ans = if n % 2 == 0 {
+            catalan[n / 2].into()
+        } else {
+            0u64
         };
-
-        let mut k = 0;
-        if n_log2 % 2 == 1 {
-            let step = 1 << k;
-            // radix-2 butterfly
-            update_proot_pow(&mut proot_pow, k);
-            for t in xs.chunks_exact_mut(step * 2) {
-                let (t0, t1) = t.split_at_mut(step);
-                for (a0, a1) in t0.into_iter().zip(t1) {
-                    let b0 = *a0;
-                    let b1 = *a1;
-                    *a0 = b0 + b1;
-                    *a1 = b0 - b1;
-                }
-            }
-            k += 1;
-        }
-        while k < n_log2 {
-            let step = 1 << k;
-            // radix-4 butterfly
-            update_proot_pow(&mut proot_pow, k);
-            update_proot_pow(&mut proot_pow, k + 1);
-
-            for t in xs.chunks_exact_mut(step * 4) {
-                let (t0, rest) = t.split_at_mut(step);
-                let (t1, rest) = rest.split_at_mut(step);
-                let (t2, t3) = rest.split_at_mut(step);
-
-                for ((((a0, a1), a2), a3), &pow1) in
-                    t0.into_iter().zip(t1).zip(t2).zip(t3).zip(&proot_pow)
-                {
-                    let pow2 = pow1 * pow1;
-                    let pow1_shift = pow1 * quartic_root;
-
-                    let b0 = *a0;
-                    let b1 = *a1 * pow2;
-                    let b2 = *a2;
-                    let b3 = *a3 * pow2;
-
-                    let c0 = b0 + b1;
-                    let c1 = b0 - b1;
-                    let c2 = (b2 + b3) * pow1;
-                    let c3 = (b2 - b3) * pow1_shift;
-
-                    *a0 = c0 + c2;
-                    *a1 = c1 + c3;
-                    *a2 = c0 - c2;
-                    *a3 = c1 - c3;
-                }
-            }
-            k += 2;
-        }
+        writeln!(output, "{}", ans).unwrap();
     }
 }

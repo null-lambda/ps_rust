@@ -24,6 +24,7 @@ fn egcd(a: u64, b: u64) -> (u64, i64, i64) {
     }
     (c.0, x.0, y.0)
 }
+
 fn crt(a1: u64, m1: u64, a2: u64, m2: u64) -> Option<(u64, u64)> {
     let (d, x, _y) = egcd(m1, m2);
     let m = m1 / d * m2;
