@@ -3,6 +3,7 @@ pub mod splay {
     use std::{
         cmp::Ordering,
         fmt::{self, Debug},
+        mem::MaybeUninit,
         num::NonZeroU32,
         ops::Range,
     };
@@ -83,29 +84,29 @@ pub mod splay {
 
     #[derive(Debug)]
     pub struct SplayForest<V> {
-        pub pool: Vec<V>,
+        pub pool: Vec<MaybeUninit<V>>,
     }
 
     impl<V: NodeSpec> SplayForest<V> {
         pub fn new() -> Self {
-            let dummy = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+            let dummy = MaybeUninit::uninit();
             Self { pool: vec![dummy] }
         }
 
         pub fn add_root(&mut self, node: V) -> NodeRef {
             let idx = self.pool.len();
-            self.pool.push(node);
+            self.pool.push(MaybeUninit::new(node));
             NodeRef {
                 idx: unsafe { NonZeroU32::new(idx as u32).unwrap_unchecked() },
             }
         }
 
         pub fn get<'a>(&'a self, u: NodeRef) -> &'a V {
-            &self.pool[u.get()]
+            unsafe { &self.pool[u.get()].assume_init_ref() }
         }
 
         pub unsafe fn get_mut<'a>(&'a mut self, u: NodeRef) -> &'a mut V {
-            &mut self.pool[u.get()]
+            self.pool[u.get()].assume_init_mut()
         }
 
         pub unsafe fn get_with_children<'a>(
@@ -114,11 +115,10 @@ pub mod splay {
         ) -> (&'a mut V, [Option<&'a mut V>; 2]) {
             unsafe {
                 let pool_ptr = self.pool.as_mut_ptr();
-                let node = &mut *pool_ptr.add(u.get());
-                let children = node
-                    .link()
-                    .children
-                    .map(|child| child.map(|child| &mut *pool_ptr.add(child.get())));
+                let node = (&mut *pool_ptr.add(u.get())).assume_init_mut();
+                let children = node.link().children.map(|child| {
+                    child.map(|child| (&mut *pool_ptr.add(child.get())).assume_init_mut())
+                });
                 (node, children)
             }
         }
@@ -147,7 +147,7 @@ pub mod splay {
             }
         }
 
-        fn pull_up(&mut self, node: NodeRef) {
+        pub fn pull_up(&mut self, node: NodeRef) {
             unsafe {
                 let (node, children) = self.get_with_children(node);
                 node.pull_up(children);
@@ -169,7 +169,7 @@ pub mod splay {
             self.get_parent(u).is_none()
         }
 
-        fn attach(&mut self, u: NodeRef, child: NodeRef, branch: Branch) {
+        pub fn attach(&mut self, u: NodeRef, child: NodeRef, branch: Branch) {
             debug_assert_ne!(u, child);
             unsafe {
                 self.get_mut(u).link_mut().children[branch as usize] = Some(child);
@@ -177,7 +177,7 @@ pub mod splay {
             }
         }
 
-        fn detach(&mut self, u: NodeRef, branch: Branch) -> Option<NodeRef> {
+        pub fn detach(&mut self, u: NodeRef, branch: Branch) -> Option<NodeRef> {
             unsafe {
                 let child = self.get_mut(u).link_mut().children[branch as usize].take()?;
                 self.get_mut(child).link_mut().parent = None;
@@ -285,6 +285,13 @@ pub mod splay {
             self.pull_up(*root);
         }
 
+        pub fn predecessor(&mut self, mut u: NodeRef) -> Option<NodeRef> {
+            self.splay(u);
+            u = self.get(u).link().children[Branch::Left.usize()]?;
+            self.splay_last(&mut u);
+            Some(u)
+        }
+
         pub fn inorder(&mut self, u: NodeRef, visitor: &mut impl FnMut(&mut Self, NodeRef)) {
             self.push_down(u);
             if let Some(left) = self.get(u).link().children[Branch::Left.usize()] {
@@ -301,6 +308,13 @@ pub mod splay {
             let left = self.detach(u, Branch::Left)?;
             self.pull_up(u);
             Some(left)
+        }
+
+        pub fn split_right(&mut self, u: NodeRef) -> Option<NodeRef> {
+            self.splay(u);
+            let right = self.detach(u, Branch::Right)?;
+            self.pull_up(u);
+            Some(right)
         }
 
         pub fn merge_nonnull(&mut self, mut lhs: NodeRef, mut rhs: NodeRef) -> NodeRef {
@@ -328,6 +342,16 @@ pub mod splay {
         }
     }
 
+    impl<V> Drop for SplayForest<V> {
+        fn drop(&mut self) {
+            for node in self.pool.iter_mut().skip(1) {
+                unsafe {
+                    node.assume_init_drop();
+                }
+            }
+        }
+    }
+
     impl<V: SizedNode> SplayForest<V> {
         pub fn splay_nth(&mut self, u: &mut NodeRef, mut idx: usize) {
             debug_assert!(idx < self.get(*u).size());
@@ -346,6 +370,7 @@ pub mod splay {
         }
 
         pub fn position(&mut self, u: NodeRef) -> usize {
+            self.splay(u);
             self.get(u).link().children[Branch::Left.usize()]
                 .map_or(0, |left| self.get(left).size())
         }

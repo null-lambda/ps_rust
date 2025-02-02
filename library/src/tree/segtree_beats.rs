@@ -22,11 +22,11 @@ pub mod segtree_beats {
         fn try_apply_to_sum(&mut self, m: &M, x_count: u32, x_sum: &mut M::V) -> bool;
     }
 
-    pub trait Reducer<M: NodeSpec> {
+    pub trait MonoidalReducer<M: NodeSpec> {
         type X;
+        fn proj(m: &M, x_sum: &M::V) -> Self::X;
         fn id(m: &M) -> Self::X;
         fn combine(m: &M, lhs: Self::X, rhs: Self::X) -> Self::X;
-        fn extract(m: &M, x_sum: &M::V) -> Self::X;
     }
 
     pub struct SegTree<M: NodeSpec> {
@@ -162,7 +162,7 @@ pub mod segtree_beats {
             }
         }
 
-        pub fn query_range<R: Reducer<M>>(&mut self, range: Range<usize>) -> R::X {
+        pub fn query_range<R: MonoidalReducer<M>>(&mut self, range: Range<usize>) -> R::X {
             let Range { mut start, mut end } = range;
 
             self.push_range(range);
@@ -171,16 +171,13 @@ pub mod segtree_beats {
             let (mut result_left, mut result_right) = (R::id(&self.op), R::id(&self.op));
             while start < end {
                 if start & 1 != 0 {
-                    result_left = R::combine(
-                        &self.op,
-                        result_left,
-                        R::extract(&self.op, &self.data[start]),
-                    );
+                    result_left =
+                        R::combine(&self.op, result_left, R::proj(&self.op, &self.data[start]));
                 }
                 if end & 1 != 0 {
                     result_right = R::combine(
                         &self.op,
-                        R::extract(&self.op, &self.data[end - 1]),
+                        R::proj(&self.op, &self.data[end - 1]),
                         result_right,
                     );
                     end -= 1;

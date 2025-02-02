@@ -217,11 +217,6 @@ pub mod wbtree {
             fn pull_up(&mut self);
         }
 
-        // pub trait ReversibleNodeSpec: NodeSpec {
-        //     fn is_inv(&self) -> bool;
-        //     fn reverse(&mut self);
-        // }
-
         // pub trait Action<V: NodeSpec> {
         //     type F;
 
@@ -405,6 +400,16 @@ pub mod wbtree {
                 }
             }
 
+            pub fn inorder(u: &Rc<V>, visitor: &mut impl FnMut(&V)) {
+                if let Some([lhs, rhs]) = u.link().children.as_ref() {
+                    Self::inorder(lhs, visitor);
+                    visitor(u);
+                    Self::inorder(rhs, visitor);
+                } else {
+                    visitor(u);
+                }
+            }
+
             pub fn query_range<R: MonoidalReducer<V>>(u: &mut Rc<V>, range: Range<usize>) -> R::X {
                 Self::query_range_rec::<R>(&range, 0..u.link().size as usize, u)
             }
@@ -434,38 +439,5 @@ pub mod wbtree {
                 }
             }
         }
-
-        // impl<V: ReversibleNodeSpec> WBForest<V> {
-        //     pub fn reverse(&mut self, u: &mut Rc<V>) {
-        //         let u_mut = Rc::make_mut(u);
-        //         u_mut.push_down();
-        //         u_mut.reverse();
-        //     }
-
-        //     pub fn reverse_range_nonnull(u: Rc<V>, range: Range<usize>) -> Rc<V> {
-        //         let (left, rest) = Self::split_nonnull(u, range.start);
-        //         let Some(mut rest) = rest else {
-        //             return unsafe { left.unwrap_unchecked() };
-        //         };
-        //         let (mid, right) = Self::split_nonnull(rest, range.end - range.start);
-        //         let Some(mut mid) = mid else {
-        //             return Self::merge(left, right).unwrap();
-        //         };
-
-        //         {
-        //             let u: &mut Rc<V> = &mut mid;
-        //             Rc::make_mut(u)
-        //         }
-        //         .reverse();
-        //         rest = match right {
-        //             Some(right) => Self::merge_nonnull(mid, right),
-        //             None => mid,
-        //         };
-        //         match left {
-        //             Some(left) => Self::merge_nonnull(left, rest),
-        //             None => rest,
-        //         }
-        //     }
-        // }
     }
 }

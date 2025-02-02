@@ -188,7 +188,7 @@ pub mod suffix_trie {
             cursor[p] += 1;
         }
 
-        // Inorder traversal
+        // Preorder traversal
         let mut stack = vec![(0, 0)];
         let mut sa = Vec::with_capacity(s.len());
         while let Some((u, iv)) = stack.pop() {
