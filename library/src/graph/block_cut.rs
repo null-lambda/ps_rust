@@ -5,7 +5,7 @@ pub mod bcc {
 
     pub const UNSET: u32 = !0;
 
-    pub struct BlockCutForest<'a, J> {
+    pub struct BlockCutForest<'a, E, J> {
         // DFS tree structure
         pub neighbors: &'a J,
         pub parent: Vec<u32>,
@@ -18,11 +18,13 @@ pub mod bcc {
         /// A vertex node is a cut vertex iff its degree is >= 2,
         /// and the neighbors of a virtual BCC node represents all its belonging vertices.
         pub bct_parent: Vec<u32>,
-        pub bct_children: Vec<Vec<u32>>,
         pub bct_degree: Vec<u32>,
+
+        /// BCC structure
+        pub bcc_edges: Vec<Vec<(u32, u32, E)>>,
     }
 
-    impl<'a, J: jagged::Jagged<'a, u32>> BlockCutForest<'a, J> {
+    impl<'a, E: 'a + Copy, J: jagged::Jagged<'a, (u32, E)>> BlockCutForest<'a, E, J> {
         pub fn from_assoc_list(neighbors: &'a J) -> Self {
             let n = neighbors.len();
 
@@ -32,12 +34,15 @@ pub mod bcc {
             let mut timer = 1u32;
 
             let mut bct_parent = vec![UNSET; n];
-            let mut bct_children = vec![vec![]; n];
             let mut bct_degree = vec![1u32; n];
+
+            let mut bcc_edges = vec![];
+
             bct_parent.reserve_exact(n * 2);
 
             let mut current_edge = vec![0u32; n];
             let mut stack = vec![];
+            let mut edges_stack: Vec<(u32, u32, E)> = vec![];
             for root in 0..n {
                 if euler_in[root] != 0 {
                     continue;
@@ -69,27 +74,40 @@ pub mod bcc {
                             bct_degree[p as usize] += 1;
 
                             bct_parent.push(p);
-                            bct_children.push(vec![]);
                             bct_degree.push(1);
+
                             while let Some(c) = stack.pop() {
                                 bct_parent[c as usize] = bcc_node;
-                                bct_children.last_mut().unwrap().push(c);
                                 bct_degree[bcc_node as usize] += 1;
 
                                 if c == u {
                                     break;
                                 }
                             }
+
+                            let mut es = vec![];
+                            while let Some(e) = edges_stack.pop() {
+                                es.push(e);
+                                if (e.0, e.1) == (p, u) {
+                                    break;
+                                }
+                            }
+                            bcc_edges.push(es);
                         }
 
                         u = p;
                         continue;
                     }
 
-                    let v = neighbors.get(u as usize)[*iv as usize];
+                    let (v, w) = neighbors.get(u as usize)[*iv as usize];
                     *iv += 1;
                     if v == p {
                         continue;
+                    }
+
+                    if euler_in[v as usize] < euler_in[u as usize] {
+                        // Unvisited edge
+                        edges_stack.push((u, v, w));
                     }
                     if euler_in[v as usize] != 0 {
                         // Back edge
@@ -108,6 +126,8 @@ pub mod bcc {
 
                     bct_parent.push(root as u32);
                     bct_degree.push(1);
+
+                    bcc_edges.push(vec![]);
                 }
             }
 
@@ -118,8 +138,9 @@ pub mod bcc {
                 euler_in,
 
                 bct_parent,
-                bct_children,
                 bct_degree,
+
+                bcc_edges,
             }
         }
 
