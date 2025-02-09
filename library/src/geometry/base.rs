@@ -11,7 +11,9 @@ mod geometry {
         + Mul<Output = Self>
         + Neg<Output = Self>
         + PartialEq
+        + Eq
         + PartialOrd
+        + Ord
         + Default
     {
         fn zero() -> Self {
