@@ -109,6 +109,10 @@ pub mod splay {
             self.pool[u.get()].assume_init_mut()
         }
 
+        pub fn with<T>(&mut self, u: NodeRef, f: impl FnOnce(&mut V) -> T) -> T {
+            f(unsafe { self.get_mut(u) })
+        }
+
         pub unsafe fn get_with_children<'a>(
             &'a mut self,
             u: NodeRef,

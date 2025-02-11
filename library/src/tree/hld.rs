@@ -27,6 +27,7 @@ pub mod hld {
         pub parent: Vec<u32>,
         pub heavy_child: Vec<u32>,
         pub chain_top: Vec<u32>,
+        pub chain_bot: Vec<u32>,
         pub segmented_idx: Vec<u32>,
     }
 
@@ -53,6 +54,7 @@ pub mod hld {
 
             let mut size = vec![1; n];
             let mut heavy_child = vec![UNSET; n];
+            let mut chain_bot = vec![UNSET; n];
             degree[root] += 2;
             let mut topological_order = Vec::with_capacity(n);
             for mut u in 0..n {
@@ -71,12 +73,26 @@ pub mod hld {
                         *h = u as u32;
                     }
 
+                    let h = heavy_child[u as usize];
+                    chain_bot[u] = if h == UNSET {
+                        u as u32
+                    } else {
+                        chain_bot[h as usize]
+                    };
+
                     assert!(u != p as usize);
                     u = p as usize;
                 }
             }
             topological_order.push(root as u32);
             assert!(topological_order.len() == n, "Invalid tree structure");
+
+            let h = heavy_child[root];
+            chain_bot[root] = if h == UNSET {
+                root as u32
+            } else {
+                chain_bot[h as usize]
+            };
 
             let mut parent = xor_neighbors;
             parent[root] = UNSET;
@@ -140,6 +156,7 @@ pub mod hld {
                 parent,
                 heavy_child,
                 chain_top,
+                chain_bot,
                 segmented_idx,
             }
         }
@@ -170,9 +187,6 @@ pub mod hld {
             F: FnMut(usize, usize, bool, bool),
         {
             debug_assert!(u < self.len() && v < self.len());
-            if self.segmented_idx[u] > self.segmented_idx[v] {
-                std::mem::swap(&mut u, &mut v);
-            }
             while self.chain_top[u] != self.chain_top[v] {
                 if self.segmented_idx[self.chain_top[u] as usize]
                     > self.segmented_idx[self.chain_top[v] as usize]
