@@ -1,3 +1,38 @@
+use std::{cmp::Ordering, io::Write};
+
+use wbtree::persistent as wb;
+
+mod simple_io {
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
 pub mod rc_acyclic {
     // Shared rc pointers without weak references.
     // Empirically verified with miri, on BOJ 17486
@@ -451,6 +486,140 @@ pub mod wbtree {
                 *u = Self::merge(joined, rhs);
                 res
             }
+        }
+    }
+}
+
+const INF: i64 = 1 << 58;
+const NEG_INF: i64 = -INF;
+
+#[derive(Clone, Debug)]
+struct Node {
+    min: i64,
+    max3: [i64; 3],
+    lazy_add: i64,
+    link: wb::Link<Node>,
+}
+
+impl Default for Node {
+    fn default() -> Self {
+        Self {
+            min: INF,
+            max3: [NEG_INF, NEG_INF - 1, NEG_INF - 2],
+            lazy_add: 0,
+            link: wb::Link::default(),
+        }
+    }
+}
+
+impl Node {
+    fn singleton(value: i64) -> Self {
+        Self {
+            min: value,
+            max3: [value, NEG_INF, NEG_INF - 1],
+            ..Default::default()
+        }
+    }
+
+    fn apply_add(&mut self, delta: i64) {
+        self.min += delta;
+        self.max3.iter_mut().for_each(|x| *x += delta);
+        self.lazy_add += delta;
+    }
+}
+
+impl wb::IntrusiveNode for Node {
+    fn link(&self) -> &wb::Link<Self> {
+        &self.link
+    }
+    fn link_mut(&mut self) -> &mut wb::Link<Self> {
+        &mut self.link
+    }
+}
+
+impl wb::NodeSpec for Node {
+    fn push_down(&mut self) {
+        if self.lazy_add != 0 {
+            if let Some(cs) = self.link.children.as_mut() {
+                for c in cs {
+                    c.make_mut().apply_add(self.lazy_add);
+                }
+            }
+            self.lazy_add = 0;
+        }
+    }
+
+    fn pull_up(&mut self) {
+        let Some([left, right]) = self.link.children.as_mut() else {
+            return;
+        };
+
+        self.min = left.min.min(right.min);
+        let mut lhs = left.max3.iter().copied().peekable();
+        let mut rhs = right.max3.iter().copied().peekable();
+        for i in 0..3 {
+            match lhs.peek().unwrap().cmp(rhs.peek().unwrap()) {
+                Ordering::Less => self.max3[i] = rhs.next().unwrap(),
+                Ordering::Greater => self.max3[i] = lhs.next().unwrap(),
+                Ordering::Equal => {
+                    self.max3[i] = lhs.next().unwrap();
+                    rhs.next();
+                }
+            }
+        }
+    }
+}
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    let n: usize = input.value();
+    let xs = (0..n).map(|_| input.value::<i64>());
+
+    type Forest = wb::WBForest<Node>;
+    let mut root = Forest::collect_from(xs.map(Node::singleton));
+    for _ in 0..input.value() {
+        match input.token() {
+            "1" => {
+                let i = input.value::<usize>() - 1;
+                let (rest, rhs) = Forest::split(root, i + 1);
+                let (lhs, _) = Forest::split(rest, i);
+                root = Forest::merge(lhs, rhs);
+            }
+            "2" => {
+                let i = input.value::<usize>() - 1;
+                let r = input.value::<usize>();
+                let (s, e) = (i - r, i + r);
+                Forest::with_range(&mut root, s..e + 1, |node| {
+                    let node = node.make_mut();
+                    node.apply_add(-node.min);
+                });
+            }
+            "3" => {
+                let i = input.value::<usize>() - 1;
+                let r = input.value::<usize>();
+                let (s, e) = (i - r, i + r);
+                Forest::with_range(&mut root, s..e + 1, |node| {
+                    let node = node.make_mut();
+                    node.apply_add(node.max3[0]);
+                });
+            }
+            "4" => {
+                let l = input.value::<usize>() - 1;
+                let r = input.value::<usize>() - 1;
+                let mut ans = Forest::with_range(&mut root, l..r + 1, |node| {
+                    let node = node.make_mut();
+                    node.max3[2]
+                })
+                .unwrap();
+                if ans <= NEG_INF / 2 {
+                    ans = -1;
+                }
+                writeln!(output, "{}", ans).unwrap();
+            }
+
+            _ => panic!(),
         }
     }
 }

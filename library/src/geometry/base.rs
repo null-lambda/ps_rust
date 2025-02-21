@@ -20,6 +20,8 @@ mod geometry {
             Self::default()
         }
 
+        fn one() -> Self;
+
         fn abs(self) -> Self {
             if self < Self::zero() {
                 -self
@@ -29,7 +31,11 @@ mod geometry {
         }
     }
 
-    impl Scalar for i64 {}
+    impl Scalar for i64 {
+        fn one() -> Self {
+            1
+        }
+    }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
     pub struct Point<T>([T; 2]);

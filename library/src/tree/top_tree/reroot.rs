@@ -1,5 +1,6 @@
 pub mod reroot {
     // O(n) rerooting dp for trees with combinable, non-invertible pulling operation. (Monoid action)
+    // Technically, its a static, offline variant of the top tree.
     // https://codeforces.com/blog/entry/124286
     // https://github.com/koosaga/olympiad/blob/master/Library/codes/data_structures/all_direction_tree_dp.cpp
     pub trait AsBytes<const N: usize> {

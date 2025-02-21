@@ -29,6 +29,7 @@ pub mod hld {
         pub chain_top: Vec<u32>,
         pub chain_bot: Vec<u32>,
         pub segmented_idx: Vec<u32>,
+        pub topological_order: Vec<u32>,
     }
 
     impl HLD {
@@ -103,7 +104,7 @@ pub mod hld {
             if !use_dfs_ordering {
                 // A rearranged topological index continuous in a chain, for path queries
                 let mut timer = 0;
-                for mut u in topological_order.into_iter().rev() {
+                for mut u in topological_order.iter().copied().rev() {
                     if segmented_idx[u as usize] != UNSET {
                         continue;
                     }
@@ -121,7 +122,7 @@ pub mod hld {
             } else {
                 // DFS ordering for path & subtree queries
                 let mut offset = vec![0; n];
-                for mut u in topological_order.into_iter().rev() {
+                for mut u in topological_order.iter().copied().rev() {
                     if segmented_idx[u as usize] != UNSET {
                         continue;
                     }
@@ -158,6 +159,7 @@ pub mod hld {
                 chain_top,
                 chain_bot,
                 segmented_idx,
+                topological_order,
             }
         }
 
