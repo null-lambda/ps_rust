@@ -1,9 +1,6 @@
 pub mod rc_acyclic {
     // Shared rc pointers without weak references.
-    // Empirically verified with miri, on BOJ 17486
-    // Further optimizations: implement a static bump-allocator with zero-sized types
 
-    // use std::ops::Deref;
     //     pub trait Rc<T: Clone>: Deref<Target = T> + Clone {
     //         fn new(value: T) -> Self;
     //         fn make_mut(&mut self) -> &mut T;
