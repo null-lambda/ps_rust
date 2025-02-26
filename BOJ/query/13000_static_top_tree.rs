@@ -1,4 +1,517 @@
+use std::io::Write;
+
+use algebra::SemiRing;
+use num_mod::{ByU64, ModInt};
+use static_top_tree::rooted::{ClusterCx, StaticTopTree, WeightType};
+
+mod fast_io {
+    use std::fs::File;
+    use std::io::BufWriter;
+    use std::os::unix::io::FromRawFd;
+
+    extern "C" {
+        fn mmap(addr: usize, length: usize, prot: i32, flags: i32, fd: i32, offset: i64)
+            -> *mut u8;
+        fn fstat(fd: i32, stat: *mut usize) -> i32;
+    }
+
+    pub struct InputAtOnce {
+        buf: &'static [u8],
+    }
+
+    impl InputAtOnce {
+        fn skip(&mut self) {
+            loop {
+                match self.buf {
+                    &[..=b' ', ..] => self.buf = &self.buf[1..],
+                    _ => break,
+                }
+            }
+        }
+
+        fn u32_noskip(&mut self) -> u32 {
+            let mut acc = 0;
+            loop {
+                match self.buf {
+                    &[b'0'..=b'9', ..] => acc = acc * 10 + (self.buf[0] - b'0') as u32,
+                    _ => break,
+                }
+                self.buf = &self.buf[1..];
+            }
+            acc
+        }
+
+        pub fn token(&mut self) -> &'static str {
+            self.skip();
+            let start = self.buf.as_ptr();
+            loop {
+                match self.buf {
+                    &[..=b' ', ..] => break,
+                    _ => self.buf = &self.buf[1..],
+                }
+            }
+            let end = self.buf.as_ptr();
+            unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    start,
+                    end.offset_from(start) as usize,
+                ))
+            }
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+
+        pub fn u32(&mut self) -> u32 {
+            self.skip();
+            self.u32_noskip()
+        }
+    }
+
+    pub fn stdin() -> InputAtOnce {
+        let mut stat = [0; 18];
+        unsafe { fstat(0, (&mut stat).as_mut_ptr()) };
+        let buf = unsafe { mmap(0, stat[6], 1, 2, 0, 0) };
+        let buf =
+            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(buf, stat[6])) };
+        InputAtOnce {
+            buf: buf.as_bytes(),
+        }
+    }
+
+    pub fn stdout() -> BufWriter<File> {
+        let stdout = unsafe { File::from_raw_fd(1) };
+        BufWriter::with_capacity(1 << 16, stdout)
+    }
+}
+
+pub mod debug {
+    pub fn with(#[allow(unused_variables)] f: impl FnOnce()) {
+        #[cfg(debug_assertions)]
+        f()
+    }
+}
+
+pub mod algebra {
+    use std::ops::*;
+    pub trait SemiRing:
+        Add<Output = Self>
+        + Sub<Output = Self>
+        + Mul<Output = Self>
+        + AddAssign
+        + SubAssign
+        + MulAssign
+        + for<'a> Add<&'a Self, Output = Self>
+        + for<'a> Sub<&'a Self, Output = Self>
+        + for<'a> Mul<&'a Self, Output = Self>
+        + for<'a> AddAssign<&'a Self>
+        + for<'a> SubAssign<&'a Self>
+        + for<'a> MulAssign<&'a Self>
+        + Default
+        + Clone
+    {
+        fn zero() -> Self {
+            Self::default()
+        }
+        fn one() -> Self;
+    }
+
+    // Non-commutative algebras are not my business (yet)
+    // pub trait Ring: SemiRing + Neg<Output = Self> {}
+
+    pub trait CommRing: SemiRing + Neg<Output = Self> {}
+
+    pub trait PowBy<E> {
+        fn pow(&self, exp: E) -> Self;
+    }
+
+    pub trait Field:
+        CommRing
+        + Div<Output = Self>
+        + DivAssign
+        + for<'a> Div<&'a Self, Output = Self>
+        + for<'a> DivAssign<&'a Self>
+    {
+        fn inv(&self) -> Self;
+    }
+
+    macro_rules! impl_semiring {
+        ($($t:ty)+) => {
+            $(
+                impl SemiRing for $t {
+                    fn one() -> Self {
+                        1
+                    }
+                }
+            )+
+        };
+    }
+
+    macro_rules! impl_commring {
+        ($($t:ty)+) => {
+            $(
+                impl CommRing for $t {}
+            )+
+        };
+    }
+
+    impl_semiring!(u8 u16 u32 u64 u128 usize);
+    impl_semiring!(i8 i16 i32 i64 i128 isize);
+    impl_commring!(i8 i16 i32 i64 i128 isize);
+
+    macro_rules! impl_powby {
+        ($(($uexp:ty, $iexp:ty),)+) => {
+            $(
+                impl<R: CommRing> PowBy<$uexp> for R {
+                    fn pow(&self, exp: $uexp) -> R {
+                        let mut res = R::one();
+                        let mut base = self.clone();
+                        let mut exp = exp;
+                        while exp > 0 {
+                            if exp & 1 == 1 {
+                                res *= base.clone();
+                            }
+                            base *= base.clone();
+                            exp >>= 1;
+                        }
+                        res
+                    }
+                }
+
+                impl<R: Field> PowBy<$iexp> for R {
+                    fn pow(&self, exp: $iexp) -> R {
+                        if exp < 0 {
+                            self.inv().pow((-exp) as $uexp)
+                        } else {
+                            self.pow(exp as $uexp)
+                        }
+                    }
+                }
+            )+
+        };
+    }
+    impl_powby!(
+        (u8, i8),
+        (u16, i16),
+        (u32, i32),
+        (u64, i64),
+        (u128, i128),
+        (usize, isize),
+    );
+}
+
+pub mod num_mod {
+    use super::algebra::*;
+    use std::ops::*;
+
+    pub trait Unsigned:
+        Copy
+        + Default
+        + SemiRing
+        + Div<Output = Self>
+        + Rem<Output = Self>
+        + RemAssign
+        + PartialEq
+        + PartialOrd
+        + From<u8>
+    {
+        fn zero() -> Self {
+            Self::default()
+        }
+        fn one() -> Self;
+    }
+
+    macro_rules! impl_unsigned {
+        ($($t:ty)+) => {
+            $(
+                impl Unsigned for $t {
+                    fn one() -> Self {
+                        1
+                    }
+                }
+            )+
+        };
+    }
+    impl_unsigned!(u8 u16 u32 u64 u128 usize);
+
+    pub trait ModSpec: Copy {
+        type U: Unsigned;
+        const MODULUS: Self::U;
+    }
+
+    pub trait ByPrime: ModSpec {}
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub struct ModInt<M: ModSpec>(M::U);
+
+    macro_rules! impl_modspec {
+        ($($t:ident $u:ty),+) => {
+            $(
+                #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+                pub struct $t<const M: $u>;
+
+                impl<const MOD: $u> ModSpec for $t<MOD> {
+                    type U = $u;
+                    const MODULUS: $u = MOD;
+                }
+
+            )+
+        };
+    }
+    impl_modspec!(
+        ByU32 u32, ByU32Prime u32,
+        ByU64 u64, ByU64Prime u64,
+        ByU128 u128, ByU128Prime u128
+    );
+
+    macro_rules! impl_by_prime {
+        ($($t:ident $u:ty),+) => {
+            $(
+                impl<const MOD: $u> ByPrime for $t<MOD> {}
+            )+
+        };
+    }
+    impl_by_prime!(ByU32Prime u32, ByU64Prime u64, ByU128Prime u128);
+
+    impl<'a, M: ModSpec> AddAssign<&'a Self> for ModInt<M> {
+        fn add_assign(&mut self, rhs: &Self) {
+            self.0 += rhs.0;
+            if self.0 >= M::MODULUS {
+                self.0 -= M::MODULUS;
+            }
+        }
+    }
+
+    impl<'a, M: ModSpec> SubAssign<&'a Self> for ModInt<M> {
+        fn sub_assign(&mut self, rhs: &Self) {
+            if self.0 < rhs.0 {
+                self.0 += M::MODULUS;
+            }
+            self.0 -= rhs.0;
+        }
+    }
+
+    impl<'a, M: ModSpec> MulAssign<&'a Self> for ModInt<M> {
+        fn mul_assign(&mut self, rhs: &Self) {
+            self.0 *= rhs.0;
+            self.0 %= M::MODULUS;
+        }
+    }
+
+    macro_rules! forward_ref_binop {
+        ($($OpAssign:ident $op_assign:ident),+) => {
+            $(
+                impl<M: ModSpec> $OpAssign for ModInt<M> {
+                    fn $op_assign(&mut self, rhs: Self) {
+                        self.$op_assign(&rhs);
+                    }
+                }
+            )+
+        };
+    }
+    forward_ref_binop!(AddAssign add_assign, MulAssign mul_assign, SubAssign sub_assign);
+
+    macro_rules! impl_op_by_op_assign {
+        ($($Op:ident $op:ident $op_assign:ident),+) => {
+            $(
+                impl<'a, M: ModSpec> $Op<&'a Self> for ModInt<M> {
+                    type Output = Self;
+                    fn $op(mut self, rhs: &Self) -> Self {
+                        self.$op_assign(rhs);
+                        self
+                    }
+                }
+
+                impl< M: ModSpec> $Op for ModInt<M> {
+                    type Output = ModInt<M>;
+                    fn $op(self, rhs: Self) -> Self::Output {
+                        self.clone().$op(&rhs)
+                    }
+                }
+            )+
+        };
+    }
+    impl_op_by_op_assign!(Add add add_assign, Mul mul mul_assign, Sub sub sub_assign);
+
+    impl<'a, M: ModSpec> Neg for &'a ModInt<M> {
+        type Output = ModInt<M>;
+        fn neg(self) -> ModInt<M> {
+            let mut res = M::MODULUS - self.0;
+            if res == M::MODULUS {
+                res = 0.into();
+            }
+            ModInt(res)
+        }
+    }
+
+    impl<M: ModSpec> Neg for ModInt<M> {
+        type Output = Self;
+        fn neg(self) -> Self::Output {
+            (&self).neg()
+        }
+    }
+
+    impl<M: ModSpec> Default for ModInt<M> {
+        fn default() -> Self {
+            Self(M::U::default())
+        }
+    }
+
+    impl<M: ModSpec> SemiRing for ModInt<M> {
+        fn one() -> Self {
+            Self(1.into())
+        }
+    }
+    impl<M: ModSpec> CommRing for ModInt<M> {}
+
+    impl<'a, M: ByPrime> DivAssign<&'a Self> for ModInt<M>
+    where
+        ModInt<M>: PowBy<M::U>,
+    {
+        fn div_assign(&mut self, rhs: &Self) {
+            self.mul_assign(&rhs.inv());
+        }
+    }
+
+    impl<M: ByPrime> DivAssign for ModInt<M>
+    where
+        ModInt<M>: PowBy<M::U>,
+    {
+        fn div_assign(&mut self, rhs: Self) {
+            self.div_assign(&rhs);
+        }
+    }
+
+    impl<'a, M: ByPrime> Div<&'a Self> for ModInt<M>
+    where
+        ModInt<M>: PowBy<M::U>,
+    {
+        type Output = Self;
+        fn div(mut self, rhs: &Self) -> Self {
+            self.div_assign(rhs);
+            self
+        }
+    }
+
+    impl<M: ByPrime> Div for ModInt<M>
+    where
+        ModInt<M>: PowBy<M::U>,
+    {
+        type Output = Self;
+        fn div(self, rhs: Self) -> Self {
+            self / &rhs
+        }
+    }
+
+    impl<M: ByPrime> Field for ModInt<M>
+    where
+        ModInt<M>: PowBy<M::U>,
+    {
+        fn inv(&self) -> Self {
+            self.pow(M::MODULUS - M::U::from(2))
+        }
+    }
+
+    pub trait CmpUType<Rhs: Unsigned>: Unsigned {
+        type MaxT: Unsigned;
+        fn upcast(lhs: Self) -> Self::MaxT;
+        fn upcast_rhs(rhs: Rhs) -> Self::MaxT;
+        fn downcast(max: Self::MaxT) -> Self;
+    }
+
+    macro_rules! impl_cmp_utype {
+        (
+            $( $($lower:ident)* < $target:ident < $($upper:ident)* ),* $(,)?
+        ) => {
+            $(
+                $(
+                    impl CmpUType<$lower> for $target {
+                        type MaxT = $target;
+                        fn upcast(lhs: Self) -> Self::MaxT {
+                            lhs as Self::MaxT
+                        }
+                        fn upcast_rhs(rhs: $lower) -> Self::MaxT {
+                            rhs as Self::MaxT
+                        }
+                        fn downcast(max: Self::MaxT) -> Self {
+                            max as Self
+                        }
+                    }
+                )*
+                impl CmpUType<$target> for $target {
+                    type MaxT = $target;
+                    fn upcast(lhs: Self) -> Self::MaxT {
+                        lhs as Self::MaxT
+                    }
+                    fn upcast_rhs(rhs: $target) -> Self::MaxT {
+                        rhs as Self::MaxT
+                    }
+                    fn downcast(max: Self::MaxT) -> Self {
+                        max as Self
+                    }
+                }
+                $(
+                    impl CmpUType<$upper> for $target {
+                        type MaxT = $upper;
+                        fn upcast(lhs: Self) -> Self::MaxT {
+                            lhs as Self::MaxT
+                        }
+                        fn upcast_rhs(rhs: $upper) -> Self::MaxT {
+                            rhs as Self::MaxT
+                        }
+                        fn downcast(max: Self::MaxT) -> Self {
+                            max as Self
+                        }
+                    }
+                )*
+            )*
+        };
+    }
+    impl_cmp_utype!(
+        < u8 < u16 u32 u64 u128,
+        u8 < u16 < u32 u64 u128,
+        u8 u16 < u32 < u64 u128,
+        u8 u16 u32 < u64 < u128,
+        u8 u16 u32 u64 < u128 <,
+    );
+
+    impl<U, S, M> From<S> for ModInt<M>
+    where
+        U: CmpUType<S>,
+        S: Unsigned,
+        M: ModSpec<U = U>,
+    {
+        fn from(s: S) -> Self {
+            Self(U::downcast(U::upcast_rhs(s) % U::upcast(M::MODULUS)))
+        }
+    }
+
+    macro_rules! impl_cast_to_unsigned {
+        ($($u:ty)+) => {
+            $(
+                impl<M: ModSpec<U = $u>> From<ModInt<M>> for $u {
+                    fn from(n: ModInt<M>) -> Self {
+                        n.0
+                    }
+                }
+            )+
+        };
+    }
+    impl_cast_to_unsigned!(u8 u16 u32 u64 u128);
+
+    impl<U: std::fmt::Debug, M: ModSpec<U = U>> std::fmt::Debug for ModInt<M> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.0.fmt(f)
+        }
+    }
+}
+
 pub mod static_top_tree {
+    /// https://github.com/null-lambda/ps_rust/tree/main/library/src/tree
     pub mod rooted {
         /// # Static Top Tree
         /// Extend dynamic Divide & Conquer (segment tree) to rooted trees with rebalanced HLD, in O(N log N).
@@ -14,7 +527,7 @@ pub mod static_top_tree {
         /// ## Reference:
         /// - [[Tutorial] Theorically Faster HLD and Centroid Decomposition](https://codeforces.com/blog/entry/104997/)
         /// - [ABC 351G Editorial](https://atcoder.jp/contests/abc351/editorial/9899)
-        /// - [Self-adjusting top trees](https://renatowerneck.wordpress.com/wp-content/uploads/2016/06/tw05-self-adjusting-top-tree.pdf)
+        /// - [Self-adjusting top tree](https://renatowerneck.wordpress.com/wp-content/uploads/2016/06/tw05-self-adjusting-top-tree.pdf)
         /// - [[Tutorial] Fully Dynamic Trees Supporting Path/Subtree Aggregates and Lazy Path/Subtree Updates](https://codeforces.com/blog/entry/103726)
         ///
         /// See also:
@@ -112,7 +625,7 @@ pub mod static_top_tree {
                 }
             }
 
-            // Required for rerooting operations
+            // Required for rerooting operations.
             const REVERSE_TYPE: Option<WeightType> = None;
             fn reverse(&self, _path: &Self::Compress) -> Self::Compress {
                 panic!("Implement reverse for rerooting operations");
@@ -167,7 +680,6 @@ pub mod static_top_tree {
         #[derive(Debug, Default)]
         pub struct HLD {
             // Rooted tree structure
-            pub size: Vec<u32>,
             pub parent: Vec<u32>,
             pub topological_order: Vec<u32>,
 
@@ -261,7 +773,6 @@ pub mod static_top_tree {
                 }
 
                 Self {
-                    size,
                     parent,
                     topological_order,
 
@@ -522,56 +1033,6 @@ pub mod static_top_tree {
                 }
             }
 
-            // A set of sum queries
-
-            pub fn get(&mut self, u: usize) -> &Cx::V {
-                self.push_down_from_root(self.compress_leaf[u]);
-                &self.weights[self.compress_leaf[u].usize()]
-            }
-
-            pub fn sum_all(&mut self) -> &Cx::Compress {
-                unsafe {
-                    self.clusters[self.root_node.usize()]
-                        .get_compress()
-                        .unwrap_unchecked()
-                }
-            }
-
-            // Sum on the proper subtree
-            pub fn sum_subtree(&mut self, u: usize) -> (Cx::Rake, &Cx::V) {
-                self.push_down_from_root(self.compress_leaf[u]);
-
-                // Compute suffix of the compress tree + rake tree
-                let top = self.compress_root[self.hld.chain_top[u] as usize];
-                let u = self.compress_leaf[u];
-                let mut v = u;
-                let mut suffix = Cx::id_compress();
-                while v != top {
-                    let p = self.parent[v.usize()].unwrap();
-                    let branch = (self.children[p.usize()][1] == Some(v)) as usize;
-                    if branch == 0 {
-                        let rhs = unsafe { self.children[p.usize()][1].unwrap_unchecked() };
-                        let rhs =
-                            unsafe { self.clusters[rhs.usize()].get_compress().unwrap_unchecked() };
-                        suffix = self.cx.compress(&suffix, rhs);
-                    }
-                    v = p;
-                }
-
-                let mut sum_as_rake = self.cx.collapse_compressed(&suffix);
-                if let Some(lhs) = self.children[u.usize()][0]
-                    .and_then(|lhs| self.clusters[lhs.usize()].get_rake())
-                {
-                    sum_as_rake = self.cx.rake(lhs, &sum_as_rake);
-                }
-                (sum_as_rake, &self.weights[u.usize()])
-            }
-
-            pub fn sum_subtree_complement(&mut self, u: usize) -> Cx::Compress {
-                unimplemented!()
-            }
-
-            // Sum over the temporarily rerooted tree
             pub fn sum_rerooted(&mut self, u: usize) -> (Cx::Rake, &Cx::V) {
                 assert!(
                     Cx::REVERSE_TYPE.is_some(),
@@ -598,19 +1059,15 @@ pub mod static_top_tree {
                             .chain(Some(0))
                         {
                             use Cluster::*;
-                            crate::debug::with(|| println!("v={:?}", v));
                             match v.get_with_children_in(&self.children, &mut self.clusters) {
                                 (Compress(_), [Some(Compress(lhs)), Some(Compress(rhs))]) => {
                                     if branch == 0 {
-                                        crate::debug::with(|| println!("prepend suffix"));
                                         c_suffix = self.cx.compress(rhs, &c_suffix);
                                     } else {
-                                        crate::debug::with(|| println!("append prefix"));
                                         c_prefix = self.cx.compress(&c_prefix, lhs);
                                     }
                                 }
                                 (Compress(_), [rake_root, _]) => {
-                                    crate::debug::with(|| println!("fold in half"));
                                     r_exclusive = self.cx.rake(
                                         &self.cx.collapse_compressed(&self.cx.reverse(&c_prefix)),
                                         &self.cx.collapse_compressed(&c_suffix),
@@ -646,7 +1103,6 @@ pub mod static_top_tree {
                                 self.children[v.usize()][branch as usize].unwrap_unchecked()
                             };
                         }
-                        crate::debug::with(|| println!());
 
                         (r_exclusive, &self.weights[u.usize()])
                     }
@@ -657,29 +1113,6 @@ pub mod static_top_tree {
                 }
             }
 
-            pub fn sum_to_root(&mut self, u: usize) -> Cx::Compress {
-                self.push_down_from_root(self.compress_leaf[u]);
-
-                unimplemented!()
-            }
-
-            pub fn sum_path(
-                &mut self,
-                mut u: usize,
-                mut v: usize,
-            ) -> (Cx::Compress, Cx::V, Cx::Compress) {
-                // Since we cannot expose the path cluster directly as in the dynamic ones,
-                // implementing path and subtree queries are a bit tricky.
-
-                // TODO: Push down from the LCA (for performance)
-                self.push_down_from_root(self.compress_leaf[u]);
-                self.push_down_from_root(self.compress_leaf[v]);
-
-                unimplemented!()
-            }
-
-            // A set of update queries
-
             pub fn modify(&mut self, u: usize, update_with: impl FnOnce(&mut Cx::V)) {
                 assert!(
                     !Cx::LAZY,
@@ -689,111 +1122,107 @@ pub mod static_top_tree {
                 update_with(&mut self.weights[u.usize()]);
                 self.pull_up_to_root(u);
             }
-
-            pub fn apply_all(&mut self, action: impl Action<Cx>) {
-                assert!(Cx::LAZY, "Lazy propagation is not enabled");
-                self.push_down(self.root_node);
-                action.apply(
-                    &mut self.clusters[self.root_node.usize()],
-                    ActionRange::SubTree,
-                );
-                action.apply_to_weight(&mut self.weights[self.root_node.usize()]);
-
-                unimplemented!()
-            }
-
-            pub fn apply_point(&mut self, u: usize, action: impl Action<Cx>) {
-                let u = self.compress_leaf[u];
-                self.push_down_from_root(u);
-                action.apply_to_weight(&mut self.weights[u.usize()]);
-                self.pull_up_to_root(u);
-            }
-
-            pub fn apply_path(
-                &mut self,
-                u: usize,
-                v: usize,
-                apply_to_lca: bool,
-                action: impl Action<Cx>,
-            ) {
-                assert!(Cx::LAZY, "Lazy propagation is not enabled");
-                unimplemented!()
-            }
-
-            pub fn apply_subtree(
-                &mut self,
-                u: usize,
-                apply_to_root: bool,
-                action: impl Action<Cx>,
-            ) {
-                assert!(Cx::LAZY, "Lazy propagation is not enabled");
-
-                let (u, top) = (
-                    self.compress_leaf[u],
-                    self.compress_root[self.hld.chain_top[u] as usize],
-                );
-
-                let mut v = self.root_node;
-                self.push_down(v);
-                let path = self.index_in_binary_completion[u.usize()];
-                for d in (0..self.depth(u)).rev() {
-                    let branch = (path >> d) & 1;
-                    if d < self.depth(u) - self.depth(top) && branch == 0 {
-                        let rhs = unsafe { self.children[v.usize()][1].unwrap_unchecked() };
-                        action.apply(&mut self.clusters[rhs.usize()], ActionRange::SubTree);
-                    }
-                    v = unsafe { self.children[v.usize()][branch as usize].unwrap_unchecked() };
-                    self.push_down(v);
-                }
-                debug_assert_eq!(u, v);
-
-                if apply_to_root {
-                    action.apply_to_weight(&mut self.weights[u.usize()]);
-                }
-
-                if let Some(lhs) = self.children[u.usize()][0] {
-                    action.apply(&mut self.clusters[lhs.usize()], ActionRange::SubTree);
-                }
-
-                self.pull_up_to_root(u);
-            }
-
-            pub fn apply_subtree_complement(&mut self, u: usize, action: impl Action<Cx>) {
-                assert!(Cx::LAZY, "Lazy propagation is not enabled");
-                unimplemented!()
-            }
-
-            pub fn debug_chains(&self, mut visitor: impl FnMut(&Cx::Compress, bool)) {
-                let mut visited = vec![false; self.n_verts];
-                for mut u in self.hld.topological_order.iter().rev().copied() {
-                    if visited[u as usize] {
-                        continue;
-                    }
-                    unsafe {
-                        visitor(
-                            self.clusters[self.compress_root[u as usize].usize()]
-                                .get_compress()
-                                .unwrap_unchecked(),
-                            true,
-                        );
-
-                        loop {
-                            visited[u as usize] = true;
-                            visitor(
-                                self.clusters[self.compress_leaf[u as usize].usize()]
-                                    .get_compress()
-                                    .unwrap_unchecked(),
-                                false,
-                            );
-
-                            u = self.hld.heavy_child[u as usize];
-                            if u == UNSET {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
+}
+
+type ModP = ModInt<ByU64<1_000_000_007>>;
+
+// Dynamic connectivity for an induced subgraph of a tree
+struct ConnectedSubsets;
+
+#[derive(Debug, Clone)]
+struct Compress {
+    left: ModP,
+    right: ModP,
+    full: ModP,
+}
+
+impl ClusterCx for ConnectedSubsets {
+    type V = u8;
+    type Compress = Compress;
+    type Rake = ModP;
+
+    fn id_compress() -> Self::Compress {
+        Compress {
+            left: ModP::zero(),
+            right: ModP::zero(),
+            full: ModP::one(),
+        }
+    }
+    fn compress(&self, lhs: &Self::Compress, rhs: &Self::Compress) -> Self::Compress {
+        Compress {
+            left: lhs.left + lhs.full * rhs.left,
+            right: rhs.right + rhs.full * lhs.right,
+            full: lhs.full * rhs.full,
+        }
+    }
+
+    fn id_rake() -> Self::Rake {
+        ModP::one()
+    }
+    fn rake(&self, lhs: &Self::Rake, rhs: &Self::Rake) -> Self::Rake {
+        *lhs * *rhs
+    }
+
+    fn collapse_compressed(&self, path: &Self::Compress) -> Self::Rake {
+        path.left + ModP::one()
+    }
+    fn collapse_raked(&self, point: &Self::Rake, &weight: &Self::V) -> Self::Compress {
+        let c = ModP::from(weight) * *point;
+        Compress {
+            left: c,
+            right: c,
+            full: c,
+        }
+    }
+    fn make_leaf(&self, &weight: &Self::V) -> Self::Compress {
+        let c = ModP::from(weight);
+        Compress {
+            left: c,
+            right: c,
+            full: c,
+        }
+    }
+
+    const LAZY: bool = false;
+
+    const REVERSE_TYPE: Option<WeightType> = Some(WeightType::Vertex);
+    fn reverse(&self, path: &Self::Compress) -> Self::Compress {
+        let mut path = path.clone();
+        std::mem::swap(&mut path.left, &mut path.right);
+        path
+    }
+}
+
+fn main() {
+    let mut input = fast_io::stdin();
+    let mut output = fast_io::stdout();
+
+    let d: i32 = input.value();
+    let n: usize = input.value();
+
+    let mut events: Vec<_> = (0..n).map(|i| (input.u32() as i32 - 1, i as u32)).collect();
+    events.sort_unstable();
+
+    let edges = (0..n - 1).map(|_| (input.u32() - 1, input.u32() - 1));
+    let mut stt = StaticTopTree::from_edges(n, edges, 0, ConnectedSubsets);
+    stt.init_weights((0..n).map(|u| (u, 0)));
+
+    let events_add = events.iter().copied();
+    let mut events_remove = events.iter().copied().peekable();
+
+    let mut ans = ModP::zero();
+
+    for (upper, u) in events_add {
+        stt.modify(u as usize, |w| *w = 1);
+        let lower = upper - d;
+        while let Some((_, u)) = events_remove.next_if(|&(x, _)| x < lower) {
+            stt.modify(u as usize, |w| *w = 0);
+        }
+
+        let (proper_subtree, &_) = stt.sum_rerooted(u as usize);
+        ans += proper_subtree;
+    }
+    writeln!(output, "{}", u64::from(ans)).unwrap();
 }

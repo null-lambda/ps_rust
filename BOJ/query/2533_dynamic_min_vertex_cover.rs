@@ -1,16 +1,60 @@
 use std::io::Write;
 
-use static_top_tree::rooted::{Cluster, ClusterCx, MonoidAction, StaticTopTree};
+use static_top_tree::rooted::{ClusterCx, StaticTopTree};
 
-mod simple_io {
-    pub struct InputAtOnce<'a> {
-        _buf: String,
-        iter: std::str::SplitAsciiWhitespace<'a>,
+mod fast_io {
+    use std::fs::File;
+    use std::io::BufWriter;
+    use std::os::unix::io::FromRawFd;
+
+    extern "C" {
+        fn mmap(addr: usize, length: usize, prot: i32, flags: i32, fd: i32, offset: i64)
+            -> *mut u8;
+        fn fstat(fd: i32, stat: *mut usize) -> i32;
     }
 
-    impl<'a> InputAtOnce<'a> {
-        pub fn token(&mut self) -> &'a str {
-            self.iter.next().unwrap_or_default()
+    pub struct InputAtOnce {
+        buf: &'static [u8],
+    }
+
+    impl InputAtOnce {
+        fn skip(&mut self) {
+            loop {
+                match self.buf {
+                    &[..=b' ', ..] => self.buf = &self.buf[1..],
+                    _ => break,
+                }
+            }
+        }
+
+        fn u32_noskip(&mut self) -> u32 {
+            let mut acc = 0;
+            loop {
+                match self.buf {
+                    &[b'0'..=b'9', ..] => acc = acc * 10 + (self.buf[0] - b'0') as u32,
+                    _ => break,
+                }
+                self.buf = &self.buf[1..];
+            }
+            acc
+        }
+
+        pub fn token(&mut self) -> &'static str {
+            self.skip();
+            let start = self.buf.as_ptr();
+            loop {
+                match self.buf {
+                    &[..=b' ', ..] => break,
+                    _ => self.buf = &self.buf[1..],
+                }
+            }
+            let end = self.buf.as_ptr();
+            unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    start,
+                    end.offset_from(start) as usize,
+                ))
+            }
         }
 
         pub fn value<T: std::str::FromStr>(&mut self) -> T
@@ -19,22 +63,32 @@ mod simple_io {
         {
             self.token().parse().unwrap()
         }
+
+        pub fn u32(&mut self) -> u32 {
+            self.skip();
+            self.u32_noskip()
+        }
     }
 
-    pub fn stdin<'a>() -> InputAtOnce<'a> {
-        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
-        let iter = _buf.split_ascii_whitespace();
-        let iter = unsafe { std::mem::transmute(iter) };
-        InputAtOnce { _buf, iter }
+    pub fn stdin() -> InputAtOnce {
+        let mut stat = [0; 18];
+        unsafe { fstat(0, (&mut stat).as_mut_ptr()) };
+        let buf = unsafe { mmap(0, stat[6], 1, 2, 0, 0) };
+        let buf =
+            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(buf, stat[6])) };
+        InputAtOnce {
+            buf: buf.as_bytes(),
+        }
     }
 
-    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
-        std::io::BufWriter::new(std::io::stdout())
+    pub fn stdout() -> BufWriter<File> {
+        let stdout = unsafe { File::from_raw_fd(1) };
+        BufWriter::with_capacity(1 << 16, stdout)
     }
 }
 
 pub mod debug {
-    pub fn with(f: impl FnOnce()) {
+    pub fn with(#[allow(unused_variables)] f: impl FnOnce()) {
         #[cfg(debug_assertions)]
         f()
     }
@@ -43,32 +97,169 @@ pub mod debug {
 pub mod static_top_tree {
     pub mod rooted {
         /// # Static Top Tree
-        /// Extend segment tree to rooted trees in O(N log N).
-        /// Compared to usual edge-based top trees, this one is vertex-based and not path-reversible;
-        /// Each compress cluster is represents a left-open, right-closed path.
+        /// Extend dynamic Divide & Conquer (segment tree) to rooted trees with rebalanced HLD, in O(N log N).
+        /// Heavily optimized for performance. (Portability & code golfing is not concerns.)
         ///
-        /// Since we cannot expose the path cluster directly, implementing path and subtree queries
-        /// are a bit tricky.
+        /// Compared to usual edge-based top trees, this one is vertex-based. Each compress
+        /// cluster represents a left-open, right-closed path. Simultaneous support for path
+        /// reversibility of both vertex and edge weights is not provided.
+        ///
+        /// Supports subtree queries with lazy propagation. Rerooted queries are also
+        /// supported for path-reversible clusters.
         ///
         /// ## Reference:
         /// - [[Tutorial] Theorically Faster HLD and Centroid Decomposition](https://codeforces.com/blog/entry/104997/)
         /// - [ABC 351G Editorial](https://atcoder.jp/contests/abc351/editorial/9899)
         /// - [Self-adjusting top tree](https://renatowerneck.wordpress.com/wp-content/uploads/2016/06/tw05-self-adjusting-top-tree.pdf)
+        /// - [[Tutorial] Fully Dynamic Trees Supporting Path/Subtree Aggregates and Lazy Path/Subtree Updates](https://codeforces.com/blog/entry/103726)
         ///
         /// See also:
         /// - [maomao90's static top tree visualisation](https://maomao9-0.github.io/static-top-tree-visualisation/)
         ///
         /// ## TODO
-        /// - path query
-        /// - Lazy propagation + path query + subtree query
-        ///   (Probably, implmenting a dynamic top tree would be easier)
+        /// - Path query (Probably, implmenting a dynamic top tree would be much easier)
         /// - Persistence!
-        use std::num::NonZeroU32;
+        use std::{hint::unreachable_unchecked, num::NonZeroU32};
 
         pub const UNSET: u32 = !0;
 
+        #[derive(Debug)]
+        pub enum Cluster<C: ClusterCx> {
+            Compress(C::Compress),
+            Rake(C::Rake),
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        pub enum ClusterType {
+            Compress,
+            Rake,
+        }
+
+        pub enum WeightType {
+            Vertex,
+            UpwardEdge,
+        }
+
+        pub trait ClusterCx: Sized {
+            // Vertex weight / weight of an upward edge (u -> parent(u)).
+            type V: Default + Clone;
+
+            type Compress: Clone; // Path cluster (aggregate on a subchain)
+            type Rake: Clone; // Point cluster (Aggregate of light edges)
+
+            // Compress monoid.
+            // Left side is always the top side.
+            fn id_compress() -> Self::Compress;
+            fn compress(&self, lhs: &Self::Compress, rhs: &Self::Compress) -> Self::Compress;
+
+            // Rake monoid, commutative.
+            fn id_rake() -> Self::Rake;
+            fn rake(&self, lhs: &Self::Rake, rhs: &Self::Rake) -> Self::Rake;
+
+            // A projection.
+            fn collapse_compressed(&self, path: &Self::Compress) -> Self::Rake;
+            // Attach a rake cluster to a leaf compress cluster.
+            fn collapse_raked(&self, point: &Self::Rake, weight: &Self::V) -> Self::Compress;
+            // Make a leaf compress cluster without any rake edge.
+            fn make_leaf(&self, weight: &Self::V) -> Self::Compress; // In case of no associated rake edge
+
+            // This is how everything is summed up.
+            fn pull_up(
+                &self,
+                node: &mut Cluster<Self>,
+                children: [Option<&mut Cluster<Self>>; 2],
+                weight: &Self::V,
+            ) {
+                use Cluster::*;
+                match (node, children) {
+                    (Compress(c), [Some(Compress(lhs)), Some(Compress(rhs))]) => {
+                        *c = self.compress(lhs, rhs)
+                    }
+                    (Compress(c), [Some(Rake(top)), None]) => *c = self.collapse_raked(top, weight),
+                    (Compress(c), [None, None]) => *c = self.make_leaf(weight),
+                    (Rake(r), [Some(Rake(lhs)), Some(Rake(rhs))]) => *r = self.rake(lhs, rhs),
+                    (Rake(r), [Some(Compress(top)), None]) => *r = self.collapse_compressed(top),
+                    _ => unsafe { unreachable_unchecked() },
+                }
+            }
+
+            // Lazy propagation (Implement it yourself)
+            // Store lazy tags in your own rake/compress clusters.
+            // To support both subtree updates and path updates, we need multiple aggregates/lazy tags:
+            // one for the path and one for the proper subtree.
+            const LAZY: bool; // Should we use type-level boolean?
+            fn push_down(
+                &self,
+                node: &mut Cluster<Self>,
+                children: [Option<&mut Cluster<Self>>; 2],
+                #[allow(unused_variables)] weight: &mut Self::V,
+            ) {
+                assert!(!Self::LAZY, "Implement push_down for lazy propagation");
+                use Cluster::*;
+
+                #[allow(unused_variables)]
+                match (node, children) {
+                    (Compress(c), [Some(Compress(lhs)), Some(Compress(rhs))]) => todo!(),
+                    (Compress(c), [Some(Rake(top)), None]) => todo!(),
+                    (Compress(c), [None, None]) => todo!(),
+                    (Rake(r), [Some(Rake(lhs)), Some(Rake(rhs))]) => todo!(),
+                    (Rake(r), [Some(Compress(top)), None]) => todo!(),
+                    _ => unsafe { unreachable_unchecked() },
+                }
+            }
+
+            // Required for rerooting operations
+            const REVERSE_TYPE: Option<WeightType> = None;
+            fn reverse(&self, _path: &Self::Compress) -> Self::Compress {
+                panic!("Implement reverse for rerooting operations");
+            }
+        }
+
+        #[derive(Debug, Copy, Clone)]
+        pub enum ActionRange {
+            SubTree,
+            Path,
+        }
+
+        // Lazy propagation (Implement it yourself, Part II)
+        pub trait Action<Cx: ClusterCx> {
+            fn apply(&self, cluster: &mut Cluster<Cx>, range: ActionRange);
+            fn apply_to_weight(&self, weight: &mut Cx::V);
+        }
+
+        impl<Cx: ClusterCx> Clone for Cluster<Cx> {
+            fn clone(&self) -> Self {
+                match self {
+                    Cluster::Compress(c) => Cluster::Compress(c.clone()),
+                    Cluster::Rake(r) => Cluster::Rake(r.clone()),
+                }
+            }
+        }
+
+        impl<Cx: ClusterCx> Cluster<Cx> {
+            pub fn into_result(self) -> Result<Cx::Compress, Cx::Rake> {
+                match self {
+                    Cluster::Compress(c) => Ok(c),
+                    Cluster::Rake(r) => Err(r),
+                }
+            }
+
+            pub fn get_compress(&self) -> Option<&Cx::Compress> {
+                match self {
+                    Cluster::Compress(c) => Some(c),
+                    _ => None,
+                }
+            }
+
+            pub fn get_rake(&self) -> Option<&Cx::Rake> {
+                match self {
+                    Cluster::Rake(r) => Some(r),
+                    _ => None,
+                }
+            }
+        }
+
         // Heavy-Light Decomposition, prior to top tree construction.
-        // Golfable within ~20 lines with two recursive DFS traversals.
         #[derive(Debug, Default)]
         pub struct HLD {
             // Rooted tree structure
@@ -179,120 +370,6 @@ pub mod static_top_tree {
             }
         }
 
-        pub trait ClusterCx: Sized {
-            // Vertex weight / weight of an upward edge (u -> parent(u)).
-            type V: Default + Clone;
-
-            type Compress: Clone; // Path cluster (aggregate on a subchain)
-            type Rake: Clone; // Point cluster (Aggregate of light edges)
-
-            // Compress monoid. Left side is always the top side.
-            fn id_compress() -> Self::Compress;
-            fn compress(&self, lhs: &Self::Compress, rhs: &Self::Compress) -> Self::Compress;
-
-            // Rake monoid, commutative.
-            fn id_rake() -> Self::Rake;
-            fn rake(&self, lhs: &Self::Rake, rhs: &Self::Rake) -> Self::Rake;
-
-            // A projection.
-            fn collapse_compressed(&self, path: &Self::Compress) -> Self::Rake;
-            // Attach a rake cluster to a leaf compress cluster.
-            fn collapse_raked(&self, point: &Self::Rake, top_weight: &Self::V) -> Self::Compress;
-            // Make a leaf compress cluster without any rake edge.
-            fn make_leaf(&self, weight: &Self::V) -> Self::Compress; // In case of no associated rake edge
-
-            // This is how everything is summed up.
-            fn pull_up(
-                &self,
-                node: &mut Cluster<Self>,
-                children: [Option<&mut Cluster<Self>>; 2],
-                weight: &Self::V,
-            ) {
-                use Cluster::*;
-                match (node, children) {
-                    (Compress(c), [Some(Compress(lhs)), Some(Compress(rhs))]) => {
-                        *c = self.compress(lhs, rhs)
-                    }
-                    (Compress(c), [Some(Rake(top)), None]) => *c = self.collapse_raked(top, weight),
-                    (Compress(c), [None, None]) => *c = self.make_leaf(weight),
-                    (Rake(r), [Some(Rake(lhs)), Some(Rake(rhs))]) => *r = self.rake(lhs, rhs),
-                    (Rake(r), [Some(Compress(top)), None]) => *r = self.collapse_compressed(top),
-                    _ => unsafe { std::hint::unreachable_unchecked() },
-                }
-            }
-
-            // Lazy propagation (Implement it yourself)
-            const LAZY: bool;
-            fn push_down(
-                &self,
-                node: &mut Cluster<Self>,
-                children: [Option<&mut Cluster<Self>>; 2],
-                weight: &mut Self::V,
-            ) {
-                assert!(Self::LAZY, "Implement push_down for lazy propagation");
-                use Cluster::*;
-
-                #[allow(unused_variables)]
-                match (node, children) {
-                    (Compress(c), [Some(Compress(lhs)), Some(Compress(rhs))]) => todo!(),
-                    (Compress(c), [Some(Rake(top)), None]) => todo!(),
-                    (Compress(c), [None, None]) => todo!(),
-                    (Rake(r), [Some(Rake(lhs)), Some(Rake(rhs))]) => todo!(),
-                    (Rake(r), [Some(Compress(top)), None]) => todo!(),
-                    _ => unsafe { std::hint::unreachable_unchecked() },
-                }
-            }
-        }
-
-        // Lazy propagation (Implement it yourself, Part II)
-        pub trait MonoidAction<Cx: ClusterCx> {
-            fn apply(&self, cluster: &mut Cluster<Cx>);
-            fn apply_to_weight(&self, weight: &mut Cx::V);
-        }
-
-        #[derive(Debug)]
-        pub enum Cluster<C: ClusterCx> {
-            Compress(C::Compress),
-            Rake(C::Rake),
-        }
-
-        #[derive(Debug, Clone, Copy)]
-        pub enum ClusterType {
-            Compress,
-            Rake,
-        }
-
-        impl<Cx: ClusterCx> Clone for Cluster<Cx> {
-            fn clone(&self) -> Self {
-                match self {
-                    Cluster::Compress(c) => Cluster::Compress(c.clone()),
-                    Cluster::Rake(r) => Cluster::Rake(r.clone()),
-                }
-            }
-        }
-
-        impl<Cx: ClusterCx> Cluster<Cx> {
-            pub fn into_result(self) -> Result<Cx::Compress, Cx::Rake> {
-                match self {
-                    Cluster::Compress(c) => Ok(c),
-                    Cluster::Rake(r) => Err(r),
-                }
-            }
-
-            pub fn get_compress(&self) -> Option<&Cx::Compress> {
-                match self {
-                    Cluster::Compress(c) => Some(c),
-                    _ => None,
-                }
-            }
-
-            pub fn get_rake(&self) -> Option<&Cx::Rake> {
-                match self {
-                    Cluster::Rake(r) => Some(r),
-                    _ => None,
-                }
-            }
-        }
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub struct NodeRef(NonZeroU32);
 
@@ -323,10 +400,11 @@ pub mod static_top_tree {
         }
 
         pub struct StaticTopTree<Cx: ClusterCx> {
-            pub cx: Cx,
+            // Represented tree structure
             pub hld: HLD,
             n_verts: usize,
 
+            // Top tree topology
             root_node: NodeRef,
             size: Vec<u32>,
             children: Vec<[Option<NodeRef>; 2]>,
@@ -336,12 +414,14 @@ pub mod static_top_tree {
             compress_leaf: Vec<NodeRef>, // Leaf node in compress tree (true leaf, or a collapsed rake tree)
             compress_root: Vec<NodeRef>, // Root node in compress tree
 
+            // Maps node indices to their positions in the binary completion of the top tree.
+            // Required for fast node locations, path queries and lazy propagations.
+            index_in_binary_completion: Vec<u64>,
+
+            // Weights and aggregates
+            pub cx: Cx,
             clusters: Vec<Cluster<Cx>>,
             weights: Vec<Cx::V>,
-
-            // Maps node indices to their positions in the binary completion of the top tree.
-            // This is required for fast node locations, path queries and lazy propagations.
-            index_in_binary_completion: Vec<u64>,
         }
 
         impl<Cx: ClusterCx> StaticTopTree<Cx> {
@@ -367,12 +447,12 @@ pub mod static_top_tree {
                     compress_leaf: vec![dummy; nodes_cap],
                     compress_root: vec![dummy; nodes_cap],
 
+                    index_in_binary_completion: vec![0; nodes_cap],
+
                     clusters: vec![Cluster::Compress(Cx::id_compress()); nodes_cap],
                     weights: vec![Default::default(); nodes_cap],
 
                     cx,
-
-                    index_in_binary_completion: vec![0; nodes_cap],
                 };
 
                 this.build_topology(&hld);
@@ -381,6 +461,8 @@ pub mod static_top_tree {
 
                 this
             }
+
+            // Build the top tree
 
             fn alloc(&mut self, children: [Option<NodeRef>; 2]) -> NodeRef {
                 let u = NodeRef::new(self.n_nodes as u32);
@@ -485,10 +567,10 @@ pub mod static_top_tree {
                 u64::BITS - 1 - u64::leading_zeros(path)
             }
 
-            pub fn init_weights(&mut self, weights: &[Cx::V]) {
-                assert_eq!(weights.len(), self.n_verts);
-                for u in 0..weights.len() {
-                    self.weights[self.compress_leaf[u].usize()] = weights[u].clone();
+            pub fn init_weights(&mut self, weights: impl IntoIterator<Item = (usize, Cx::V)>) {
+                for (u, w) in weights {
+                    debug_assert!(u < self.n_verts);
+                    self.weights[self.compress_leaf[u].usize()] = w;
                 }
 
                 for u in (1..self.n_nodes as u32).map(NodeRef::new) {
@@ -526,8 +608,6 @@ pub mod static_top_tree {
                     v = unsafe { self.children[v.usize()][branch as usize].unwrap_unchecked() };
                     self.push_down(v);
                 }
-
-                assert_eq!(v, u); // TODO
             }
 
             fn pull_up_to_root(&mut self, mut u: NodeRef) {
@@ -538,7 +618,7 @@ pub mod static_top_tree {
                 }
             }
 
-            // Sum queries
+            // A set of sum queries
 
             pub fn get(&mut self, u: usize) -> &Cx::V {
                 self.push_down_from_root(self.compress_leaf[u]);
@@ -557,10 +637,9 @@ pub mod static_top_tree {
             pub fn sum_subtree(&mut self, u: usize) -> (Cx::Rake, &Cx::V) {
                 self.push_down_from_root(self.compress_leaf[u]);
 
-                let (u, top) = (
-                    self.compress_leaf[u],
-                    self.compress_root[self.hld.chain_top[u] as usize],
-                );
+                // Compute suffix of the compress tree + rake tree
+                let top = self.compress_root[self.hld.chain_top[u] as usize];
+                let u = self.compress_leaf[u];
                 let mut v = u;
                 let mut suffix = Cx::id_compress();
                 while v != top {
@@ -584,25 +663,94 @@ pub mod static_top_tree {
                 (sum_as_rake, &self.weights[u.usize()])
             }
 
-            // Sum on the complement of the proper subtree (WIP)
             pub fn sum_subtree_complement(&mut self, u: usize) -> Cx::Compress {
-                eprintln!("Warning: sum_subtree_complement not tested yet");
+                unimplemented!()
+            }
+
+            // Sum over the temporarily rerooted tree
+            pub fn sum_rerooted(&mut self, u: usize) -> (Cx::Rake, &Cx::V) {
+                assert!(
+                    Cx::REVERSE_TYPE.is_some(),
+                    "Requires reversible compress clusters"
+                );
                 self.push_down_from_root(self.compress_leaf[u]);
 
-                let mut u = self.compress_leaf[u];
-                let mut sum = Cluster::Compress(self.cx.make_leaf(&self.weights[u.usize()]));
-                while let Some(p) = self.parent[u.usize()] {
-                    let mut prev = std::mem::replace(&mut sum, self.clusters[p.usize()].clone());
+                let u = self.compress_leaf[u];
+                let path = self.index_in_binary_completion[u.usize()];
 
-                    let (_, mut modified_children) =
-                        p.get_with_children_in(&self.children, &mut self.clusters);
-                    let branch = (self.children[p.usize()][1] == Some(u)) as usize;
-                    modified_children[branch] = Some(&mut prev);
-                    self.cx
-                        .pull_up(&mut sum, modified_children, &self.weights[p.usize()]);
-                    u = p;
+                // Descend from the root. Fold every chain in half, and propagate it down to the lower chain.
+                // Do an exclusive sum for the rake tree.
+                let mut c_prefix = Cx::id_compress();
+                let mut c_suffix = Cx::id_compress();
+                let mut r_exclusive = Cx::id_rake();
+                let mut rake_pivot = self.root_node;
+
+                match Cx::REVERSE_TYPE {
+                    Some(WeightType::Vertex) => {
+                        let mut v = self.root_node; // Dummy
+                        for branch in (0..self.depth(u))
+                            .rev()
+                            .map(|d| (path >> d) & 1)
+                            .chain(Some(0))
+                        {
+                            use Cluster::*;
+                            crate::debug::with(|| println!("v={:?}", v));
+                            match v.get_with_children_in(&self.children, &mut self.clusters) {
+                                (Compress(_), [Some(Compress(lhs)), Some(Compress(rhs))]) => {
+                                    if branch == 0 {
+                                        crate::debug::with(|| println!("prepend suffix"));
+                                        c_suffix = self.cx.compress(rhs, &c_suffix);
+                                    } else {
+                                        crate::debug::with(|| println!("append prefix"));
+                                        c_prefix = self.cx.compress(&c_prefix, lhs);
+                                    }
+                                }
+                                (Compress(_), [rake_root, _]) => {
+                                    crate::debug::with(|| println!("fold in half"));
+                                    r_exclusive = self.cx.rake(
+                                        &self.cx.collapse_compressed(&self.cx.reverse(&c_prefix)),
+                                        &self.cx.collapse_compressed(&c_suffix),
+                                    );
+                                    rake_pivot = v;
+
+                                    if v == u {
+                                        if let Some(Rake(rake_root)) = rake_root {
+                                            r_exclusive = self.cx.rake(&r_exclusive, rake_root);
+                                        }
+                                        break;
+                                    }
+                                }
+                                (Rake(_), [Some(Rake(lhs)), Some(Rake(rhs))]) => {
+                                    r_exclusive = if branch == 0 {
+                                        self.cx.rake(&r_exclusive, rhs)
+                                    } else {
+                                        self.cx.rake(&r_exclusive, lhs)
+                                    };
+                                }
+
+                                (Rake(_), [Some(Compress(_)), None]) => {
+                                    c_prefix = self.cx.collapse_raked(
+                                        &r_exclusive,
+                                        &self.weights[rake_pivot.usize()],
+                                    );
+                                    c_suffix = Cx::id_compress();
+                                }
+                                _ => unsafe { unreachable_unchecked() },
+                            }
+
+                            v = unsafe {
+                                self.children[v.usize()][branch as usize].unwrap_unchecked()
+                            };
+                        }
+                        crate::debug::with(|| println!());
+
+                        (r_exclusive, &self.weights[u.usize()])
+                    }
+                    Some(WeightType::UpwardEdge) => {
+                        unimplemented!()
+                    }
+                    _ => unreachable!(),
                 }
-                unsafe { sum.into_result().unwrap_unchecked() }
             }
 
             pub fn sum_to_root(&mut self, u: usize) -> Cx::Compress {
@@ -616,72 +764,97 @@ pub mod static_top_tree {
                 mut u: usize,
                 mut v: usize,
             ) -> (Cx::Compress, Cx::V, Cx::Compress) {
+                // Since we cannot expose the path cluster directly as in the dynamic ones,
+                // implementing path and subtree queries are a bit tricky.
+
                 // TODO: Push down from the LCA (for performance)
                 self.push_down_from_root(self.compress_leaf[u]);
                 self.push_down_from_root(self.compress_leaf[v]);
 
-                // We cannot expose the path cluster directly... Should we collect the path to lca?
-                // Also, we should determine which is on the left side, and which is on the right side.
                 unimplemented!()
             }
 
-            // Modification query
+            // A set of update queries
 
             pub fn modify(&mut self, u: usize, update_with: impl FnOnce(&mut Cx::V)) {
-                assert!(!Cx::LAZY, "Do not mix point updates with lazy propagation");
+                assert!(
+                    !Cx::LAZY,
+                    "Do not mix arbitrary point updates with lazy propagation"
+                );
                 let u = self.compress_leaf[u];
                 update_with(&mut self.weights[u.usize()]);
                 self.pull_up_to_root(u);
             }
 
-            pub fn apply_all(&mut self, action: impl MonoidAction<Cx>) {
+            pub fn apply_all(&mut self, action: impl Action<Cx>) {
                 assert!(Cx::LAZY, "Lazy propagation is not enabled");
+                self.push_down(self.root_node);
+                action.apply(
+                    &mut self.clusters[self.root_node.usize()],
+                    ActionRange::SubTree,
+                );
+                action.apply_to_weight(&mut self.weights[self.root_node.usize()]);
+
                 unimplemented!()
             }
 
-            pub fn apply_point(&mut self, u: usize, action: impl MonoidAction<Cx>) {
+            pub fn apply_point(&mut self, u: usize, action: impl Action<Cx>) {
+                let u = self.compress_leaf[u];
                 self.push_down_from_root(u);
-
+                action.apply_to_weight(&mut self.weights[u.usize()]);
                 self.pull_up_to_root(u);
             }
 
-            pub fn apply_path(&mut self, u: usize, v: usize, action: impl MonoidAction<Cx>) {
+            pub fn apply_path(
+                &mut self,
+                u: usize,
+                v: usize,
+                apply_to_lca: bool,
+                action: impl Action<Cx>,
+            ) {
                 assert!(Cx::LAZY, "Lazy propagation is not enabled");
                 unimplemented!()
             }
 
-            pub fn apply_proper_subtree(&mut self, u: usize, action: impl MonoidAction<Cx>) {
+            pub fn apply_subtree(
+                &mut self,
+                u: usize,
+                apply_to_root: bool,
+                action: impl Action<Cx>,
+            ) {
                 assert!(Cx::LAZY, "Lazy propagation is not enabled");
 
                 let (u, top) = (
                     self.compress_leaf[u],
                     self.compress_root[self.hld.chain_top[u] as usize],
                 );
-                let mut v = u;
-                let mut suffix = Cx::id_compress();
-                // while v != top {
-                //     let p = self.parent[v.usize()].unwrap();
-                //     let branch = (self.children[p.usize()][1] == Some(v)) as usize;
-                //     if branch == 0 {
-                //         let rhs = unsafe { self.children[p.usize()][1].unwrap_unchecked() };
-                //         let rhs =
-                //             unsafe { self.clusters[rhs.usize()].get_compress().unwrap_unchecked() };
-                //         suffix = self.cx.compress(&suffix, rhs);
-                //     }
-                //     v = p;
-                // }
 
-                // let mut sum_as_rake = self.cx.collapse_compressed(&suffix);
-                // if let Some(lhs) = self.children[u.usize()][0]
-                //     .and_then(|lhs| self.clusters[lhs.usize()].get_rake())
-                // {
-                //     sum_as_rake = self.cx.rake(lhs, &sum_as_rake);
-                // }
+                let mut v = self.root_node;
+                self.push_down(v);
+                let path = self.index_in_binary_completion[u.usize()];
+                for d in (0..self.depth(u)).rev() {
+                    let branch = (path >> d) & 1;
+                    if d < self.depth(u) - self.depth(top) && branch == 0 {
+                        let rhs = unsafe { self.children[v.usize()][1].unwrap_unchecked() };
+                        action.apply(&mut self.clusters[rhs.usize()], ActionRange::SubTree);
+                    }
+                    v = unsafe { self.children[v.usize()][branch as usize].unwrap_unchecked() };
+                    self.push_down(v);
+                }
+                debug_assert_eq!(u, v);
 
-                unimplemented!()
+                if apply_to_root {
+                    action.apply_to_weight(&mut self.weights[u.usize()]);
+                }
+
+                if let Some(lhs) = self.children[u.usize()][0] {
+                    action.apply(&mut self.clusters[lhs.usize()], ActionRange::SubTree);
+                }
+
+                self.pull_up_to_root(u);
             }
 
-            pub fn apply_subtree_complement(&mut self, u: usize, action: impl MonoidAction<Cx>) {
+            pub fn apply_subtree_complement(&mut self, u: usize, action: impl Action<Cx>) {
                 assert!(Cx::LAZY, "Lazy propagation is not enabled");
                 unimplemented!()
             }
@@ -721,126 +894,80 @@ pub mod static_top_tree {
     }
 }
 
-type X = u32;
+// Online dynamic connectivity for a subgraph of a tree
+struct MaxIndependentSet;
 
-#[derive(Copy, Clone, Default)]
-struct LazyNode {
-    sum: X,
-    lazy_add_subtree: X,
+#[derive(Copy, Clone)]
+struct Compress([u32; 4]);
+
+impl Compress {
+    fn from_fn(f: impl Fn(bool, bool) -> u32) -> Self {
+        Self([
+            f(false, false),
+            f(false, true),
+            f(true, false),
+            f(true, true),
+        ])
+    }
+
+    fn eval(self, lhs: bool, rhs: bool) -> u32 {
+        self.0[(lhs as usize) << 1 | rhs as usize]
+    }
+
+    fn collapse(self) -> u32 {
+        self.0.iter().copied().max().unwrap()
+    }
 }
 
-#[derive(Debug)]
-struct Additive;
-
-impl ClusterCx for Additive {
-    type V = X;
-    type Compress = LazyNode;
-    type Rake = LazyNode;
-
-    const LAZY: bool = true;
+impl ClusterCx for MaxIndependentSet {
+    type V = ();
+    type Compress = Compress;
+    type Rake = [u32; 2];
 
     fn id_compress() -> Self::Compress {
-        LazyNode::default()
+        Compress([0; 4])
     }
-
-    fn make_leaf(&self, &weight: &Self::V) -> Self::Compress {
-        LazyNode {
-            sum: weight,
-            lazy_add_subtree: 0,
-        }
-    }
-
     fn compress(&self, lhs: &Self::Compress, rhs: &Self::Compress) -> Self::Compress {
-        LazyNode {
-            sum: lhs.sum + rhs.sum,
-            lazy_add_subtree: 0,
-        }
-    }
-
-    fn collapse_compressed(&self, &path: &Self::Compress) -> Self::Rake {
-        path
+        Compress::from_fn(|l, r| {
+            (lhs.eval(l, false) + rhs.eval(false, r))
+                .max(lhs.eval(l, true) + rhs.eval(false, r))
+                .max(lhs.eval(l, false) + rhs.eval(true, r))
+        })
     }
 
     fn id_rake() -> Self::Rake {
-        LazyNode::default()
+        [0; 2]
     }
-
     fn rake(&self, lhs: &Self::Rake, rhs: &Self::Rake) -> Self::Rake {
-        self.compress(lhs, rhs)
+        std::array::from_fn(|i| lhs[i] + rhs[i])
     }
 
-    fn collapse_raked(&self, point: &Self::Rake, &weight: &Self::V) -> Self::Compress {
-        LazyNode {
-            sum: point.sum + weight,
-            lazy_add_subtree: point.lazy_add_subtree,
-        }
+    fn collapse_compressed(&self, path: &Self::Compress) -> Self::Rake {
+        let prefix = [
+            path.eval(false, false).max(path.eval(false, true)),
+            path.eval(true, false).max(path.eval(true, true)),
+        ];
+        [prefix[0], prefix[0].max(prefix[1])]
+    }
+    fn collapse_raked(&self, point: &Self::Rake, &(): &Self::V) -> Self::Compress {
+        Compress([point[1], 0, 0, point[0] + 1])
+    }
+    fn make_leaf(&self, &(): &Self::V) -> Self::Compress {
+        Compress([0, 0, 0, 1])
     }
 
-    fn push_down(
-        &self,
-        node: &mut Cluster<Self>,
-        children: [Option<&mut Cluster<Self>>; 2],
-        weight: &mut Self::V,
-    ) {
-        use Cluster::*;
-        let c = match node {
-            Compress(c) | Rake(c) => c,
-        };
-        let action = std::mem::take(&mut c.lazy_add_subtree);
-        for child in children.into_iter().flatten() {
-            action.apply(child);
-            action.apply_to_weight(weight);
-        }
-    }
-}
-
-impl MonoidAction<Additive> for X {
-    fn apply(&self, cluster: &mut Cluster<Additive>) {
-        match cluster {
-            Cluster::Compress(c) | Cluster::Rake(c) => {
-                c.sum += *self;
-                c.lazy_add_subtree += *self;
-            }
-        }
-    }
-
-    fn apply_to_weight(&self, weight: &mut <Additive as ClusterCx>::V) {
-        *weight += self;
-    }
+    const LAZY: bool = false;
 }
 
 fn main() {
-    let mut input = simple_io::stdin();
-    let mut output = simple_io::stdout();
+    let mut input = fast_io::stdin();
+    let mut output = fast_io::stdout();
 
     let n: usize = input.value();
-    let m: usize = input.value();
+    let edges = (0..n - 1).map(|_| (input.u32() - 1, input.u32() - 1));
 
-    let mut parent = vec![0u32; n];
-    for u in 0..n {
-        let p = input.value::<i32>() - 1;
-        if u == 0 {
-            continue;
-        }
-        parent[u] = p as u32;
-    }
-
-    let edges = (1..n).map(|u| (u as u32, parent[u]));
-    let mut counter = StaticTopTree::from_edges(n, edges, 0, Additive);
-
-    for _ in 0..m {
-        match input.token() {
-            "1" => {
-                let u = input.value::<usize>() - 1;
-                let w: X = input.value();
-                counter.apply_proper_subtree(u, w);
-            }
-            "2" => {
-                let u = input.value::<usize>() - 1;
-                let ans = counter.get(u);
-                writeln!(output, "{}", ans).unwrap();
-            }
-            _ => panic!(),
-        }
-    }
+    let mut stt = StaticTopTree::from_edges(n, edges, 0, MaxIndependentSet);
+    stt.init_weights((0..n).map(|_| ()).into_iter().enumerate());
+    let ans = n as u32 - stt.sum_all().collapse();
+    writeln!(output, "{}", ans).unwrap();
 }
