@@ -1,4 +1,182 @@
+use std::{hint::unreachable_unchecked, io::Write};
+
+use static_top_tree::rooted::{
+    Action, ActionRange, Cluster, ClusterCx, SplitProj, StaticTopTree, WeightType, HLD,
+};
+
+mod fast_io {
+    use std::fs::File;
+    use std::io::BufWriter;
+    use std::os::unix::io::FromRawFd;
+
+    extern "C" {
+        fn mmap(addr: usize, length: usize, prot: i32, flags: i32, fd: i32, offset: i64)
+            -> *mut u8;
+        fn fstat(fd: i32, stat: *mut usize) -> i32;
+    }
+
+    pub struct InputAtOnce {
+        buf: &'static [u8],
+    }
+
+    impl InputAtOnce {
+        fn skip(&mut self) {
+            loop {
+                match self.buf {
+                    &[..=b' ', ..] => self.buf = &self.buf[1..],
+                    _ => break,
+                }
+            }
+        }
+
+        fn u32_noskip(&mut self) -> u32 {
+            let mut acc = 0;
+            loop {
+                match self.buf {
+                    &[b'0'..=b'9', ..] => acc = acc * 10 + (self.buf[0] - b'0') as u32,
+                    _ => break,
+                }
+                self.buf = &self.buf[1..];
+            }
+            acc
+        }
+
+        pub fn token(&mut self) -> &'static str {
+            self.skip();
+            let start = self.buf.as_ptr();
+            loop {
+                match self.buf {
+                    &[..=b' ', ..] => break,
+                    _ => self.buf = &self.buf[1..],
+                }
+            }
+            let end = self.buf.as_ptr();
+            unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    start,
+                    end.offset_from(start) as usize,
+                ))
+            }
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+
+        pub fn u32(&mut self) -> u32 {
+            self.skip();
+            self.u32_noskip()
+        }
+
+        pub fn i32(&mut self) -> i32 {
+            self.skip();
+            match self.buf {
+                &[b'-', ..] => {
+                    self.buf = &self.buf[1..];
+                    -(self.u32_noskip() as i32)
+                }
+                _ => self.u32_noskip() as i32,
+            }
+        }
+    }
+
+    pub fn stdin() -> InputAtOnce {
+        let mut stat = [0; 18];
+        unsafe { fstat(0, (&mut stat).as_mut_ptr()) };
+        let buf = unsafe { mmap(0, stat[6], 1, 2, 0, 0) };
+        let buf =
+            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(buf, stat[6])) };
+        InputAtOnce {
+            buf: buf.as_bytes(),
+        }
+    }
+
+    pub fn stdout() -> BufWriter<File> {
+        let stdout = unsafe { File::from_raw_fd(1) };
+        BufWriter::with_capacity(1 << 16, stdout)
+    }
+}
+
+pub mod debug {
+    pub fn with(#[allow(unused_variables)] f: impl FnOnce()) {
+        #[cfg(debug_assertions)]
+        f()
+    }
+
+    use std::{fmt::Debug, rc::Rc};
+
+    #[cfg(debug_assertions)]
+    #[derive(Clone)]
+    pub struct Label(Rc<dyn Debug>);
+
+    #[cfg(not(debug_assertions))]
+    #[derive(Clone)]
+    pub struct Label;
+
+    impl Label {
+        #[inline]
+        pub fn new_with<T: Debug + 'static>(value: impl FnOnce() -> T) -> Self {
+            #[cfg(debug_assertions)]
+            {
+                Self(Rc::new(value()))
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                Self
+            }
+        }
+    }
+
+    impl Debug for Label {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            #[cfg(debug_assertions)]
+            {
+                write!(f, "{:?}", self.0)
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                write!(f, "()")
+            }
+        }
+    }
+
+    impl Default for Label {
+        fn default() -> Self {
+            Self::new_with(|| ())
+        }
+    }
+
+    impl PartialEq for Label {
+        fn eq(&self, _: &Self) -> bool {
+            true
+        }
+    }
+
+    impl Eq for Label {}
+
+    impl PartialOrd for Label {
+        fn partial_cmp(&self, _: &Self) -> Option<std::cmp::Ordering> {
+            Some(std::cmp::Ordering::Equal)
+        }
+    }
+
+    impl Ord for Label {
+        fn cmp(&self, _: &Self) -> std::cmp::Ordering {
+            std::cmp::Ordering::Equal
+        }
+    }
+
+    impl std::hash::Hash for Label {
+        fn hash<H: std::hash::Hasher>(&self, _: &mut H) {}
+    }
+}
+
 pub mod static_top_tree {
+    /// The full version is available at:
+    /// [https://github.com/null-lambda/ps_rust/tree/main/library/src/tree/top_tree/]
     pub mod rooted {
         /// # Static Top Tree
         /// Extend dynamic Divide & Conquer (segment tree) to rooted trees with rebalanced HLD, in O(N log N).
@@ -1438,6 +1616,389 @@ pub mod static_top_tree {
                     }
                 }
             }
+        }
+    }
+}
+
+type X = i64;
+type F = i64;
+
+#[derive(Clone, Copy, Default, Debug)]
+struct Momentum {
+    sum: X,
+    mo: X,
+
+    // Momentum, where all weights are set to one for lazy propagation.
+    count: u32,
+    skeleton: X,
+}
+
+#[derive(Clone, Copy, Default, Debug)]
+struct Compress {
+    left: Momentum,
+    right: Momentum,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TaggedCompress {
+    len: u32,
+    path: Compress,
+    subtree: Compress,
+
+    lazy_path: F,
+    lazy_subtree: F,
+
+    formula: debug::Label,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct TaggedRake {
+    agg: Momentum,
+
+    lazy: F,
+
+    formula: debug::Label,
+}
+
+impl Momentum {
+    fn compress((lhs, lhs_len): (&Self, u32), (rhs, _rhs_len): (&Self, u32)) -> Self {
+        Self {
+            sum: lhs.sum + rhs.sum,
+            mo: lhs.mo + rhs.mo + lhs_len as i64 * rhs.sum,
+
+            count: lhs.count + rhs.count,
+            skeleton: lhs.skeleton + rhs.skeleton + lhs_len as i64 * rhs.count as i64,
+        }
+    }
+
+    fn rake(lhs: &Self, rhs: &Self) -> Self {
+        Self {
+            sum: lhs.sum + rhs.sum,
+            mo: lhs.mo + rhs.mo,
+            count: lhs.count + rhs.count,
+            skeleton: lhs.skeleton + rhs.skeleton,
+        }
+    }
+
+    fn lift(&self) -> Self {
+        Self {
+            sum: self.sum,
+            mo: self.mo + self.sum,
+
+            count: self.count,
+            skeleton: self.skeleton + self.count as i64,
+        }
+    }
+
+    fn accept(&mut self, f: F) {
+        self.sum += f * self.count as i64;
+        self.mo += f * self.skeleton;
+    }
+}
+
+impl Compress {
+    fn compress(&(lhs, lhs_len): &(Self, u32), &(rhs, rhs_len): &(Self, u32)) -> Self {
+        Self {
+            left: Momentum::compress((&lhs.left, lhs_len), (&rhs.left, rhs_len)),
+            right: Momentum::compress((&rhs.right, rhs_len), (&lhs.right, lhs_len)),
+        }
+    }
+
+    fn accept(&mut self, f: F) {
+        self.left.accept(f);
+        self.right.accept(f);
+    }
+
+    fn reverse(&self) -> Self {
+        Self {
+            left: self.right,
+            right: self.left,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct LazyPropCx;
+
+impl Action<LazyPropCx> for F {
+    fn apply_to_compress(
+        &mut self,
+        cl: &mut <LazyPropCx as ClusterCx>::Compress,
+        range: ActionRange,
+    ) {
+        cl.path.accept(*self);
+        cl.lazy_path += *self;
+        match range {
+            ActionRange::Subtree => {
+                cl.subtree.accept(*self);
+                cl.lazy_subtree += *self;
+            }
+            ActionRange::Path => {}
+        }
+    }
+
+    fn apply_to_rake(&mut self, cl: &mut <LazyPropCx as ClusterCx>::Rake) {
+        cl.agg.accept(*self);
+        cl.lazy += *self;
+    }
+
+    fn apply_to_weight(&mut self, weight: &mut <LazyPropCx as ClusterCx>::V) {
+        *weight += *self;
+    }
+}
+
+impl ClusterCx for LazyPropCx {
+    type V = X;
+    type Compress = TaggedCompress;
+    type Rake = TaggedRake;
+
+    fn id_compress() -> Self::Compress {
+        Default::default()
+    }
+    fn compress(&self, lhs: &Self::Compress, rhs: &Self::Compress) -> Self::Compress {
+        let res = TaggedCompress {
+            len: lhs.len + rhs.len,
+            path: Compress::compress(&(lhs.path, lhs.len), &(rhs.path, rhs.len)),
+            subtree: Compress::compress(&(lhs.subtree, lhs.len), &(rhs.subtree, rhs.len)),
+
+            formula: debug::Label::new_with(|| ("c", lhs.formula.clone(), rhs.formula.clone())),
+            ..Default::default()
+        };
+
+        res
+    }
+
+    fn id_rake() -> Self::Rake {
+        Default::default()
+    }
+    fn rake(&self, lhs: &Self::Rake, rhs: &Self::Rake) -> Self::Rake {
+        TaggedRake {
+            agg: Momentum::rake(&lhs.agg, &rhs.agg),
+
+            formula: debug::Label::new_with(|| ("r", lhs.formula.clone(), rhs.formula.clone())),
+            ..Default::default()
+        }
+    }
+
+    fn collapse_compressed(&self, c: &Self::Compress) -> Self::Rake {
+        TaggedRake {
+            agg: Momentum::rake(&c.path.left, &c.subtree.left),
+
+            formula: debug::Label::new_with(|| ("rleaf", c.formula.clone())),
+            ..Default::default()
+        }
+    }
+    fn collapse_raked(&self, r: &Self::Rake, weight: &Self::V) -> Self::Compress {
+        TaggedCompress {
+            subtree: Compress {
+                left: r.agg.lift(),
+                right: r.agg.lift(),
+            },
+
+            formula: debug::Label::new_with(|| ("attach", weight.clone(), r.formula.clone())),
+            ..self.make_leaf(weight)
+        }
+    }
+
+    fn make_leaf(&self, weight: &Self::V) -> Self::Compress {
+        let m = Momentum {
+            sum: *weight,
+            mo: 0,
+            count: 1,
+            skeleton: 0,
+        };
+        TaggedCompress {
+            len: 1,
+            path: Compress { left: m, right: m },
+
+            formula: debug::Label::new_with(|| weight.clone()),
+            ..Default::default()
+        }
+    }
+
+    fn push_down(
+        &self,
+        node: &mut Cluster<Self>,
+        children: [Option<&mut Cluster<Self>>; 2],
+        weight: &mut Self::V,
+    ) {
+        use Cluster::*;
+        match (node, children) {
+            (Compress(c), [Some(Compress(lhs)), Some(Compress(rhs))]) => {
+                for child in [lhs, rhs] {
+                    child.path.accept(c.lazy_path);
+                    child.lazy_path += c.lazy_path;
+
+                    child.subtree.accept(c.lazy_subtree);
+                    child.lazy_subtree += c.lazy_subtree;
+                }
+
+                c.lazy_path = 0;
+                c.lazy_subtree = 0;
+            }
+            (Compress(c), [Some(Rake(top)), None]) => {
+                c.lazy_path.apply_to_weight(weight);
+                c.lazy_subtree.apply_to_rake(top);
+
+                c.lazy_path = 0;
+                c.lazy_subtree = 0;
+            }
+            (Compress(c), [None, None]) => {
+                c.lazy_path.apply_to_weight(weight);
+
+                c.lazy_path = 0;
+            }
+            (Rake(r), [Some(Rake(lhs)), Some(Rake(rhs))]) => {
+                for child in [lhs, rhs] {
+                    r.lazy.apply_to_rake(child);
+                }
+
+                r.lazy = 0;
+            }
+            (Rake(r), [Some(Compress(top)), None]) => {
+                r.lazy.apply_to_compress(top, ActionRange::Subtree);
+
+                r.lazy = 0;
+            }
+            _ => unsafe { unreachable_unchecked() },
+        }
+    }
+
+    const REVERSE_TYPE: Option<static_top_tree::rooted::WeightType> = Some(WeightType::Vertex);
+
+    fn reverse(&self, c: &Self::Compress) -> Self::Compress {
+        TaggedCompress {
+            path: c.path.reverse(),
+            subtree: c.subtree.reverse(),
+            ..c.clone()
+        }
+    }
+}
+
+const UNSET: u32 = static_top_tree::rooted::UNSET;
+
+struct LCA {
+    depth: Vec<u32>,
+    sid: Vec<u32>,
+    sid_inv: Vec<u32>,
+}
+
+impl LCA {
+    fn new(hld: &HLD) -> Self {
+        let n_verts = hld.topological_order.len();
+
+        let mut depth = vec![0; n_verts];
+        for u in hld.topological_order.iter().rev().copied() {
+            let p = hld.parent[u as usize];
+            if p != UNSET {
+                depth[u as usize] = depth[p as usize] + 1;
+            }
+        }
+
+        let mut sid = vec![!0; n_verts];
+        let mut timer = 0;
+        for mut u in hld.topological_order.iter().rev().copied() {
+            if sid[u as usize] != !0 {
+                continue;
+            }
+            loop {
+                sid[u as usize] = timer;
+                timer += 1;
+                u = hld.heavy_child[u as usize];
+                if u == UNSET {
+                    break;
+                }
+            }
+        }
+
+        let mut sid_inv = vec![!0; n_verts];
+        for u in 0..n_verts {
+            sid_inv[sid[u] as usize] = u as u32;
+        }
+
+        Self {
+            depth,
+            sid,
+            sid_inv,
+        }
+    }
+
+    fn lca(&self, hld: &HLD, mut u: usize, mut v: usize) -> usize {
+        while hld.chain_top[u] != hld.chain_top[v] {
+            if self.sid[hld.chain_top[u] as usize] < self.sid[hld.chain_top[v] as usize] {
+                std::mem::swap(&mut u, &mut v);
+            }
+            u = hld.parent[hld.chain_top[u] as usize] as usize;
+        }
+        if self.sid[u] > self.sid[v] {
+            std::mem::swap(&mut u, &mut v);
+        }
+        u
+    }
+
+    fn nth_parent(&self, hld: &HLD, mut u: usize, mut n: usize) -> Option<usize> {
+        loop {
+            let top = hld.chain_top[u as usize] as usize;
+            let d = (self.depth[u] - self.depth[top]) as usize;
+            if n <= d {
+                return Some(self.sid_inv[self.sid[u] as usize - n] as usize);
+            }
+            u = hld.parent[top] as usize;
+            n -= d + 1;
+
+            if u == UNSET as usize {
+                return None;
+            }
+        }
+    }
+}
+
+fn main() {
+    let mut input = fast_io::stdin();
+    let mut output = fast_io::stdout();
+
+    let n: usize = input.value();
+    let edges = (0..n - 1).map(|_| (input.u32() - 1, input.u32() - 1));
+    let mut stt = StaticTopTree::from_edges(n, edges, 0, LazyPropCx);
+
+    let weights = (0..n).map(|_| 0);
+    stt.init_weights(weights.enumerate());
+
+    let lca = LCA::new(&stt.hld);
+
+    let q: usize = input.value();
+    for _ in 0..q {
+        match input.token() {
+            "1" => {
+                let u = input.u32() as usize - 1;
+                let v = input.u32() as usize - 1;
+
+                let j = lca.lca(&stt.hld, u, v);
+                if u == v {
+                    stt.apply_all(1);
+                } else if v == j {
+                    let c = lca
+                        .nth_parent(&stt.hld, u, (lca.depth[u] - lca.depth[v] - 1) as usize)
+                        .unwrap();
+                    stt.apply_all(1);
+                    stt.apply_subtree(c, true, -1);
+                } else {
+                    stt.apply_subtree(v, true, 1);
+                }
+            }
+            "2" => {
+                let u = input.u32() as usize - 1;
+                let v = input.u32() as usize - 1;
+                stt.apply_path(u, v, true, 1);
+            }
+            "3" => {
+                let u = input.u32() as usize - 1;
+                let (proper_subtree, _top) = stt.sum_rerooted(u);
+                let ans = proper_subtree.agg.lift().mo;
+
+                writeln!(output, "{}", ans).unwrap();
+            }
+            _ => panic!(),
         }
     }
 }

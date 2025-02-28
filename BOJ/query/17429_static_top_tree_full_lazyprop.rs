@@ -1,4 +1,113 @@
+use std::{hint::unreachable_unchecked, io::Write};
+
+use static_top_tree::rooted::{Action, ActionRange, Cluster, ClusterCx, SplitProj, StaticTopTree};
+
+mod fast_io {
+    use std::fs::File;
+    use std::io::BufWriter;
+    use std::os::unix::io::FromRawFd;
+
+    extern "C" {
+        fn mmap(addr: usize, length: usize, prot: i32, flags: i32, fd: i32, offset: i64)
+            -> *mut u8;
+        fn fstat(fd: i32, stat: *mut usize) -> i32;
+    }
+
+    pub struct InputAtOnce {
+        buf: &'static [u8],
+    }
+
+    impl InputAtOnce {
+        fn skip(&mut self) {
+            loop {
+                match self.buf {
+                    &[..=b' ', ..] => self.buf = &self.buf[1..],
+                    _ => break,
+                }
+            }
+        }
+
+        fn u32_noskip(&mut self) -> u32 {
+            let mut acc = 0;
+            loop {
+                match self.buf {
+                    &[b'0'..=b'9', ..] => acc = acc * 10 + (self.buf[0] - b'0') as u32,
+                    _ => break,
+                }
+                self.buf = &self.buf[1..];
+            }
+            acc
+        }
+
+        pub fn token(&mut self) -> &'static str {
+            self.skip();
+            let start = self.buf.as_ptr();
+            loop {
+                match self.buf {
+                    &[..=b' ', ..] => break,
+                    _ => self.buf = &self.buf[1..],
+                }
+            }
+            let end = self.buf.as_ptr();
+            unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    start,
+                    end.offset_from(start) as usize,
+                ))
+            }
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+
+        pub fn u32(&mut self) -> u32 {
+            self.skip();
+            self.u32_noskip()
+        }
+
+        pub fn i32(&mut self) -> i32 {
+            self.skip();
+            match self.buf {
+                &[b'-', ..] => {
+                    self.buf = &self.buf[1..];
+                    -(self.u32_noskip() as i32)
+                }
+                _ => self.u32_noskip() as i32,
+            }
+        }
+    }
+
+    pub fn stdin() -> InputAtOnce {
+        let mut stat = [0; 18];
+        unsafe { fstat(0, (&mut stat).as_mut_ptr()) };
+        let buf = unsafe { mmap(0, stat[6], 1, 2, 0, 0) };
+        let buf =
+            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(buf, stat[6])) };
+        InputAtOnce {
+            buf: buf.as_bytes(),
+        }
+    }
+
+    pub fn stdout() -> BufWriter<File> {
+        let stdout = unsafe { File::from_raw_fd(1) };
+        BufWriter::with_capacity(1 << 16, stdout)
+    }
+}
+
+pub mod debug {
+    pub fn with(#[allow(unused_variables)] f: impl FnOnce()) {
+        #[cfg(debug_assertions)]
+        f()
+    }
+}
+
 pub mod static_top_tree {
+    /// The full version is available at:
+    /// [https://github.com/null-lambda/ps_rust/tree/main/library/src/tree/top_tree/]
     pub mod rooted {
         /// # Static Top Tree
         /// Extend dynamic Divide & Conquer (segment tree) to rooted trees with rebalanced HLD, in O(N log N).
@@ -713,14 +822,12 @@ pub mod static_top_tree {
                 // Make the tree balanced in the global sense, by split at the middle size.
                 // TODO: If the split point is not exact, make the tree left-skewed.
                 let mut total_size = nodes.iter().map(|u| self.size[u.usize()]).sum::<u32>() as i32;
-                let i = nodes
-                    .iter()
-                    .rposition(|u| {
-                        total_size -= self.size[u.usize()] as i32 * 2;
-                        total_size <= 0
+                let i = (0..nodes.len() - 1)
+                    .min_by_key(|&i| {
+                        total_size -= self.size[nodes[i].usize()] as i32 * 2;
+                        total_size.abs()
                     })
-                    .unwrap()
-                    .max(1);
+                    .map_or(nodes.len() - 1, |i| i + 1);
 
                 let (lhs, rhs) = nodes.split_at(i);
                 let lhs = self.fold_balanced_rec(lhs, id_cluster);
@@ -792,24 +899,6 @@ pub mod static_top_tree {
                 })
             }
 
-            // pub fn walk_down(
-            //     &mut self,
-            //     mut u: NodeRef,
-            //     mut locator: impl FnMut(&Cluster<Cx>, [Option<&mut Cluster<Cx>>; 2]) -> Option<usize>,
-            // ) -> NodeRef {
-            //     todo!();
-            //     loop {
-            //         let (node, children) =
-            //             u.get_with_children_in(&self.children, &mut self.clusters);
-            //         match locator(node, children) {
-            //             Some(branch) => {
-            //                 u = self.children[u.usize()][branch].expect("Invalid branch")
-            //             }
-            //             None => return u,
-            //         }
-            //     }
-            // }
-
             // A bunch of propagation helpers.
 
             fn push_down(&mut self, u: NodeRef) {
@@ -848,50 +937,6 @@ pub mod static_top_tree {
                     u = p;
                     self.pull_up(u);
                 }
-            }
-
-            // Debug
-            pub fn push_down_all(&mut self) {
-                for u in (1..self.n_nodes as u32).rev().map(NodeRef::new) {
-                    self.push_down(u);
-                }
-            }
-            pub fn pull_up_all(&mut self) {
-                for u in (1..self.n_nodes as u32).map(NodeRef::new) {
-                    self.pull_up(u);
-                }
-            }
-
-            // Point query
-            pub fn get(&mut self, u: usize) -> &Cx::V {
-                self.push_down_from_root(self.compress_leaf[u]);
-                &self.weights[self.compress_leaf[u].usize()]
-            }
-
-            // Point update
-            pub fn modify<T>(&mut self, u: usize, update_with: impl FnOnce(&mut Cx::V) -> T) -> T {
-                let u = self.compress_leaf[u];
-                self.push_down_from_root(u);
-                let res = update_with(&mut self.weights[u.usize()]);
-                self.pull_up_to_root(u);
-                res
-            }
-
-            pub fn sum_all(&mut self) -> &Cx::Compress {
-                self.push_down(self.root_node);
-                unsafe {
-                    self.clusters[self.root_node.usize()]
-                        .get_compress()
-                        .unwrap_unchecked()
-                }
-            }
-
-            pub fn apply_all(&mut self, mut action: impl Action<Cx>) {
-                action.apply(
-                    &mut self.clusters[self.root_node.usize()],
-                    ActionRange::Subtree,
-                );
-                self.push_down(self.root_node);
             }
 
             /// Sum on the proper subtree
@@ -970,99 +1015,6 @@ pub mod static_top_tree {
                 }
 
                 self.pull_up_to_root(u);
-            }
-
-            // pub fn sum_subtree_complement(&mut self, u: usize) -> Cx::Compress {
-            //     // Almost identical to sum_subtree.
-            //     unimplemented!()
-            // }
-
-            // pub fn apply_subtree_complement(&mut self, u: usize, action: impl Action<Cx>) {
-            //     unimplemented!()
-            // }
-
-            /// Sum over the temporarily rerooted tree
-            pub fn sum_rerooted(&mut self, u: usize) -> (Cx::Rake, &Cx::V) {
-                assert!(
-                    Cx::REVERSE_TYPE.is_some(),
-                    "Rerooting operations require reversible compress clusters. 
-                    Set `ClusterCx::REVERSE_TYPE` and implement `ClusterCx::reverse`."
-                );
-                self.push_down_from_root(self.compress_leaf[u]);
-
-                let u = self.compress_leaf[u];
-                let path = self.path[u.usize()];
-
-                // Descend from the root. Fold every chain in half, and propagate it down to the lower chain.
-                // Do an exclusive sum for the rake tree.
-                let mut c_prefix = Cx::id_compress();
-                let mut c_suffix = Cx::id_compress();
-                let mut r_exclusive = Cx::id_rake();
-                let mut rake_pivot = self.root_node;
-
-                match Cx::REVERSE_TYPE {
-                    Some(WeightType::Vertex) => {
-                        let mut v = self.root_node; // Dummy
-                        for branch in (0..self.depth(u)).map(|d| (path >> d) & 1).chain(Some(0)) {
-                            use Cluster::*;
-                            match v.get_with_children_in(&self.children, &mut self.clusters) {
-                                (Compress(_), [Some(Compress(lhs)), Some(Compress(rhs))]) => {
-                                    if branch == 0 {
-                                        c_suffix = self.cx.compress(rhs, &c_suffix);
-                                    } else {
-                                        c_prefix = self.cx.compress(&c_prefix, lhs);
-                                    }
-                                }
-                                (Compress(_), [rake_root, _]) => {
-                                    r_exclusive = self.cx.rake(
-                                        &self.cx.collapse_compressed(&self.cx.reverse(&c_prefix)),
-                                        &self.cx.collapse_compressed(&c_suffix),
-                                    );
-                                    rake_pivot = v;
-
-                                    if v == u {
-                                        if let Some(Rake(rake_root)) = rake_root {
-                                            r_exclusive = self.cx.rake(&r_exclusive, rake_root);
-                                        }
-                                        break;
-                                    }
-                                }
-                                (Rake(_), [Some(Rake(lhs)), Some(Rake(rhs))]) => {
-                                    r_exclusive = if branch == 0 {
-                                        self.cx.rake(&r_exclusive, rhs)
-                                    } else {
-                                        self.cx.rake(&r_exclusive, lhs)
-                                    };
-                                }
-
-                                (Rake(_), [Some(Compress(_)), None]) => {
-                                    c_prefix = self.cx.collapse_raked(
-                                        &r_exclusive,
-                                        &self.weights[rake_pivot.usize()],
-                                    );
-                                    c_suffix = Cx::id_compress();
-                                }
-                                _ => unsafe { unreachable_unchecked() },
-                            }
-
-                            v = unsafe {
-                                self.children[v.usize()][branch as usize].unwrap_unchecked()
-                            };
-                        }
-
-                        (r_exclusive, &self.weights[u.usize()])
-                    }
-                    Some(WeightType::UpwardEdge) => {
-                        unimplemented!()
-                    }
-                    _ => unreachable!(),
-                }
-            }
-
-            pub fn sum_to_root(&mut self, u: usize) -> Cx::Compress {
-                self.push_down_from_root(self.compress_leaf[u]);
-
-                unimplemented!()
             }
 
             pub fn sum_path<Co: ClusterCx<V = Cx::V>, P: Reducer<Cx, Co = Co>>(
@@ -1406,38 +1358,310 @@ pub mod static_top_tree {
                 self.pull_up_to_root(u);
                 self.pull_up_to_root(v);
             }
+        }
+    }
+}
 
-            pub fn debug_chains(&self, mut visitor: impl FnMut(&Cx::Compress, bool)) {
-                let mut visited = vec![false; self.n_verts];
-                for mut u in self.hld.topological_order.iter().rev().copied() {
-                    if visited[u as usize] {
-                        continue;
-                    }
-                    unsafe {
-                        visitor(
-                            self.clusters[self.compress_root[u as usize].usize()]
-                                .get_compress()
-                                .unwrap_unchecked(),
-                            true,
-                        );
+type X = u32;
+type F = (u32, u32);
 
-                        loop {
-                            visited[u as usize] = true;
-                            visitor(
-                                self.clusters[self.compress_leaf[u as usize].usize()]
-                                    .get_compress()
-                                    .unwrap_unchecked(),
-                                false,
-                            );
+struct AffineSpace;
 
-                            u = self.hld.heavy_child[u as usize];
-                            if u == UNSET {
-                                break;
-                            }
-                        }
-                    }
-                }
+impl AffineSpace {
+    fn id(&self) -> X {
+        0
+    }
+
+    fn combine(&self, lhs: &X, rhs: &X) -> X {
+        lhs.wrapping_add(*rhs)
+    }
+
+    fn id_action(&self) -> F {
+        (0, 1)
+    }
+
+    fn combine_action(&self, lhs: &F, rhs: &F) -> F {
+        (
+            lhs.1.wrapping_mul(rhs.0).wrapping_add(lhs.0),
+            lhs.1.wrapping_mul(rhs.1),
+        )
+    }
+
+    fn apply_to_sum(&self, f: &F, x_count: u32, x_sum: &X) -> X {
+        f.0.wrapping_mul(x_count)
+            .wrapping_add(f.1.wrapping_mul(*x_sum))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct LazyNode {
+    count_path: u32,
+    count_proper_subtree: u32,
+
+    sum_path: X,
+    sum_proper_subtree: X,
+
+    lazy_path: F,
+    lazy_proper_subtree: F,
+}
+
+impl Default for LazyNode {
+    fn default() -> Self {
+        Self {
+            count_path: 0,
+            count_proper_subtree: 0,
+
+            sum_path: AffineSpace.id(),
+            sum_proper_subtree: AffineSpace.id(),
+
+            lazy_path: AffineSpace.id_action(),
+            lazy_proper_subtree: AffineSpace.id_action(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct LazyPropCx;
+
+impl Action<LazyPropCx> for F {
+    fn apply_to_compress(
+        &mut self,
+        cl: &mut <LazyPropCx as ClusterCx>::Compress,
+        range: ActionRange,
+    ) {
+        cl.sum_path = AffineSpace.apply_to_sum(self, cl.count_path, &cl.sum_path);
+        cl.lazy_path = AffineSpace.combine_action(self, &cl.lazy_path);
+        match range {
+            ActionRange::Subtree => {
+                cl.sum_proper_subtree =
+                    AffineSpace.apply_to_sum(self, cl.count_proper_subtree, &cl.sum_proper_subtree);
+                cl.lazy_proper_subtree = AffineSpace.combine_action(self, &cl.lazy_proper_subtree);
             }
+            ActionRange::Path => {}
+        }
+    }
+
+    fn apply_to_rake(&mut self, cl: &mut <LazyPropCx as ClusterCx>::Rake) {
+        cl.sum_proper_subtree =
+            AffineSpace.apply_to_sum(self, cl.count_proper_subtree, &cl.sum_proper_subtree);
+        cl.lazy_proper_subtree = AffineSpace.combine_action(self, &cl.lazy_proper_subtree);
+    }
+
+    fn apply_to_weight(&mut self, weight: &mut <LazyPropCx as ClusterCx>::V) {
+        *weight = AffineSpace.apply_to_sum(self, 1, weight);
+    }
+}
+
+impl ClusterCx for LazyPropCx {
+    type V = X;
+    type Compress = LazyNode;
+    type Rake = LazyNode;
+
+    fn id_compress() -> Self::Compress {
+        Default::default()
+    }
+    fn compress(&self, lhs: &Self::Compress, rhs: &Self::Compress) -> Self::Compress {
+        LazyNode {
+            sum_path: AffineSpace.combine(&lhs.sum_path, &rhs.sum_path),
+            sum_proper_subtree: AffineSpace
+                .combine(&lhs.sum_proper_subtree, &rhs.sum_proper_subtree),
+            count_path: lhs.count_path + rhs.count_path,
+            count_proper_subtree: lhs.count_proper_subtree + rhs.count_proper_subtree,
+
+            ..Default::default()
+        }
+    }
+
+    fn id_rake() -> Self::Rake {
+        Default::default()
+    }
+    fn rake(&self, lhs: &Self::Rake, rhs: &Self::Rake) -> Self::Rake {
+        LazyNode {
+            count_proper_subtree: lhs.count_proper_subtree + rhs.count_proper_subtree,
+            sum_proper_subtree: AffineSpace
+                .combine(&lhs.sum_proper_subtree, &rhs.sum_proper_subtree),
+
+            ..Default::default()
+        }
+    }
+
+    fn collapse_compressed(&self, c: &Self::Compress) -> Self::Rake {
+        LazyNode {
+            count_proper_subtree: c.count_proper_subtree + c.count_path,
+            sum_proper_subtree: c.sum_proper_subtree + c.sum_path,
+            ..Default::default()
+        }
+    }
+    fn collapse_raked(&self, r: &Self::Rake, weight: &Self::V) -> Self::Compress {
+        LazyNode {
+            count_path: 1,
+            count_proper_subtree: r.count_proper_subtree,
+
+            sum_path: *weight,
+            sum_proper_subtree: r.sum_proper_subtree,
+
+            ..Default::default()
+        }
+    }
+
+    fn make_leaf(&self, weight: &Self::V) -> Self::Compress {
+        LazyNode {
+            count_path: 1,
+            count_proper_subtree: 0,
+
+            sum_path: *weight,
+            sum_proper_subtree: 0,
+
+            ..Default::default()
+        }
+    }
+
+    fn push_down(
+        &self,
+        node: &mut Cluster<Self>,
+        children: [Option<&mut Cluster<Self>>; 2],
+        weight: &mut Self::V,
+    ) {
+        use Cluster::*;
+        match (node, children) {
+            (Compress(c), [Some(Compress(lhs)), Some(Compress(rhs))]) => {
+                for child in [lhs, rhs] {
+                    child.sum_path =
+                        AffineSpace.apply_to_sum(&c.lazy_path, child.count_path, &child.sum_path);
+                    child.lazy_path = AffineSpace.combine_action(&c.lazy_path, &child.lazy_path);
+
+                    child.sum_proper_subtree = AffineSpace.apply_to_sum(
+                        &c.lazy_proper_subtree,
+                        child.count_proper_subtree,
+                        &child.sum_proper_subtree,
+                    );
+                    child.lazy_proper_subtree = AffineSpace
+                        .combine_action(&c.lazy_proper_subtree, &child.lazy_proper_subtree);
+                }
+
+                c.lazy_path = AffineSpace.id_action();
+                c.lazy_proper_subtree = AffineSpace.id_action();
+            }
+            (Compress(c), [Some(Rake(top)), None]) => {
+                c.lazy_path.apply_to_weight(weight);
+                c.lazy_proper_subtree.apply_to_rake(top);
+
+                c.lazy_path = AffineSpace.id_action();
+                c.lazy_proper_subtree = AffineSpace.id_action();
+            }
+            (Compress(c), [None, None]) => {
+                c.lazy_path.apply_to_weight(weight);
+
+                c.lazy_path = AffineSpace.id_action();
+            }
+            (Rake(r), [Some(Rake(lhs)), Some(Rake(rhs))]) => {
+                for child in [lhs, rhs] {
+                    r.lazy_proper_subtree.apply_to_rake(child);
+                }
+
+                r.lazy_proper_subtree = AffineSpace.id_action();
+            }
+            (Rake(r), [Some(Compress(top)), None]) => {
+                r.lazy_proper_subtree
+                    .apply_to_compress(top, ActionRange::Subtree);
+
+                r.lazy_proper_subtree = AffineSpace.id_action();
+            }
+            _ => unsafe { unreachable_unchecked() },
+        }
+    }
+}
+
+struct Additive<const SUBTREE: bool>;
+
+impl<const SUBTREE: bool> SplitProj for Additive<SUBTREE> {
+    type Dom = LazyPropCx;
+    type CoCompress = u32;
+    type CoRake = u32;
+
+    fn dom(&self) -> &Self::Dom {
+        &LazyPropCx
+    }
+
+    fn proj_compress(c: &<Self::Dom as ClusterCx>::Compress) -> Self::CoCompress {
+        if SUBTREE {
+            c.sum_path + c.sum_proper_subtree
+        } else {
+            c.sum_path
+        }
+    }
+
+    fn proj_rake(r: &<Self::Dom as ClusterCx>::Rake) -> Self::CoRake {
+        if SUBTREE {
+            r.sum_proper_subtree
+        } else {
+            0
+        }
+    }
+
+    fn embed_compress(c: &Self::CoCompress) -> <Self::Dom as ClusterCx>::Compress {
+        LazyNode {
+            sum_path: *c,
+            ..Default::default()
+        }
+    }
+
+    fn embed_rake(c: &Self::CoRake) -> <Self::Dom as ClusterCx>::Rake {
+        if SUBTREE {
+            LazyNode {
+                sum_proper_subtree: *c,
+                ..Default::default()
+            }
+        } else {
+            Default::default()
+        }
+    }
+}
+
+fn main() {
+    let mut input = fast_io::stdin();
+    let mut output = fast_io::stdout();
+
+    let n: usize = input.value();
+    let q: usize = input.value();
+    let edges = (0..n - 1).map(|_| (input.u32() - 1, input.u32() - 1));
+    let mut stt = StaticTopTree::from_edges(n, edges, 0, LazyPropCx);
+    let weights = (0..n).map(|u| 0);
+    stt.init_weights(weights.enumerate());
+
+    for _ in 0..q {
+        let cmd = input.token();
+        let action = |value| match cmd {
+            "1" | "2" => (value, 1),
+            "3" | "4" => (0, value),
+            _ => unreachable!(),
+        };
+        match cmd {
+            "1" | "3" => {
+                let u = input.u32() as usize - 1;
+                let x = input.u32();
+                stt.apply_subtree(u, true, action(x));
+            }
+            "2" | "4" => {
+                let u = input.u32() as usize - 1;
+                let v = input.u32() as usize - 1;
+                let x = input.u32();
+                stt.apply_path(u, v, true, action(x));
+            }
+            "5" => {
+                let u = input.u32() as usize - 1;
+                let (proper_subtree, top) = stt.sum_subtree(u, Additive::<true>);
+                let ans = AffineSpace.combine(&proper_subtree, &top);
+                writeln!(output, "{}", ans).unwrap();
+            }
+            "6" => {
+                let u = input.u32() as usize - 1;
+                let v = input.u32() as usize - 1;
+                let (path_u, lca, path_v) = stt.sum_path(u, v, Additive::<false>);
+                let ans = AffineSpace.combine(&path_u, &AffineSpace.combine(&lca, &path_v));
+                writeln!(output, "{}", ans).unwrap();
+            }
+            _ => panic!(),
         }
     }
 }
