@@ -410,4 +410,10 @@ pub mod num_mod {
             self.0.fmt(f)
         }
     }
+
+    impl<U: std::fmt::Display, M: ModSpec<U = U>> std::fmt::Display for ModInt<M> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.0.fmt(f)
+        }
+    }
 }
