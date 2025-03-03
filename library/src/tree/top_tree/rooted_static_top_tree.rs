@@ -453,7 +453,7 @@ pub mod static_top_tree {
 
             // Light edges, in linked list
             pub first_light_child: Vec<u32>,
-            pub xor_light_siblings: Vec<u32>,
+            pub next_light_sibling: Vec<u32>,
         }
 
         impl HLD {
@@ -505,18 +505,14 @@ pub mod static_top_tree {
                 parent[root] = UNSET;
 
                 let mut first_light_child = vec![UNSET; n_verts];
-                let mut xor_light_siblings = vec![UNSET; n_verts];
+                let mut next_light_sibling = vec![UNSET; n_verts];
                 for &u in &topological_order[..n_verts - 1] {
                     let p = parent[u as usize];
                     if u == heavy_child[p as usize] {
                         continue;
                     }
 
-                    let c = first_light_child[p as usize];
-                    xor_light_siblings[u as usize] = c ^ UNSET;
-                    if c != UNSET {
-                        xor_light_siblings[c as usize] ^= u as u32 ^ UNSET;
-                    }
+                    next_light_sibling[u as usize] = first_light_child[p as usize];
                     first_light_child[p as usize] = u;
                 }
 
@@ -545,7 +541,7 @@ pub mod static_top_tree {
                     chain_top,
 
                     first_light_child,
-                    xor_light_siblings,
+                    next_light_sibling,
                 }
             }
         }
@@ -660,14 +656,11 @@ pub mod static_top_tree {
                     // Build a rake tree
                     let mut light_edges = vec![];
                     let mut l = hld.first_light_child[u as usize];
-                    let mut prev = UNSET;
                     while l != UNSET {
                         // Collapse a compress tree
                         light_edges.push(self.alloc([Some(self.compress_root[l as usize]), None]));
 
-                        let next = hld.xor_light_siblings[l as usize] ^ prev;
-                        prev = l;
-                        l = next;
+                        l = hld.next_light_sibling[l as usize];
                     }
 
                     self.compress_leaf[u as usize] = if light_edges.is_empty() {
