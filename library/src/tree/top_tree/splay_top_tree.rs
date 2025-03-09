@@ -1,3 +1,113 @@
+pub mod debug {
+    pub fn with(#[allow(unused_variables)] f: impl FnOnce()) {
+        #[cfg(debug_assertions)]
+        f()
+    }
+
+    #[cfg(debug_assertions)]
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    pub struct Label<T>(T);
+
+    #[cfg(not(debug_assertions))]
+    #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+    pub struct Label<T>(std::marker::PhantomData<T>);
+
+    impl<T> Label<T> {
+        #[inline]
+        pub fn new_with(value: impl FnOnce() -> T) -> Self {
+            #[cfg(debug_assertions)]
+            {
+                Self(value())
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                Self(Default::default())
+            }
+        }
+
+        pub fn with(&mut self, #[allow(unused_variables)] f: impl FnOnce(&mut T)) {
+            #[cfg(debug_assertions)]
+            f(&mut self.0)
+        }
+
+        pub fn get_mut(&mut self) -> Option<&mut T> {
+            #[cfg(debug_assertions)]
+            {
+                Some(&mut self.0)
+            }
+
+            #[cfg(not(debug_assertions))]
+            {
+                None
+            }
+        }
+    }
+
+    impl<T: std::fmt::Debug> std::fmt::Debug for Label<T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            #[cfg(debug_assertions)]
+            {
+                write!(f, "{:?}", self.0)
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                write!(f, "()")
+            }
+        }
+    }
+
+    pub mod tree {
+        #[derive(Clone)]
+        pub struct Pretty(pub String, pub Vec<Pretty>);
+
+        impl Pretty {
+            fn fmt_rec(
+                &self,
+                f: &mut std::fmt::Formatter,
+                prefix: &str,
+                first: bool,
+                last: bool,
+            ) -> std::fmt::Result {
+                let space = format!("{}    ", prefix);
+                let bar = format!("{}|   ", prefix);
+                let sep = if first && last {
+                    "*---"
+                } else if first {
+                    "┌---"
+                } else if last {
+                    "└---"
+                } else {
+                    "+---"
+                };
+
+                let m = self.1.len();
+                for i in 0..m / 2 {
+                    let c = &self.1[i];
+                    let prefix_ext = if first { &space } else { &bar };
+                    c.fmt_rec(f, &prefix_ext, i == 0, i == m - 1)?;
+                }
+
+                writeln!(f, "{}{}{}", prefix, sep, self.0)?;
+
+                for i in m / 2..m {
+                    let c = &self.1[i];
+                    let prefix_ext = if last { &space } else { &bar };
+                    c.fmt_rec(f, &prefix_ext, i == 0 && m >= 2, i == m - 1)?;
+                }
+
+                Ok(())
+            }
+        }
+
+        impl<'a> std::fmt::Debug for Pretty {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                writeln!(f)?;
+                self.fmt_rec(f, "", true, true)
+            }
+        }
+    }
+}
+
 pub mod top_tree {
     /// # Splay Top Tree
     /// Manage dynamic tree dp with link-cut operations in O(N log N).
@@ -22,8 +132,7 @@ pub mod top_tree {
     /// - Implement binary walking with the signature `fn(impl FnMut(&Cx::R, &Cx::R) -> bool) -> usize`.
     ///
     /// ### Optimization
-    /// - Replace unnecessary `push_down`, `pull_up` with a new fn `TopTree::update_handles`.
-    /// - Replace the `node::Compress.rev_lazy` tag with endpoint checks (and perform benchmarking).
+    /// - Remove unnecessary `pull_up`'s.
     /// - Re-implement `modify_edge` without using link/cut operations.
     ///
     /// ## Implementation Checklist
@@ -214,12 +323,11 @@ pub mod top_tree {
         pub struct CompressPivot<Cx: ClusterCx> {
             pub children: [NodeRef<Compress<Cx>>; 2],
             pub rake_tree: Option<NodeRef<Rake<Cx>>>,
-
-            pub rev_lazy: bool,
         }
 
         #[derive(Debug)]
         pub struct Compress<Cx: ClusterCx> {
+            // Endpoint of a path cluster, also used for lazy path reversal.
             pub ends: [u32; 2],
 
             pub parent: Option<Parent<Cx>>,
@@ -245,7 +353,6 @@ pub mod top_tree {
                 Self {
                     children: [NodeRef::dangling(); 2],
                     rake_tree: None,
-                    rev_lazy: false,
                 }
             }
         }
@@ -253,8 +360,8 @@ pub mod top_tree {
         impl<Cx: ClusterCx> Debug for Parent<Cx> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 match self {
-                    Parent::Compress(c) => write!(f, "{c:?}"),
-                    Parent::Rake(r) => write!(f, "{r:?}"),
+                    Parent::Compress(c) => write!(f, "Compress({c:?})"),
+                    Parent::Rake(r) => write!(f, "Rake({r:?})"),
                 }
             }
         }
@@ -323,7 +430,6 @@ pub mod top_tree {
                 cx.reverse(&mut self.sum);
                 self.ends.swap(0, 1);
                 self.children_mut().map(|cs| cs.swap(0, 1));
-                self.pivot.as_mut().map(|pivot| pivot.rev_lazy ^= true);
             }
         }
 
@@ -392,9 +498,8 @@ pub mod top_tree {
             u
         }
 
-        unsafe fn free(&mut self, u: NodeRef<T>) -> T {
+        unsafe fn mark_free(&mut self, u: NodeRef<T>) {
             self.free.push(u);
-            todo!()
         }
     }
 
@@ -556,7 +661,7 @@ pub mod top_tree {
         /// Drag `u` up to the root. If `u` is a leaf, drag `parent(u)` if it exists.
         ///
         /// Splaying `handle(u)` should always make it the root in the compressed tree.
-        /// However, splaying the rake-node doesn't guarantee this.
+        /// However, splaying a leaf rake-node doesn't guarantee this.
         fn splay(&mut self, u: NodeRef<T>) {
             unsafe { self.guarded_splay(u, None) };
         }
@@ -578,8 +683,8 @@ pub mod top_tree {
             debug_assert!(self.pool()[root].internal_parent().is_none());
 
             let mut u = root;
-            while let Some(cs) = self.pool()[u].children() {
-                u = cs[1];
+            while let Some(children) = self.pool()[u].children() {
+                u = children[1];
             }
 
             self.splay(u);
@@ -587,10 +692,10 @@ pub mod top_tree {
         }
 
         fn inorder(&mut self, root: NodeRef<T>, visitor: &mut impl FnMut(&mut Self, NodeRef<T>)) {
-            if let Some(cs) = self.pool()[root].children().copied() {
-                self.inorder(cs[0], visitor);
+            if let Some(children) = self.pool()[root].children().copied() {
+                self.inorder(children[0], visitor);
                 visitor(self, root);
-                self.inorder(cs[1], visitor);
+                self.inorder(children[1], visitor);
             } else {
                 visitor(self, root);
             }
@@ -606,12 +711,12 @@ pub mod top_tree {
             // crate::debug::with(|| println!("call push_down({u:?})"));
             unsafe {
                 if let Some(pivot) = &mut self.cs[u].pivot {
-                    let rev_lazy = std::mem::take(&mut pivot.rev_lazy);
                     let rake_tree = pivot.rake_tree.map(|r| &mut self.rs[r].sum);
                     let [l, r] = pivot.children;
 
                     let [u, l, r] = self.cs.many_mut([u, l, r]);
 
+                    let rev_lazy = l.ends[1] != r.ends[0];
                     if rev_lazy {
                         l.reverse(&self.cx);
                         r.reverse(&self.cx);
@@ -633,13 +738,6 @@ pub mod top_tree {
         fn pull_up(&mut self, u: NodeRef<node::Compress<Cx>>) {
             // crate::debug::with(|| println!("call pull_up({u:?})"));
             unsafe {
-                {
-                    let ends = self.cs[u].ends;
-                    self.cs[u]
-                        .debug_inorder()
-                        .with(|p| p.0 = format!("{u:?}  ends:{:?}", ends));
-                }
-
                 if let Some(pivot) = &self.cs[u].pivot {
                     let rake_tree = pivot.rake_tree;
                     let rake_tree_sum = rake_tree.map(|r| &self.rs[r].sum);
@@ -657,34 +755,9 @@ pub mod top_tree {
                         &mut self.weights[vert as usize],
                         rake_tree_sum,
                     );
-
-                    {
-                        let ends = u_mut.ends;
-                        u_mut
-                            .debug_inorder()
-                            .get_mut()
-                            .zip(l.debug_inorder().get_mut())
-                            .zip(r.debug_inorder().get_mut())
-                            .map(|((p, l), r)| {
-                                p.0 = format!("{u:?}- ends:{:?}", ends);
-                                if let Some(rake_tree) = rake_tree {
-                                    p.0 = format!("{u:?}-(r{rake_tree:?})  ends:{ends:?}");
-                                }
-                                p.1 = vec![l.clone(), r.clone()];
-                            });
-                    }
                 }
 
-                match self.cs[u].parent {
-                    Some(node::Parent::Compress(_)) => {}
-                    Some(node::Parent::Rake(_)) => {
-                        self.handle[self.cs[u].ends[1] as usize] = Some(u);
-                    }
-                    None => {
-                        self.handle[self.cs[u].ends[0] as usize] = Some(u);
-                        self.handle[self.cs[u].ends[1] as usize] = Some(u);
-                    }
-                }
+                self.update_boundary_handles(u);
             }
         }
     }
@@ -741,6 +814,21 @@ pub mod top_tree {
                             p.1 = vec![];
                         });
                     }
+                }
+            }
+        }
+    }
+
+    impl<Cx: ClusterCx> TopTree<Cx> {
+        unsafe fn update_boundary_handles(&mut self, u: NodeRef<node::Compress<Cx>>) {
+            match self.cs[u].parent {
+                Some(node::Parent::Compress(_)) => {}
+                Some(node::Parent::Rake(_)) => {
+                    self.handle[self.cs[u].ends[1] as usize] = Some(u);
+                }
+                None => {
+                    self.handle[self.cs[u].ends[0] as usize] = Some(u);
+                    self.handle[self.cs[u].ends[1] as usize] = Some(u);
                 }
             }
         }
@@ -825,6 +913,7 @@ pub mod top_tree {
             cv: NodeRef<node::Compress<Cx>>,
         ) {
             assert!(1 <= N && N <= 3);
+            self.cs[cv].pivot.as_mut().unwrap_unchecked().rake_tree = Some(r_path[N - 1]);
 
             self.guarded_splay(cv, guard);
 
@@ -854,11 +943,7 @@ pub mod top_tree {
             self.cs[*cu].parent = Some(node::Parent::Compress(cv));
             self.cs[c1].parent = Some(node::Parent::Rake(ru));
 
-            // Unnecessary (only for subsequent pull_up, should be optimized)
-            self.push_down(c1);
-            // Update handle[c1.ends[1]] to cu
-            self.pull_up(c1);
-
+            self.update_boundary_handles(c1);
             for &r in &r_path {
                 self.pull_up(r);
             }
@@ -973,7 +1058,7 @@ pub mod top_tree {
             self.soft_expose(u, v).is_ok()
         }
 
-        unsafe fn link_left_end(&mut self, u: usize, ce: &mut NodeRef<node::Compress<Cx>>) {
+        unsafe fn link_right_path(&mut self, u: usize, ce: &mut NodeRef<node::Compress<Cx>>) {
             debug_assert!(u == self.cs[*ce].ends[0] as usize);
 
             if let Some(cu) = self.handle[u] {
@@ -984,7 +1069,7 @@ pub mod top_tree {
                 }
 
                 if u as u32 == self.cs[cu].ends[1] {
-                    // Case 1. `u` is a boundary vertex.
+                    // Case `degree(u)` = 1 (boundary vertex):
                     // Insert the new edge to the right end of the path.
                     let cp = self.cs.alloc(node::Compress {
                         pivot: Some(node::CompressPivot {
@@ -1000,19 +1085,19 @@ pub mod top_tree {
 
                     *ce = cp;
                 } else {
-                    // Case 2. `u` is an interior vertex.
-                    // Take out the right path `c1` replaced with the new edge `ce`, then push it into the
-                    // rake tree.
+                    // Case `degree(u)` >= 2 (interior vertex):
+                    // Remove the right path `c1` and replace it with the new edge `ce`,
+                    // then insert it into the rake tree.
                     self.push_down(cu);
 
-                    fn lifetime_hint<A, B, F: for<'a> Fn(&'a mut A) -> &'a mut B>(f: F) -> F {
+                    fn lifetime_hint<A, B, F: Fn(&mut A) -> &mut B>(f: F) -> F {
                         f
                     }
-                    let pivot = lifetime_hint(|this: &mut Self| {
+                    let cu_pivot = lifetime_hint(|this: &mut Self| {
                         this.cs[cu].pivot.as_mut().unwrap_unchecked()
                     });
 
-                    let c1 = std::mem::replace(&mut pivot(self).children[1], *ce);
+                    let c1 = std::mem::replace(&mut cu_pivot(self).children[1], *ce);
                     self.cs[*ce].parent = Some(node::Parent::Compress(cu));
 
                     let r1 = self.rs.alloc(node::Rake {
@@ -1020,11 +1105,10 @@ pub mod top_tree {
                         ..unsafe { node::Rake::uninit() }
                     });
                     self.cs[c1].parent = Some(node::Parent::Rake(r1));
-                    self.push_down(c1);
-                    self.pull_up(c1); // Update handle[c1.ends[1]]
+                    self.update_boundary_handles(c1);
                     self.pull_up(r1);
 
-                    if let Some(r0) = pivot(self).rake_tree {
+                    if let Some(r0) = cu_pivot(self).rake_tree {
                         let rp = self.rs.alloc(node::Rake {
                             children: Ok([r0, r1]),
                             ..unsafe { node::Rake::uninit() }
@@ -1033,11 +1117,11 @@ pub mod top_tree {
                         self.rs[r1].parent = node::Parent::Rake(rp);
                         self.pull_up(rp);
 
-                        pivot(self).rake_tree = Some(rp);
+                        cu_pivot(self).rake_tree = Some(rp);
                         self.rs[rp].parent = node::Parent::Compress(cu);
                         self.pull_up(cu);
                     } else {
-                        pivot(self).rake_tree = Some(r1);
+                        cu_pivot(self).rake_tree = Some(r1);
                         self.rs[r1].parent = node::Parent::Compress(cu);
                         self.pull_up(cu);
                     }
@@ -1045,7 +1129,7 @@ pub mod top_tree {
                     *ce = cu;
                 }
             } else {
-                // Case 0. `u` is an isolated vertex.
+                // Case `degree(u)` = 0 (isolated vertex):
                 self.handle[u] = Some(*ce);
             }
         }
@@ -1064,16 +1148,93 @@ pub mod top_tree {
             });
 
             unsafe {
-                let hu_old = self.handle[u];
+                let hu = self.handle[u];
                 self.cs[ce].reverse(&self.cx);
-                self.link_left_end(v, &mut ce);
+                self.link_right_path(v, &mut ce);
                 self.cs[ce].reverse(&self.cx);
-                self.handle[u] = hu_old;
+                self.handle[u] = hu;
 
-                self.link_left_end(u, &mut ce);
+                self.link_right_path(u, &mut ce);
             }
 
             true
+        }
+
+        unsafe fn cut_right_path(&mut self, u: usize) -> NodeRef<node::Compress<Cx>> {
+            crate::debug::with(|| println!("cut_right_path {u}"));
+            let cu = self.handle[u].unwrap_unchecked();
+            debug_assert!(u as u32 != self.cs[cu].ends[1]);
+
+            if u as u32 == self.cs[cu].ends[0] {
+                // Case `degree(u)` = 1 (boundary vertex)
+                self.handle[u] = None;
+                cu
+            } else {
+                // Case `degree(u)` >= 2 (interior vertex):
+                // Split the right path `c1` from `cu`, and attempt to find a replacement path in the rake tree.
+                self.push_down(cu);
+
+                fn lifetime_hint<A, B, F: Fn(&mut A) -> &mut B>(f: F) -> F {
+                    f
+                }
+                let cu_pivot =
+                    lifetime_hint(|this: &mut Self| this.cs[cu].pivot.as_mut().unwrap_unchecked());
+
+                let [c0, c1] = cu_pivot(self).children;
+                self.cs[c1].parent = None;
+                self.update_boundary_handles(c1);
+
+                if let Some(r0) = cu_pivot(self).rake_tree {
+                    match self.rs[r0].children {
+                        Err(cr) => {
+                            self.push_down(r0);
+
+                            self.cs[cr].parent = Some(node::Parent::Compress(cu));
+                            cu_pivot(self).rake_tree = None;
+                            cu_pivot(self).children[1] = cr;
+
+                            self.rs.mark_free(r0);
+
+                            self.pull_up(cu);
+                        }
+                        Ok(_) => {
+                            let rr = self.splay_last(r0);
+
+                            let node::Rake {
+                                parent: node::Parent::Rake(rp),
+                                children: Err(cr),
+                                ..
+                            } = self.rs[rr]
+                            else {
+                                unreachable_unchecked()
+                            };
+                            let r0 = self.rs[rp].children.unwrap_unchecked()[0];
+                            debug_assert!(self.rs[rp].parent == node::Parent::Compress(cu));
+                            debug_assert!(self.rs[rp].children.unwrap_unchecked()[1] == rr);
+
+                            self.push_down(rp);
+                            self.push_down(rr);
+
+                            self.rs[r0].parent = node::Parent::Compress(cu);
+                            self.cs[cr].parent = Some(node::Parent::Compress(cu));
+                            cu_pivot(self).rake_tree = Some(r0);
+                            cu_pivot(self).children[1] = cr;
+
+                            self.rs.mark_free(rp);
+                            self.rs.mark_free(rr);
+
+                            self.pull_up(cu);
+                        }
+                    };
+                } else {
+                    // If the rake tree is empty, the vertex `u` becomes a boundary vertex, and `cu` is freed.
+                    self.cs[c0].parent = None;
+                    self.update_boundary_handles(c0);
+                    self.cs.mark_free(cu);
+                }
+
+                c1
+            }
         }
 
         pub fn cut(&mut self, u: usize, v: usize) -> Result<Cx::C, NoEdgeError> {
@@ -1084,51 +1245,43 @@ pub mod top_tree {
             let hu = self.handle[u].unwrap();
             let hv = self.handle[v].unwrap();
             let ends = self.cs[hu].ends;
-            self.push_down(hu);
-            self.push_down(hv);
 
-            // free?
+            unsafe {
+                let he = match (ends[0] == u as u32, ends[1] == v as u32) {
+                    (true, true) => hu,
+                    (true, false) => {
+                        self.push_down(hu);
+                        self.cs[hu].pivot.as_ref().unwrap_unchecked().children[0]
+                    }
+                    (false, true) => {
+                        self.push_down(hu);
+                        self.cs[hu].pivot.as_ref().unwrap_unchecked().children[1]
+                    }
+                    (false, false) => {
+                        self.push_down(hu);
+                        self.push_down(hv);
+                        self.cs[hv].pivot.as_ref().unwrap_unchecked().children[0]
+                    }
+                };
+                if self.cs[he].pivot.is_some() {
+                    return Err(NoEdgeError);
+                }
 
-            match (ends[0] as usize == u, ends[1] as usize == v) {
-                (true, true) => {
-                    let h_inner = hu;
-                    if self.cs[h_inner].children().is_some() {
-                        return Err(NoEdgeError);
-                    }
+                crate::debug::with(|| println!("cut {u} {v}"));
 
-                    let c = std::mem::replace(&mut self.cs[h_inner].sum, Cx::id_compress());
-                    self.handle[u] = None;
-                    self.handle[v] = None;
-                    unsafe { self.pool().free(h_inner) };
-                    Ok(c)
-                }
-                (true, false) => {
-                    let h_inner = self.cs[hu].pivot.as_ref().unwrap().children[0];
-                    if self.cs[h_inner].children().is_some() {
-                        return Err(NoEdgeError);
-                    }
-                    todo!()
-                }
-                (false, true) => {
-                    let h_inner = self.cs[hu].pivot.as_ref().unwrap().children[1];
-                    if self.cs[h_inner].children().is_some() {
-                        return Err(NoEdgeError);
-                    }
-                    todo!()
-                }
-                (false, false) => {
-                    self.push_down(self.handle[v].unwrap());
-                    let h_inner = self.cs[hv].pivot.as_ref().unwrap().children[0];
-                    if self.cs[h_inner].children().is_some() {
-                        return Err(NoEdgeError);
-                    }
-                    todo!()
-                }
+                let h_rest = self.cut_right_path(u);
+
+                let hu = self.handle[u];
+                self.cs[h_rest].reverse(&self.cx);
+                let he_alt = self.cut_right_path(v);
+                self.cs[he].reverse(&self.cx);
+                self.handle[u] = hu;
+                assert_eq!(he, he_alt); // TODO: remove return types on `cut_right_path`.
+
+                let c = std::mem::replace(&mut self.cs[he].sum, Cx::id_compress());
+                self.pool().mark_free(he);
+                Ok(c)
             }
-        }
-
-        pub fn reroot(&mut self, u: usize) {
-            todo!()
         }
 
         pub fn modify_vertex(&mut self, u: usize, update_with: impl FnOnce(&mut Cx::V)) {
@@ -1242,6 +1395,10 @@ pub mod top_tree {
         //     todo!()
         // }
 
+        pub fn sum_rerooted(&mut self, _u: usize) -> (&Cx::V, &Cx::R) {
+            todo!()
+        }
+
         pub fn debug_cons_chain(
             &mut self,
             nodes: impl IntoIterator<Item = Cx::C>,
@@ -1266,7 +1423,6 @@ pub mod top_tree {
                     pivot: Some(node::CompressPivot {
                         children: [lhs, rhs],
                         rake_tree: None,
-                        rev_lazy: false,
                     }),
                     ..unsafe { node::Compress::uninit() }
                 });
@@ -1280,6 +1436,7 @@ pub mod top_tree {
             Some(lhs)
         }
 
+        /// Debugging a complex data structure without a fancy helper would be a serious pain.
         pub fn debug_pretty_compress(
             &self,
             u: NodeRef<node::Compress<Cx>>,
@@ -1306,7 +1463,9 @@ pub mod top_tree {
                 }
                 Err(c) => children.push(self.debug_pretty_compress(c)),
             };
-            crate::debug::tree::Pretty(format!("r{u:?}"), children)
+
+            let p = self.rs[u].parent;
+            crate::debug::tree::Pretty(format!("r{u:?}  parent: {p:?}"), children)
         }
     }
 
