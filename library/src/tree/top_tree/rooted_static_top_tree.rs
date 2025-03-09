@@ -27,9 +27,6 @@ pub mod static_top_tree {
         /// - [maomao90's static top tree visualisation](https://maomao9-0.github.io/static-top-tree-visualisation/)
         ///
         /// ## TODO
-        /// - Persistence!
-        ///   (This should be straightforward: Convert SoA-based nodes to SoA,
-        ///   and then replace every instance of `&mut` access with `Rc::make_mut`.)
         /// - Rerooting queries - complement of a subtree.
         /// - Refactor path queries.
         /// - Add more examples on  subtree & path queries and reducers,
@@ -762,7 +759,9 @@ pub mod static_top_tree {
             ) -> NodeRef {
                 loop {
                     match locator(self, u) {
-                        Some(branch) => u = self.children[u.usize()][branch].unwrap_unchecked(),
+                        Some(branch) => unsafe {
+                            u = self.children[u.usize()][branch].unwrap_unchecked()
+                        },
                         None => return u,
                     }
                 }
@@ -775,33 +774,17 @@ pub mod static_top_tree {
                 mut path: u64,
                 mut visitor: impl FnMut(&mut Self, NodeRef),
             ) -> NodeRef {
-                self.walk_down_internal(u, |this, u| {
-                    (path != 0b1).then(|| {
-                        visitor(this, u);
-                        let branch = (path & 1) as usize;
-                        path >>= 1;
-                        branch
+                unsafe {
+                    self.walk_down_internal(u, |this, u| {
+                        (path != 0b1).then(|| {
+                            visitor(this, u);
+                            let branch = (path & 1) as usize;
+                            path >>= 1;
+                            branch
+                        })
                     })
-                })
+                }
             }
-
-            // pub fn walk_down(
-            //     &mut self,
-            //     mut u: NodeRef,
-            //     mut locator: impl FnMut(&Cluster<Cx>, [Option<&mut Cluster<Cx>>; 2]) -> Option<usize>,
-            // ) -> NodeRef {
-            //     todo!();
-            //     loop {
-            //         let (node, children) =
-            //             u.get_with_children_in(&self.children, &mut self.clusters);
-            //         match locator(node, children) {
-            //             Some(branch) => {
-            //                 u = self.children[u.usize()][branch].expect("Invalid branch")
-            //             }
-            //             None => return u,
-            //         }
-            //     }
-            // }
 
             // A bunch of propagation helpers.
 
@@ -1432,5 +1415,125 @@ pub mod static_top_tree {
                 }
             }
         }
+
+        // pub mod persistent {
+        //     use std::fmt::Debug;
+
+        //     use super::StaticTopTree as BaseStaticTopTree;
+        //     use super::*;
+        //     use crate::rc_acyclic::Rc;
+
+        //     pub struct Node<Cx: ClusterCx> {
+        //         pub children: [Option<Rc<Node<Cx>>>; 2],
+        //         pub weight: Cx::V,
+        //         pub cluster: Cluster<Cx>,
+        //     }
+
+        //     impl<Cx: ClusterCx> Clone for Node<Cx> {
+        //         fn clone(&self) -> Self {
+        //             Self {
+        //                 children: self.children.clone(),
+        //                 weight: self.weight.clone(),
+        //                 cluster: self.cluster.clone(),
+        //             }
+        //         }
+        //     }
+
+        //     impl<Cx: ClusterCx> Debug for Node<Cx>
+        //     where
+        //         Cx::V: Debug,
+        //         Cluster<Cx>: Debug,
+        //     {
+        //         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        //             f.debug_struct("Node")
+        //                 .field("children", &self.children)
+        //                 .field("weight", &self.weight)
+        //                 .field("cluster", &self.cluster)
+        //                 .finish()
+        //         }
+        //     }
+
+        //     pub struct StaticTopTree<Cx: ClusterCx> {
+        //         // Represented tree structure
+        //         pub hld: HLD,
+        //         n_verts: usize,
+
+        //         pub path: Vec<u64>,
+
+        //         pub cx: Cx,
+        //     }
+
+        //     impl<Cx: ClusterCx> BaseStaticTopTree<Cx> {
+        //         pub fn make_persistent(mut self) -> (StaticTopTree<Cx>, Rc<Node<Cx>>) {
+        //             let this = StaticTopTree {
+        //                 hld: std::mem::take(&mut self.hld),
+        //                 n_verts: self.n_verts,
+
+        //                 path: (0..self.n_verts)
+        //                     .map(|u| self.path[self.compress_leaf[u].usize()])
+        //                     .collect(),
+
+        //                 cx: std::mem::take(&mut self.cx),
+        //             };
+
+        //             let root = this.build_rec(&self, self.root_node);
+        //             (this, root)
+        //         }
+        //     }
+
+        //     impl<Cx: ClusterCx> StaticTopTree<Cx> {
+        //         fn build_rec(&self, stt: &BaseStaticTopTree<Cx>, u: NodeRef) -> Rc<Node<Cx>> {
+        //             let mut node = Node {
+        //                 children: stt.children[u.usize()]
+        //                     .map(|c| c.map(|c| self.build_rec(stt, c))),
+        //                 weight: stt.weights[u.usize()].clone(),
+        //                 cluster: stt.clusters[u.usize()].clone(),
+        //             };
+        //             self.pull_up(&mut node);
+        //             Rc::new(node)
+        //         }
+
+        //         fn pull_up(&self, u: &mut Node<Cx>) {
+        //             let children = [
+        //                 u.children[0].as_ref().map(|c| &c.cluster),
+        //                 u.children[1].as_ref().map(|c| &c.cluster),
+        //             ];
+        //             self.cx.pull_up(&mut u.cluster, children, &u.weight);
+        //         }
+
+        //         pub fn modify(
+        //             &mut self,
+        //             root: &mut Rc<Node<Cx>>,
+        //             u: usize,
+        //             update_with: impl FnOnce(&mut Cx::V),
+        //         ) {
+        //             self.modify_rec(root, update_with, self.path[u]);
+        //         }
+
+        //         fn modify_rec(
+        //             &mut self,
+        //             u: &mut Rc<Node<Cx>>,
+        //             update_with: impl FnOnce(&mut Cx::V),
+        //             path: u64,
+        //         ) {
+        //             let u_mut = Rc::make_mut(u);
+        //             if path == 0b1 {
+        //                 update_with(&mut u_mut.weight);
+        //             } else {
+        //                 let branch = (path & 1) as usize;
+        //                 let c = unsafe { u_mut.children[branch].as_mut().unwrap_unchecked() };
+        //                 self.modify_rec(c, update_with, path >> 1);
+        //             }
+        //             self.pull_up(u_mut);
+        //         }
+
+        //         pub fn debug_preorder(&self, root: &Node<Cx>, visitor: &mut impl FnMut(&Node<Cx>)) {
+        //             visitor(root);
+        //             for c in root.children.iter().flatten() {
+        //                 self.debug_preorder(c, visitor);
+        //             }
+        //         }
+        //     }
+        // }
     }
 }
