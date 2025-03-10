@@ -1,3 +1,103 @@
+use std::io::Write;
+
+use top_tree::{ClusterCx, TopTree};
+
+mod fast_io {
+    use std::fs::File;
+    use std::io::BufWriter;
+    use std::os::unix::io::FromRawFd;
+
+    extern "C" {
+        fn mmap(addr: usize, length: usize, prot: i32, flags: i32, fd: i32, offset: i64)
+            -> *mut u8;
+        fn fstat(fd: i32, stat: *mut usize) -> i32;
+    }
+
+    pub struct InputAtOnce {
+        buf: &'static [u8],
+    }
+
+    impl InputAtOnce {
+        fn skip(&mut self) {
+            loop {
+                match self.buf {
+                    &[..=b' ', ..] => self.buf = &self.buf[1..],
+                    _ => break,
+                }
+            }
+        }
+
+        fn u32_noskip(&mut self) -> u32 {
+            let mut acc = 0;
+            loop {
+                match self.buf {
+                    &[b'0'..=b'9', ..] => acc = acc * 10 + (self.buf[0] - b'0') as u32,
+                    _ => break,
+                }
+                self.buf = &self.buf[1..];
+            }
+            acc
+        }
+
+        pub fn token(&mut self) -> &'static str {
+            self.skip();
+            let start = self.buf.as_ptr();
+            loop {
+                match self.buf {
+                    &[..=b' ', ..] => break,
+                    _ => self.buf = &self.buf[1..],
+                }
+            }
+            let end = self.buf.as_ptr();
+            unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    start,
+                    end.offset_from(start) as usize,
+                ))
+            }
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+
+        pub fn u32(&mut self) -> u32 {
+            self.skip();
+            self.u32_noskip()
+        }
+
+        pub fn i32(&mut self) -> i32 {
+            self.skip();
+            match self.buf {
+                &[b'-', ..] => {
+                    self.buf = &self.buf[1..];
+                    -(self.u32_noskip() as i32)
+                }
+                _ => self.u32_noskip() as i32,
+            }
+        }
+    }
+
+    pub fn stdin() -> InputAtOnce {
+        let mut stat = [0; 18];
+        unsafe { fstat(0, (&mut stat).as_mut_ptr()) };
+        let buf = unsafe { mmap(0, stat[6], 1, 2, 0, 0) };
+        let buf =
+            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(buf, stat[6])) };
+        InputAtOnce {
+            buf: buf.as_bytes(),
+        }
+    }
+
+    pub fn stdout() -> BufWriter<File> {
+        let stdout = unsafe { File::from_raw_fd(1) };
+        BufWriter::with_capacity(1 << 16, stdout)
+    }
+}
+
 pub mod debug {
     pub fn with(#[allow(unused_variables)] f: impl FnOnce()) {
         #[cfg(debug_assertions)]
@@ -57,6 +157,8 @@ pub mod debug {
 }
 
 pub mod top_tree {
+    // https://github.com/null-lambda/ps_rust/tree/main/library/src/tree
+
     /// # Splay Top Tree
     /// Manage dynamic tree dp with link-cut operations in amortized O(N log N).
     ///
@@ -1703,6 +1805,131 @@ pub mod top_tree {
 
             let p = self.rs[u].parent;
             crate::debug::tree::Pretty(format!("r{u:?}  parent: {p:?}"), children)
+        }
+    }
+}
+
+type X = u64;
+
+#[derive(Clone, Copy, Default)]
+struct Compress {
+    count: u32,
+    len: X,
+    left: X,
+    right: X,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Rake {
+    count: u32,
+    left: X,
+}
+
+struct WeightedMedian;
+
+impl Compress {
+    fn singleton(x: X) -> Self {
+        Self {
+            count: 0,
+            len: x,
+            left: 0,
+            right: 0,
+        }
+    }
+}
+
+impl ClusterCx for WeightedMedian {
+    type V = bool;
+
+    type C = Compress;
+    type R = Rake;
+
+    fn id_compress() -> Self::C {
+        Default::default()
+    }
+
+    fn compress(&self, children: [&Self::C; 2], v: &Self::V, rake: Option<&Self::R>) -> Self::C {
+        let rake = rake.copied().unwrap_or(Self::id_rake());
+        let count = children[0].count + *v as u32 + children[1].count + rake.count;
+        Compress {
+            len: children[0].len + children[1].len,
+            count,
+            left: children[0].left
+                + children[1].left
+                + rake.left
+                + children[0].len * (count - children[0].count) as X,
+            right: children[1].right
+                + children[0].right
+                + rake.left
+                + children[1].len * (count - children[1].count) as X,
+        }
+    }
+
+    fn id_rake() -> Self::R {
+        Default::default()
+    }
+
+    fn rake(&self, children: [&Self::R; 2]) -> Self::R {
+        Rake {
+            count: children[0].count + children[1].count,
+            left: children[0].left + children[1].left,
+        }
+    }
+
+    fn collapse_path(&self, c: &Self::C, vr: &Self::V) -> Self::R {
+        Rake {
+            count: c.count + *vr as u32,
+            left: c.left + c.len * *vr as X,
+        }
+    }
+
+    fn reverse(&self, c: &Self::C) -> Self::C {
+        Compress {
+            left: c.right,
+            right: c.left,
+            ..c.clone()
+        }
+    }
+}
+
+fn main() {
+    let mut input = fast_io::stdin();
+    let mut output = fast_io::stdout();
+
+    let n: usize = input.value();
+    let q: usize = input.value();
+    let mut tt = TopTree::new((0..n).map(|_| true), WeightedMedian);
+
+    let mut acc = 0;
+    for _ in 0..q {
+        let decode = |u| (((u - 1) as X + acc) % n as X) as usize;
+        match input.token() {
+            "1" => {
+                let a = decode(input.u32());
+                let b = decode(input.u32());
+                let w = input.u32() as u64;
+                assert!(tt.link(a, b, Compress::singleton(w)));
+            }
+            "2" => {
+                let a = decode(input.u32());
+                let b = decode(input.u32());
+                tt.cut(a, b).unwrap();
+            }
+            "3" => {
+                let a = decode(input.u32());
+                tt.modify_vertex(a, |w| *w ^= true);
+
+                let moment = |tt: &mut TopTree<_>, u: usize| {
+                    let (_vl, rake) = tt.sum_rerooted(u);
+                    rake.map_or(0, |r: Rake| r.left)
+                };
+                let ans = tt
+                    .center_edge(a, |_v_pivot, r0, r1| r0.count < r1.count)
+                    .map_or(0, |e| moment(&mut tt, e[0]).min(moment(&mut tt, e[1])));
+                acc = (acc + ans) % n as X;
+                writeln!(output, "{ans}").unwrap();
+            }
+            _ => panic!(),
         }
     }
 }
