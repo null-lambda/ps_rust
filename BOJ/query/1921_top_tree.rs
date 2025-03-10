@@ -1892,6 +1892,15 @@ impl ClusterCx for WeightedMedian {
     }
 }
 
+fn weighted_moment(tt: &mut TopTree<WeightedMedian>, u: usize) -> X {
+    let moment = |tt: &mut TopTree<_>, u: usize| {
+        let (_v, rest) = tt.sum_rerooted(u);
+        rest.map_or(0, |r: Rake| r.left)
+    };
+    tt.center_edge(u, |_v_pivot, r0, r1| r0.count < r1.count)
+        .map_or(0, |e| moment(tt, e[0]).min(moment(tt, e[1])))
+}
+
 fn main() {
     let mut input = fast_io::stdin();
     let mut output = fast_io::stdout();
@@ -1919,13 +1928,7 @@ fn main() {
                 let a = decode(input.u32());
                 tt.modify_vertex(a, |w| *w ^= true);
 
-                let moment = |tt: &mut TopTree<_>, u: usize| {
-                    let (_vl, rake) = tt.sum_rerooted(u);
-                    rake.map_or(0, |r: Rake| r.left)
-                };
-                let ans = tt
-                    .center_edge(a, |_v_pivot, r0, r1| r0.count < r1.count)
-                    .map_or(0, |e| moment(&mut tt, e[0]).min(moment(&mut tt, e[1])));
+                let ans = weighted_moment(&mut tt, a);
                 acc = (acc + ans) % n as X;
                 writeln!(output, "{ans}").unwrap();
             }
