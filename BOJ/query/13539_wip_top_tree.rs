@@ -1,3 +1,103 @@
+use std::io::Write;
+
+use top_tree::{Action, ActionRange, ClusterCx};
+
+mod fast_io {
+    use std::fs::File;
+    use std::io::BufWriter;
+    use std::os::unix::io::FromRawFd;
+
+    extern "C" {
+        fn mmap(addr: usize, length: usize, prot: i32, flags: i32, fd: i32, offset: i64)
+            -> *mut u8;
+        fn fstat(fd: i32, stat: *mut usize) -> i32;
+    }
+
+    pub struct InputAtOnce {
+        buf: &'static [u8],
+    }
+
+    impl InputAtOnce {
+        fn skip(&mut self) {
+            loop {
+                match self.buf {
+                    &[..=b' ', ..] => self.buf = &self.buf[1..],
+                    _ => break,
+                }
+            }
+        }
+
+        fn u32_noskip(&mut self) -> u32 {
+            let mut acc = 0;
+            loop {
+                match self.buf {
+                    &[b'0'..=b'9', ..] => acc = acc * 10 + (self.buf[0] - b'0') as u32,
+                    _ => break,
+                }
+                self.buf = &self.buf[1..];
+            }
+            acc
+        }
+
+        pub fn token(&mut self) -> &'static str {
+            self.skip();
+            let start = self.buf.as_ptr();
+            loop {
+                match self.buf {
+                    &[..=b' ', ..] => break,
+                    _ => self.buf = &self.buf[1..],
+                }
+            }
+            let end = self.buf.as_ptr();
+            unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    start,
+                    end.offset_from(start) as usize,
+                ))
+            }
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+
+        pub fn u32(&mut self) -> u32 {
+            self.skip();
+            self.u32_noskip()
+        }
+
+        pub fn i32(&mut self) -> i32 {
+            self.skip();
+            match self.buf {
+                &[b'-', ..] => {
+                    self.buf = &self.buf[1..];
+                    -(self.u32_noskip() as i32)
+                }
+                _ => self.u32_noskip() as i32,
+            }
+        }
+    }
+
+    pub fn stdin() -> InputAtOnce {
+        let mut stat = [0; 18];
+        unsafe { fstat(0, (&mut stat).as_mut_ptr()) };
+        let buf = unsafe { mmap(0, stat[6], 1, 2, 0, 0) };
+        let buf =
+            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(buf, stat[6])) };
+        InputAtOnce {
+            buf: buf.as_bytes(),
+        }
+    }
+
+    pub fn stdout() -> BufWriter<File> {
+        let stdout = unsafe { File::from_raw_fd(1) };
+        BufWriter::with_capacity(1 << 16, stdout)
+    }
+}
+
 pub mod debug {
     pub fn with(#[allow(unused_variables)] f: impl FnOnce()) {
         #[cfg(debug_assertions)]
@@ -109,6 +209,8 @@ pub mod debug {
 }
 
 pub mod top_tree {
+    // https://github.com/null-lambda/ps_rust/tree/main/library/src/tree
+
     /// # Splay Top Tree
     /// Manage dynamic tree dp with link-cut operations in amortized O(N log N).
     ///
@@ -132,6 +234,12 @@ pub mod top_tree {
     /// - Remove unnecessary `pull_up`'s.
     /// - Re-implement `modify_edge` without using link/cut operations.
     /// - Simplify control flow in `soft_expose` if possible.
+    ///
+    /// ## Implementation Checklist
+    /// - Always verify the internal tree topology:
+    ///   `Parent(children(u)[0]) = Parent(children(u)[1]) = u`.
+    /// - Do not forget lazy propagation: always call `push_down` before `pull_up`.
+    /// - Ensure handles are updated immediately.
     use std::{
         cmp::Ordering,
         hint::unreachable_unchecked,
@@ -149,12 +257,10 @@ pub mod top_tree {
         type V: Default;
 
         /// Path cluster (aggregation on a subchain), represented as an **open** interval.
-        // type C;
-        type C: std::fmt::Debug; // WIP
+        type C;
 
         /// Point cluster (aggregation of light edges), represented as a **left-open, right-closed** interval.
-        // type R;
-        type R: std::fmt::Debug; // WIP
+        type R;
 
         /// Compress monoid.
         /// Left side is always the top side.
@@ -320,7 +426,7 @@ pub mod top_tree {
 
         #[derive(Debug)]
         pub struct Compress<Cx: ClusterCx> {
-            // Endpoints of a path cluster, also used as a tag for lazy path reversal.
+            // Endpoint of a path cluster, also used as a tag for lazy path reversal.
             pub ends: [u32; 2],
 
             pub parent: Option<Parent<Cx>>,
@@ -499,6 +605,7 @@ pub mod top_tree {
 
     /// Splay tree structure for compress and rake trees.
     /// Handles operations where the node topology of compress and rake trees does not swizzle.
+    /// much.
     pub trait InternalSplay<T: BinaryNode> {
         fn pool(&mut self) -> &mut Pool<T>;
 
@@ -728,6 +835,7 @@ pub mod top_tree {
         }
 
         fn push_down(&mut self, u: NodeRef<node::Compress<Cx>>) {
+            // crate::debug::with(|| println!("call push_down({u:?})"));
             unsafe {
                 if let Some(pivot) = &mut self.cs[u].pivot {
                     let rake_tree = pivot.rake_tree.map(|r| &mut self.rs[r].sum);
@@ -1023,6 +1131,7 @@ pub mod top_tree {
         ///   `[internal root] = handle(u) ->(right child) handle(v) ->(left child) path(u ~ v)`.
         pub fn soft_expose(&mut self, u: usize, v: usize) -> Result<SoftExposeType, DisconnError> {
             unsafe {
+                crate::debug::with(|| println!("soft_expose {u} {v}"));
                 self.access(u);
                 if u == v {
                     return Ok(SoftExposeType::Vertex);
@@ -1058,6 +1167,10 @@ pub mod top_tree {
                 if hu == hv {
                     return Ok(SoftExposeType::NonEmpty);
                 }
+
+                crate::debug::with(|| {
+                    println!("{:?}", self.debug_pretty_compress(self.handle[u].unwrap()))
+                });
 
                 match self.branch(hv) {
                     Some((p, 0)) if p == hu => self.cs[hu].reverse(&self.cx),
@@ -1153,6 +1266,8 @@ pub mod top_tree {
                 return false;
             }
 
+            crate::debug::with(|| println!("link {u} {v}"));
+
             let mut ce = self.cs.alloc(node::Compress {
                 ends: [u as u32, v as u32],
                 sum: e,
@@ -1173,6 +1288,7 @@ pub mod top_tree {
         }
 
         unsafe fn cut_right_path(&mut self, u: usize) -> NodeRef<node::Compress<Cx>> {
+            crate::debug::with(|| println!("cut_right_path {u}"));
             let cu = self.handle[u].unwrap_unchecked();
             debug_assert!(u as u32 != self.cs[cu].ends[1]);
 
@@ -1278,6 +1394,8 @@ pub mod top_tree {
                     return Err(NoEdgeError);
                 }
 
+                crate::debug::with(|| println!("cut {u} {v}"));
+
                 let h_rest = self.cut_right_path(u);
 
                 let hu = self.handle[u];
@@ -1369,13 +1487,14 @@ pub mod top_tree {
                     action.apply_to_weight(&mut self.weights[u]);
                 }
                 SoftExposeType::NonEmpty => {
+                    action.apply_to_weight(&mut self.weights[u]);
+                    action.apply_to_weight(&mut self.weights[v]);
+
                     let hu = self.handle[u].unwrap();
                     let hv = self.handle[v].unwrap();
                     let ends = self.cs[hu].ends;
 
                     let mut update_with = |this: &mut Self, h_inner| {
-                        action.apply_to_weight(&mut this.weights[u]);
-                        action.apply_to_weight(&mut this.weights[v]);
                         action.apply_to_compress(&mut this.cs[h_inner].sum, ActionRange::Path);
                     };
                     match (ends[0] as usize == u, ends[1] as usize == v) {
@@ -1433,9 +1552,8 @@ pub mod top_tree {
                             let v0 = &self.weights[u];
                             Ok((&v0, None))
                         } else {
-                            self.push_down(hr);
                             if ends[0] != root as u32 {
-                                self.push_down(hu);
+                                self.push_down(hr);
                             }
 
                             let v0 = &self.weights[u];
@@ -1444,7 +1562,6 @@ pub mod top_tree {
                             let pivot = self.cs[hu].pivot.as_ref().unwrap_unchecked();
                             let h_suffix = pivot.children[1];
                             let mut rest = self.cx.collapse_path(&self.cs[h_suffix].sum, v1);
-
                             if let Some(rake_tree) = pivot.rake_tree {
                                 rest = self.cx.rake([&rest, &self.rs[rake_tree].sum]);
                             }
@@ -1484,9 +1601,8 @@ pub mod top_tree {
                         if ends[1] == u as u32 {
                             action.apply_to_weight(&mut self.weights[u]);
                         } else {
-                            self.push_down(hr);
                             if hr != hu {
-                                self.push_down(hu);
+                                self.push_down(hr);
                             }
 
                             action.apply_to_weight(&mut self.weights[u]);
@@ -1502,10 +1618,10 @@ pub mod top_tree {
                             if let Some(rake_tree) = rake_tree {
                                 action.apply_to_rake(&mut self.rs[rake_tree].sum);
                             }
+
                             if hr != hu {
-                                self.pull_up(hu);
+                                self.pull_up(hr);
                             }
-                            self.pull_up(hr);
                         }
                     }
                 }
@@ -1520,23 +1636,23 @@ pub mod top_tree {
         pub fn parent_rerooted(
             &mut self,
             root: usize,
-            u: usize,
+            v: usize,
         ) -> Result<Option<usize>, DisconnError> {
-            if u == root {
+            if v == root {
                 return Ok(None);
             }
 
-            self.soft_expose(u, root)?;
+            self.soft_expose(v, root)?;
 
             unsafe {
-                let hu = self.handle[u].unwrap_unchecked();
-                let ends = self.cs[hu].ends;
-                if u as u32 == ends[0] {
-                    let h0 = self.splay_first(hu);
+                let hv = self.handle[v].unwrap_unchecked();
+                let ends = self.cs[hv].ends;
+                if v as u32 == ends[0] {
+                    let h0 = self.splay_first(hv);
                     Ok(Some(self.cs[h0].ends[1] as usize))
                 } else {
-                    debug_assert!(u as u32 != ends[1]);
-                    let hp = self.splay_next(hu).unwrap_unchecked();
+                    debug_assert!(v as u32 != ends[1]);
+                    let hp = self.splay_next(hv).unwrap_unchecked();
                     Ok(Some(self.cs[hp].ends[1] as usize))
                 }
             }
@@ -1679,6 +1795,177 @@ pub mod top_tree {
 
             let p = self.rs[u].parent;
             crate::debug::tree::Pretty(format!("r{u:?}  parent: {p:?}"), children)
+        }
+    }
+
+    ///// A morphism of clusters, with common weight type V. There are two main use cases:
+    ///// - Supporting both path and subtree sum queries.
+    /////   Path sums do not propagate from rake trees, whereas subtree sums do.
+    /////   Therefore, we need to store both path and subtree aggregates in your clusters,
+    /////   and the projection helps reduce computation time efficiently for each sum query.
+    ///// - Nesting another data structure within nodes (e.g., sets, segment trees, ropes, ... ).
+    /////   The user has control over querying a specific node before performing the summation.
+    ///// Some set of combinators are provided: identity, tuple and path-sum.
+    /////
+    ///// TODO: modify most of the sum_ functions to accept an additional reducer.
+    //pub trait Reducer<Dom: ClusterCx> {
+    //    type Co: ClusterCx<V = Dom::V>;
+    //    fn co(&self) -> &Self::Co;
+    //    fn map_compress(
+    //        &self,
+    //        c: &<Dom as ClusterCx>::Compress,
+    //    ) -> <Self::Co as ClusterCx>::Compress;
+    //    fn map_rake(&self, r: &<Dom as ClusterCx>::Rake) -> <Self::Co as ClusterCx>::Rake;
+    //}
+
+    ///// An identity.
+    /////
+    ///// # Examples
+    /////
+    ///// ```
+    ///// let cx = || { ... }
+    ///// let mut stt = StaticTopTree::from_edges(n, edges, root, cx());
+    ///// ...
+    ///// let total_sum = stt.sum_all(Id(cx()));
+    ///// ```
+    //pub struct Id<Cx>(pub Cx);
+    //impl<Cx: ClusterCx> Reducer<Cx> for Id<Cx> {
+    //    type Co = Cx;
+    //    fn co(&self) -> &Self::Co {
+    //        &self.0
+    //    }
+    //    fn map_compress(&self, c: &<Cx as ClusterCx>::Compress) -> <Cx as ClusterCx>::Compress {
+    //        c.clone()
+    //    }
+    //    fn map_rake(&self, r: &<Cx as ClusterCx>::Rake) -> <Cx as ClusterCx>::Rake {
+    //        r.clone()
+    //    }
+    //}
+}
+
+struct RootedForest;
+type RootIdx = u32;
+
+#[derive(Clone, Copy, Default)]
+pub struct Cluster {
+    lazy_root: Option<u32>,
+}
+
+impl ClusterCx for RootedForest {
+    type V = RootIdx;
+
+    type C = Cluster;
+    type R = Cluster;
+
+    fn id_compress() -> Self::C {
+        Default::default()
+    }
+    fn compress(&self, _children: [&Self::C; 2], _v: &Self::V, _rake: Option<&Self::R>) -> Self::C {
+        Default::default()
+    }
+
+    fn id_rake() -> Self::R {
+        Default::default()
+    }
+    fn rake(&self, _children: [&Self::R; 2]) -> Self::R {
+        Default::default()
+    }
+
+    fn collapse_path(&self, _c: &Self::C, _v: &Self::V) -> Self::R {
+        Default::default()
+    }
+
+    fn reverse(&self, c: &Self::C) -> Self::C {
+        *c
+    }
+
+    fn push_down_compress(
+        &self,
+        node: &mut Self::C,
+        children: [&mut Self::C; 2],
+        v: &mut Self::V,
+        rake: Option<&mut Self::R>,
+    ) {
+        if let Some(r) = node.lazy_root.take() {
+            children[0].lazy_root = Some(r);
+            children[1].lazy_root = Some(r);
+            *v = r;
+            if let Some(rake) = rake {
+                rake.lazy_root = Some(r);
+            }
+        }
+    }
+
+    fn push_down_rake(&self, node: &mut Self::R, children: [&mut Self::R; 2]) {
+        if let Some(r) = node.lazy_root.take() {
+            children[0].lazy_root = Some(r);
+            children[1].lazy_root = Some(r);
+        }
+    }
+
+    #[allow(unused_variables)]
+    fn push_down_collapsed(&self, node: &mut Self::R, c: &mut Self::C, vr: &mut Self::V) {
+        if let Some(r) = node.lazy_root.take() {
+            c.lazy_root = Some(r);
+            *vr = r;
+        }
+    }
+}
+
+impl Action<RootedForest> for RootIdx {
+    fn apply_to_compress(
+        &mut self,
+        compress: &mut <RootedForest as ClusterCx>::C,
+        range: ActionRange,
+    ) {
+        debug_assert!(range == ActionRange::Subtree);
+        compress.lazy_root = Some(*self);
+    }
+
+    fn apply_to_rake(&mut self, rake: &mut <RootedForest as ClusterCx>::R) {
+        rake.lazy_root = Some(*self);
+    }
+
+    fn apply_to_weight(&mut self, weight: &mut <RootedForest as ClusterCx>::V) {
+        *weight = *self;
+    }
+}
+
+fn main() {
+    let mut input = fast_io::stdin();
+    let mut output = fast_io::stdout();
+
+    let n: usize = input.value();
+    let m: usize = input.value();
+    let mut tt = top_tree::TopTree::new(0..n as u32, RootedForest);
+
+    for _ in 0..m {
+        let cmd = input.token();
+        match cmd {
+            "1" => {
+                let u = input.u32() as usize - 1;
+                let v = input.u32() as usize - 1;
+
+                let root = *tt.get_vertex(v);
+                assert!(tt.link(u, v, Cluster::default()));
+                tt.apply_subtree(u, u, root).unwrap();
+            }
+            "2" => {
+                let v = input.u32() as usize - 1;
+
+                let root = *tt.get_vertex(v) as usize;
+                let p = tt.parent_rerooted(root, v).unwrap().unwrap();
+                tt.cut(p, v).unwrap();
+                tt.apply_subtree(v, v, v as u32).unwrap();
+            }
+            "3" => {
+                let u = input.u32() as usize - 1;
+                let v = input.u32() as usize - 1;
+                let root = *tt.get_vertex(u) as usize;
+                let lca = tt.lca(root, u, v).unwrap();
+                writeln!(output, "{}", lca + 1).unwrap();
+            }
+            _ => panic!(),
         }
     }
 }

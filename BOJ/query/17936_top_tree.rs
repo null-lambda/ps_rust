@@ -1,3 +1,103 @@
+use std::io::Write;
+
+use top_tree::{Action, ActionRange, ClusterCx};
+
+mod fast_io {
+    use std::fs::File;
+    use std::io::BufWriter;
+    use std::os::unix::io::FromRawFd;
+
+    extern "C" {
+        fn mmap(addr: usize, length: usize, prot: i32, flags: i32, fd: i32, offset: i64)
+            -> *mut u8;
+        fn fstat(fd: i32, stat: *mut usize) -> i32;
+    }
+
+    pub struct InputAtOnce {
+        buf: &'static [u8],
+    }
+
+    impl InputAtOnce {
+        fn skip(&mut self) {
+            loop {
+                match self.buf {
+                    &[..=b' ', ..] => self.buf = &self.buf[1..],
+                    _ => break,
+                }
+            }
+        }
+
+        fn u32_noskip(&mut self) -> u32 {
+            let mut acc = 0;
+            loop {
+                match self.buf {
+                    &[b'0'..=b'9', ..] => acc = acc * 10 + (self.buf[0] - b'0') as u32,
+                    _ => break,
+                }
+                self.buf = &self.buf[1..];
+            }
+            acc
+        }
+
+        pub fn token(&mut self) -> &'static str {
+            self.skip();
+            let start = self.buf.as_ptr();
+            loop {
+                match self.buf {
+                    &[..=b' ', ..] => break,
+                    _ => self.buf = &self.buf[1..],
+                }
+            }
+            let end = self.buf.as_ptr();
+            unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    start,
+                    end.offset_from(start) as usize,
+                ))
+            }
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+
+        pub fn u32(&mut self) -> u32 {
+            self.skip();
+            self.u32_noskip()
+        }
+
+        pub fn i32(&mut self) -> i32 {
+            self.skip();
+            match self.buf {
+                &[b'-', ..] => {
+                    self.buf = &self.buf[1..];
+                    -(self.u32_noskip() as i32)
+                }
+                _ => self.u32_noskip() as i32,
+            }
+        }
+    }
+
+    pub fn stdin() -> InputAtOnce {
+        let mut stat = [0; 18];
+        unsafe { fstat(0, (&mut stat).as_mut_ptr()) };
+        let buf = unsafe { mmap(0, stat[6], 1, 2, 0, 0) };
+        let buf =
+            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(buf, stat[6])) };
+        InputAtOnce {
+            buf: buf.as_bytes(),
+        }
+    }
+
+    pub fn stdout() -> BufWriter<File> {
+        let stdout = unsafe { File::from_raw_fd(1) };
+        BufWriter::with_capacity(1 << 16, stdout)
+    }
+}
+
 pub mod debug {
     pub fn with(#[allow(unused_variables)] f: impl FnOnce()) {
         #[cfg(debug_assertions)]
@@ -109,6 +209,8 @@ pub mod debug {
 }
 
 pub mod top_tree {
+    // https://github.com/null-lambda/ps_rust/tree/main/library/src/tree
+
     /// # Splay Top Tree
     /// Manage dynamic tree dp with link-cut operations in amortized O(N log N).
     ///
@@ -1679,6 +1781,319 @@ pub mod top_tree {
 
             let p = self.rs[u].parent;
             crate::debug::tree::Pretty(format!("r{u:?}  parent: {p:?}"), children)
+        }
+    }
+}
+
+type X = i32;
+const INF: X = X::MAX;
+
+// Tropical semirings
+#[derive(Debug, Clone, Copy)]
+struct Tropical {
+    sum: X,
+    min: X,
+    max: X,
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+struct ResetAdd {
+    reset: bool,
+    delta: X,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct LazyNode {
+    x: Tropical,
+    count: u32,
+    lazy: ResetAdd,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct Compress {
+    path: LazyNode,
+    subtree: LazyNode,
+}
+
+struct TropicalOp;
+
+impl Default for Tropical {
+    fn default() -> Self {
+        Self {
+            sum: 0,
+            min: INF,
+            max: -INF,
+        }
+    }
+}
+
+impl From<X> for Tropical {
+    fn from(x: X) -> Self {
+        Self {
+            sum: x,
+            min: x,
+            max: x,
+        }
+    }
+}
+
+impl Tropical {
+    fn combine(&self, other: &Self) -> Self {
+        Self {
+            sum: self.sum + other.sum,
+            min: self.min.min(other.min),
+            max: self.max.max(other.max),
+        }
+    }
+
+    fn accept(&mut self, action: ResetAdd, count: u32) {
+        if count == 0 {
+            return;
+        }
+        if action.reset {
+            self.sum = action.delta * count as X;
+            self.min = action.delta;
+            self.max = action.delta;
+        } else {
+            self.sum += action.delta * count as X;
+            self.min += action.delta;
+            self.max += action.delta;
+        }
+    }
+}
+
+impl From<Tropical> for LazyNode {
+    fn from(x: Tropical) -> Self {
+        Self {
+            x,
+            count: 1,
+            lazy: Default::default(),
+        }
+    }
+}
+
+impl ResetAdd {
+    fn overwrite(x: i32) -> Self {
+        Self {
+            reset: true,
+            delta: x as X,
+        }
+    }
+
+    fn add(x: i32) -> Self {
+        Self {
+            reset: false,
+            delta: x as X,
+        }
+    }
+
+    fn combine(&self, other: &Self) -> Self {
+        if self.reset {
+            *self
+        } else {
+            Self {
+                reset: other.reset,
+                delta: self.delta + other.delta,
+            }
+        }
+    }
+}
+
+impl LazyNode {
+    fn accept(&mut self, action: ResetAdd) {
+        self.x.accept(action, self.count);
+        self.lazy = action.combine(&self.lazy);
+    }
+}
+
+impl ClusterCx for TropicalOp {
+    type V = X;
+
+    type C = Compress;
+    type R = LazyNode;
+
+    fn id_compress() -> Self::C {
+        Default::default()
+    }
+
+    fn compress(&self, children: [&Self::C; 2], v: &Self::V, rake: Option<&Self::R>) -> Self::C {
+        let v = LazyNode::from(Tropical::from(*v));
+        let mut r = Self::id_rake();
+        if let Some(rake) = rake {
+            r = self.rake([&r, rake]);
+        }
+
+        Self::C {
+            path: self.rake([&self.rake([&children[0].path, &children[1].path]), &v]),
+            subtree: self.rake([&self.rake([&children[0].subtree, &children[1].subtree]), &r]),
+        }
+    }
+
+    fn id_rake() -> Self::R {
+        Default::default()
+    }
+
+    fn rake(&self, children: [&Self::R; 2]) -> Self::R {
+        Self::R {
+            x: children[0].x.combine(&children[1].x),
+            count: children[0].count + children[1].count,
+            ..Default::default()
+        }
+    }
+
+    fn collapse_path(&self, c: &Self::C, vr: &Self::V) -> Self::R {
+        self.rake([
+            &self.rake([&c.path, &c.subtree]),
+            &LazyNode::from(Tropical::from(*vr)),
+        ])
+    }
+
+    fn reverse(&self, c: &Self::C) -> Self::C {
+        *c
+    }
+
+    fn push_down_compress(
+        &self,
+        node: &mut Self::C,
+        children: [&mut Self::C; 2],
+        v: &mut Self::V,
+        rake: Option<&mut Self::R>,
+    ) {
+        children[0].path.accept(node.path.lazy);
+        children[1].path.accept(node.path.lazy);
+        node.path.lazy.apply_to_weight(v);
+        node.path.lazy = Default::default();
+
+        children[0].subtree.accept(node.subtree.lazy);
+        children[1].subtree.accept(node.subtree.lazy);
+        if let Some(rake) = rake {
+            rake.accept(node.subtree.lazy);
+        }
+        node.subtree.lazy = Default::default();
+    }
+
+    fn push_down_rake(&self, node: &mut Self::R, children: [&mut Self::R; 2]) {
+        children[0].accept(node.lazy);
+        children[1].accept(node.lazy);
+        node.lazy = Default::default();
+    }
+
+    fn push_down_collapsed(&self, node: &mut Self::R, c: &mut Self::C, vr: &mut Self::V) {
+        c.path.accept(node.lazy);
+        c.subtree.accept(node.lazy);
+        node.lazy.apply_to_weight(vr);
+        node.lazy = Default::default();
+    }
+}
+
+impl Action<TropicalOp> for ResetAdd {
+    fn apply_to_compress(
+        &mut self,
+        compress: &mut <TropicalOp as ClusterCx>::C,
+        range: ActionRange,
+    ) {
+        match range {
+            ActionRange::Subtree => {
+                compress.path.accept(*self);
+                compress.subtree.accept(*self);
+            }
+            ActionRange::Path => {
+                compress.path.accept(*self);
+            }
+        }
+    }
+
+    fn apply_to_rake(&mut self, rake: &mut <TropicalOp as ClusterCx>::R) {
+        rake.accept(*self);
+    }
+
+    fn apply_to_weight(&mut self, weight: &mut <TropicalOp as ClusterCx>::V) {
+        if self.reset {
+            *weight = self.delta;
+        } else {
+            *weight += self.delta;
+        }
+    }
+}
+
+fn main() {
+    let mut input = fast_io::stdin();
+    let mut output = fast_io::stdout();
+
+    let n: usize = input.value();
+    let m: usize = input.value();
+    let edges: Vec<_> = (0..n - 1)
+        .map(|_| (input.u32() - 1, input.u32() - 1))
+        .collect();
+    let weights = (0..n).map(|_| input.i32() as X);
+    let mut tt = top_tree::TopTree::new(weights, TropicalOp);
+
+    let mut root = input.u32() as usize - 1;
+    for (u, v) in edges {
+        assert!(tt.link(u as usize, v as usize, Default::default()));
+    }
+
+    for _ in 0..m {
+        let cmd = input.u32();
+
+        let action = |w: i32| match cmd {
+            0 | 2 => ResetAdd::overwrite(w),
+            5 | 6 => ResetAdd::add(w),
+            _ => unreachable!(),
+        };
+        let project = |agg: &Tropical| match cmd {
+            3 | 7 => agg.min,
+            4 | 8 => agg.max,
+            11 | 10 => agg.sum,
+            _ => unreachable!(),
+        };
+
+        match cmd {
+            1 => root = input.u32() as usize - 1,
+            9 => {
+                let x = input.u32() as usize - 1;
+                let y = input.u32() as usize - 1;
+                let lca = tt.lca(root, x, y).unwrap();
+                if lca == x {
+                    continue;
+                }
+
+                let p = tt.parent_rerooted(root, x).unwrap().unwrap();
+                tt.cut(x, p).unwrap();
+                assert!(tt.link(x, y, Default::default()));
+            }
+            0 | 5 => {
+                let x = input.u32() as usize - 1;
+                let w = input.i32();
+                tt.apply_subtree(root, x, action(w)).unwrap();
+            }
+            2 | 6 => {
+                let x = input.u32() as usize - 1;
+                let y = input.u32() as usize - 1;
+                let w = input.i32();
+                tt.apply_path(x, y, action(w)).unwrap();
+            }
+            3 | 4 | 11 => {
+                let x = input.u32() as usize - 1;
+                let (vl, rake) = tt.sum_subtree(root, x).unwrap();
+                let mut ans = Tropical::from(*vl);
+                if let Some(rake) = rake {
+                    ans = ans.combine(&rake.x);
+                }
+                writeln!(output, "{}", project(&ans)).unwrap();
+            }
+            7 | 8 | 10 => {
+                let x = input.u32() as usize - 1;
+                let y = input.u32() as usize - 1;
+                let (vl, rest) = tt.sum_path(x, y).unwrap();
+                let mut ans = Tropical::from(*vl);
+                if let Some((inner, vr)) = rest {
+                    ans = ans.combine(&inner.path.x);
+                    ans = ans.combine(&(*vr).into());
+                }
+                writeln!(output, "{}", project(&ans)).unwrap();
+            }
+            _ => panic!(),
         }
     }
 }
