@@ -24,7 +24,7 @@ pub mod bcc {
         pub bcc_edges: Vec<Vec<(u32, u32, E)>>,
     }
 
-    impl<'a, E: 'a + Copy, J: jagged::Jagged<'a, (u32, E)>> BlockCutForest<'a, E, J> {
+    impl<'a, E: 'a + Copy, J: jagged::Jagged<(u32, E)>> BlockCutForest<'a, E, J> {
         pub fn from_assoc_list(neighbors: &'a J) -> Self {
             let n = neighbors.len();
 
@@ -61,7 +61,7 @@ pub mod bcc {
                         timer += 1;
                         stack.push(u);
                     }
-                    if (*iv as usize) == neighbors.get(u as usize).len() {
+                    if (*iv as usize) == neighbors[u as usize].len() {
                         // On exit
                         if p == UNSET {
                             break;
@@ -99,7 +99,7 @@ pub mod bcc {
                         continue;
                     }
 
-                    let (v, w) = neighbors.get(u as usize)[*iv as usize];
+                    let (v, w) = neighbors[u as usize][*iv as usize];
                     *iv += 1;
                     if v == p {
                         continue;
@@ -121,7 +121,7 @@ pub mod bcc {
                 }
 
                 // For an isolated vertex, manually add a virtual BCC node.
-                if neighbors.get(root).is_empty() {
+                if neighbors[root].is_empty() {
                     bct_degree[root] += 1;
 
                     bct_parent.push(root as u32);

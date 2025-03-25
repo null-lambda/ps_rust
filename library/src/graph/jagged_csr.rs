@@ -2,25 +2,19 @@ pub mod jagged {
     use std::fmt::Debug;
     use std::iter;
     use std::mem::MaybeUninit;
+    use std::ops::{Index, IndexMut};
 
     // Trait for painless switch between different representations of a jagged array
-    pub trait Jagged<'a, T: 'a> {
-        type ItemRef: ExactSizeIterator<Item = &'a T>;
+    pub trait Jagged<T>: IndexMut<usize, Output = [T]> {
         fn len(&self) -> usize;
-        fn get(&'a self, u: usize) -> &'a [T];
     }
 
-    impl<'a, T, C> Jagged<'a, T> for C
+    impl<T, C> Jagged<T> for C
     where
-        C: AsRef<[Vec<T>]> + 'a,
-        T: 'a,
+        C: AsRef<[Vec<T>]> + IndexMut<usize, Output = [T]>,
     {
-        type ItemRef = std::slice::Iter<'a, T>;
         fn len(&self) -> usize {
             <Self as AsRef<[Vec<T>]>>::as_ref(self).len()
-        }
-        fn get(&'a self, u: usize) -> &'a [T] {
-            &self.as_ref()[u]
         }
     }
 
@@ -37,9 +31,7 @@ pub mod jagged {
         T: Debug,
     {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            let v: Vec<Vec<&T>> = (0..self.len())
-                .map(|i| self.get(i).iter().collect())
-                .collect();
+            let v: Vec<Vec<&T>> = (0..self.len()).map(|i| self[i].iter().collect()).collect();
             v.fmt(f)
         }
     }
@@ -66,7 +58,7 @@ pub mod jagged {
     }
 
     impl<T: Clone> CSR<T> {
-        pub fn from_assoc_list(n: usize, pairs: &[(u32, T)]) -> Self {
+        pub fn from_pairs(n: usize, pairs: &[(u32, T)]) -> Self {
             let mut head = vec![0u32; n + 1];
 
             for &(u, _) in pairs {
@@ -95,15 +87,23 @@ pub mod jagged {
         }
     }
 
-    impl<'a, T: 'a> Jagged<'a, T> for CSR<T> {
-        type ItemRef = std::slice::Iter<'a, T>;
+    impl<T> Index<usize> for CSR<T> {
+        type Output = [T];
 
+        fn index(&self, index: usize) -> &Self::Output {
+            &self.data[self.head[index] as usize..self.head[index + 1] as usize]
+        }
+    }
+
+    impl<T> IndexMut<usize> for CSR<T> {
+        fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+            &mut self.data[self.head[index] as usize..self.head[index + 1] as usize]
+        }
+    }
+
+    impl<T> Jagged<T> for CSR<T> {
         fn len(&self) -> usize {
             self.head.len() - 1
-        }
-
-        fn get(&'a self, u: usize) -> &'a [T] {
-            &self.data[self.head[u] as usize..self.head[u + 1] as usize]
         }
     }
 }

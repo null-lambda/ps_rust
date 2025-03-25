@@ -1,21 +1,15 @@
 pub mod jagged {
     // Trait for painless switch between different representations of a jagged array
-    pub trait Jagged<'a, T: 'a> {
+    pub trait Jagged<T>: IndexMut<usize, Output = [T]> {
         fn len(&self) -> usize;
-        fn get(&'a self, u: usize) -> &'a [T];
     }
 
-    impl<'a, T, C> Jagged<'a, T> for C
+    impl<T, C> Jagged<T> for C
     where
-        C: AsRef<[Vec<T>]> + 'a,
-        T: 'a,
+        C: AsRef<[Vec<T>]> + IndexMut<usize, Output = [T]>,
     {
         fn len(&self) -> usize {
-            self.as_ref().len()
-        }
-
-        fn get(&'a self, u: usize) -> &'a [T] {
-            &self.as_ref()[u]
+            <Self as AsRef<[Vec<T>]>>::as_ref(self).len()
         }
     }
 }
