@@ -2,6 +2,7 @@ pub mod link_cut {
     use std::{
         fmt::{self, Debug},
         num::NonZeroU32,
+        ops::{Index, IndexMut},
     };
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,10 +40,6 @@ pub mod link_cut {
     pub trait NodeSpec: IntrusiveNode {
         fn push_down(&mut self, _children: [Option<&mut Self>; 2]) {}
         fn pull_up(&mut self, _children: [Option<&mut Self>; 2]) {}
-
-        // type Cx;
-        // fn push_down(&mut self, cx: &mut Self::Cx, children: [Option<&mut Self>; 2]);
-        // fn pull_up(&mut self, cx: &mut Self::Cx, children: [Option<&mut Self>; 2]);
     }
 
     #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -51,8 +48,14 @@ pub mod link_cut {
     }
 
     impl NodeRef {
-        fn get(&self) -> usize {
+        fn usize(&self) -> usize {
             self.idx.get() as usize
+        }
+
+        pub unsafe fn dangling() -> Self {
+            Self {
+                idx: NonZeroU32::new(!0).unwrap(),
+            }
         }
     }
 
@@ -64,79 +67,85 @@ pub mod link_cut {
 
     #[derive(Debug)]
     pub struct LinkCutForest<S> {
-        pub pool: Vec<S>,
+        pub nodes: Vec<S>,
+    }
+
+    impl<S> Index<NodeRef> for LinkCutForest<S> {
+        type Output = S;
+        fn index(&self, index: NodeRef) -> &Self::Output {
+            &self.nodes[index.usize()]
+        }
+    }
+
+    impl<S> IndexMut<NodeRef> for LinkCutForest<S> {
+        fn index_mut(&mut self, index: NodeRef) -> &mut Self::Output {
+            &mut self.nodes[index.usize()]
+        }
     }
 
     impl<S: NodeSpec> LinkCutForest<S> {
         pub fn new() -> Self {
             let dummy = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
-            Self { pool: vec![dummy] }
+            Self { nodes: vec![dummy] }
         }
 
         pub fn add_root(&mut self, node: S) -> NodeRef {
-            let idx = self.pool.len();
-            self.pool.push(node);
+            let idx = self.nodes.len();
+            self.nodes.push(node);
             NodeRef {
                 idx: unsafe { NonZeroU32::new(idx as u32).unwrap_unchecked() },
             }
         }
 
-        pub fn get_node<'a>(&'a self, u: NodeRef) -> &'a S {
-            &self.pool[u.get()]
-        }
-
-        pub unsafe fn get_node_mut<'a>(&'a mut self, u: NodeRef) -> &'a mut S {
-            &mut self.pool[u.get()]
-        }
-
-        pub unsafe fn get_node_with_children<'a>(
+        pub unsafe fn get_with_children<'a>(
             &'a mut self,
             u: NodeRef,
         ) -> (&'a mut S, [Option<&'a mut S>; 2]) {
             unsafe {
-                let pool_ptr = self.pool.as_mut_ptr();
-                let node = &mut *pool_ptr.add(u.get());
+                let pool_ptr = self.nodes.as_mut_ptr();
+                let node = &mut *pool_ptr.add(u.usize());
                 let children = node
                     .link()
                     .children
-                    .map(|child| child.map(|child| &mut *pool_ptr.add(child.get())));
+                    .map(|child| child.map(|child| &mut *pool_ptr.add(child.usize())));
                 (node, children)
             }
         }
 
+        fn reverse(&mut self, u: NodeRef) {
+            let link = self[u].link_mut();
+            link.inv ^= true;
+            link.children.swap(0, 1);
+        }
+
         fn push_down(&mut self, u: NodeRef) {
             unsafe {
-                let node = self.get_node_mut(u);
-                let link = node.link_mut();
+                let link = self[u].link_mut();
                 if link.inv {
                     link.inv = false;
-                    link.children.swap(0, 1);
-                    for child in link.children.into_iter().flatten() {
-                        self.get_node_mut(child).link_mut().inv ^= true;
+                    for c in link.children.into_iter().flatten() {
+                        self.reverse(c);
                     }
                 }
 
-                let (node, children) = self.get_node_with_children(u);
+                let (node, children) = self.get_with_children(u);
                 node.push_down(children);
             }
         }
 
         fn pull_up(&mut self, node: NodeRef) {
             unsafe {
-                let (node, children) = self.get_node_with_children(node);
+                let (node, children) = self.get_with_children(node);
                 node.pull_up(children);
             }
         }
 
-        pub fn get_internal_parent(
-            &self,
-            u: NodeRef,
-        ) -> Result<(NodeRef, Branch), Option<NodeRef>> {
-            match self.get_node(u).link().parent {
+        pub fn internal_parent(&self, u: NodeRef) -> Result<(NodeRef, Branch), Option<NodeRef>> {
+            match self[u].link().parent {
                 Some(p) => {
-                    if self.get_node(p).link().children[Branch::Left.usize()] == Some(u) {
+                    if self[p].link().children[Branch::Left.usize()] == Some(u) {
                         Ok((p, Branch::Left)) // parent on a chain
-                    } else if self.get_node(p).link().children[Branch::Right.usize()] == Some(u) {
+                    } else if self[p].link().children[Branch::Right.usize()] == Some(u) {
                         Ok((p, Branch::Right)) // parent on a chain
                     } else {
                         Err(Some(p)) // path-parent
@@ -147,66 +156,65 @@ pub mod link_cut {
         }
 
         pub fn is_root(&self, u: NodeRef) -> bool {
-            self.get_internal_parent(u).is_err()
+            self.internal_parent(u).is_err()
         }
 
         fn attach(&mut self, u: NodeRef, child: NodeRef, branch: Branch) {
             debug_assert_ne!(u, child);
-            unsafe {
-                self.get_node_mut(u).link_mut().children[branch as usize] = Some(child);
-                self.get_node_mut(child).link_mut().parent = Some(u);
-            }
+            self[u].link_mut().children[branch as usize] = Some(child);
+            self[child].link_mut().parent = Some(u);
         }
 
         fn detach(&mut self, u: NodeRef, branch: Branch) -> Option<NodeRef> {
-            unsafe {
-                let child = self.get_node_mut(u).link_mut().children[branch as usize].take()?;
-                self.get_node_mut(child).link_mut().parent = None;
-                Some(child)
-            }
+            let child = self[u].link_mut().children[branch as usize].take()?;
+            self[child].link_mut().parent = None;
+            Some(child)
         }
 
         fn rotate(&mut self, u: NodeRef) {
-            let (parent, branch) = self
-                .get_internal_parent(u)
-                .expect("Root shouldn't be rotated");
-            let child = self.detach(u, branch.inv());
-            if let Some(child) = child {
-                self.attach(parent, child, branch);
-            } else {
-                self.detach(parent, branch);
+            let (p, bp) = self.internal_parent(u).expect("Root shouldn't be rotated");
+            let c = self[u].link_mut().children[bp.inv().usize()].replace(p);
+            self[p].link_mut().children[bp.usize()] = c;
+            if let Some(c) = c {
+                self[c].link_mut().parent = Some(p);
             }
 
-            match self.get_internal_parent(parent) {
-                Ok((grandparent, grandbranch)) => {
-                    self.attach(grandparent, u, grandbranch);
-                }
-                Err(path_parent) => unsafe {
-                    self.get_node_mut(u).link_mut().parent = path_parent;
-                },
+            if let Ok((g, bg)) = self.internal_parent(p) {
+                self[g].link_mut().children[bg.usize()] = Some(u);
             }
-            self.attach(u, parent, branch.inv());
 
-            self.pull_up(parent);
-            self.pull_up(u);
+            self[u].link_mut().parent = self[p].link().parent;
+            self[p].link_mut().parent = Some(u);
         }
 
         pub fn splay(&mut self, u: NodeRef) {
-            while let Ok((parent, branch)) = self.get_internal_parent(u) {
-                if let Ok((grandparent, grandbranch)) = self.get_internal_parent(parent) {
-                    self.push_down(grandparent);
-                    self.push_down(parent);
+            while let Ok((p, _)) = self.internal_parent(u) {
+                if let Ok((g, _)) = self.internal_parent(p) {
+                    self.push_down(g);
+                    self.push_down(p);
                     self.push_down(u);
-                    if branch != grandbranch {
-                        self.rotate(u);
+
+                    let (_, bp) = unsafe { self.internal_parent(u).unwrap_unchecked() };
+                    let (_, bg) = unsafe { self.internal_parent(p).unwrap_unchecked() };
+                    if bp == bg {
+                        self.rotate(p); // zig-zig
                     } else {
-                        self.rotate(parent);
+                        self.rotate(u); // zig-zag
                     }
+                    self.rotate(u);
+
+                    self.pull_up(g);
+                    self.pull_up(p);
+                    self.pull_up(u);
                 } else {
-                    self.push_down(parent);
+                    self.push_down(p);
                     self.push_down(u);
+
+                    self.rotate(u); // zig
+
+                    self.pull_up(p);
+                    self.pull_up(u);
                 }
-                self.rotate(u);
             }
             self.push_down(u);
         }
@@ -214,11 +222,10 @@ pub mod link_cut {
         pub fn access(&mut self, u: NodeRef) {
             unsafe {
                 self.splay(u);
-                self.get_node_mut(u).link_mut().children[Branch::Right.usize()] = None;
-                while let Some(path_parent) = self.get_internal_parent(u).unwrap_err_unchecked() {
+                self[u].link_mut().children[Branch::Right.usize()] = None;
+                while let Some(path_parent) = self.internal_parent(u).unwrap_err_unchecked() {
                     self.splay(path_parent);
-                    self.get_node_mut(path_parent).link_mut().children[Branch::Right.usize()] =
-                        Some(u);
+                    self[path_parent].link_mut().children[Branch::Right.usize()] = Some(u);
                     self.splay(u);
                 }
             }
@@ -226,7 +233,7 @@ pub mod link_cut {
 
         pub fn reroot(&mut self, u: NodeRef) {
             self.access(u);
-            unsafe { self.get_node_mut(u) }.link_mut().inv ^= true;
+            self.reverse(u);
         }
 
         pub fn link(&mut self, parent: NodeRef, child: NodeRef) {
@@ -243,7 +250,7 @@ pub mod link_cut {
 
         pub fn cut(&mut self, child: NodeRef) {
             self.access(child);
-            if self.get_node(child).link().children[Branch::Left.usize()].is_some() {
+            if self[child].link().children[Branch::Left.usize()].is_some() {
                 self.detach(child, Branch::Left);
                 self.pull_up(child);
             }
@@ -251,7 +258,7 @@ pub mod link_cut {
 
         pub fn find_root(&mut self, mut u: NodeRef) -> NodeRef {
             self.access(u);
-            while let Some(left) = self.get_node(u).link().children[Branch::Left.usize()] {
+            while let Some(left) = self[u].link().children[Branch::Left.usize()] {
                 u = left;
                 self.push_down(u);
             }
@@ -259,11 +266,15 @@ pub mod link_cut {
             u
         }
 
+        pub fn is_connected(&mut self, u: NodeRef, v: NodeRef) -> bool {
+            self.find_root(u) == self.find_root(v)
+        }
+
         pub fn get_parent(&mut self, u: NodeRef) -> Option<NodeRef> {
             self.access(u);
-            let mut left = self.get_node(u).link().children[Branch::Left.usize()]?;
+            let mut left = self[u].link().children[Branch::Left.usize()]?;
             self.push_down(left);
-            while let Some(right) = self.get_node(left).link().children[Branch::Right.usize()] {
+            while let Some(right) = self[left].link().children[Branch::Right.usize()] {
                 left = right;
                 self.push_down(left);
             }
@@ -275,7 +286,7 @@ pub mod link_cut {
             self.access(lhs);
             self.access(rhs);
             self.splay(lhs);
-            self.get_node(lhs).link().parent.unwrap_or(lhs)
+            self[lhs].link().parent.unwrap_or(lhs)
         }
 
         pub fn access_vertex_path(&mut self, path_top: NodeRef, path_bot: NodeRef) {

@@ -1,9 +1,4 @@
 pub mod debug {
-    pub fn with(#[allow(unused_variables)] f: impl FnOnce()) {
-        #[cfg(debug_assertions)]
-        f()
-    }
-
     pub mod tree {
         #[derive(Clone)]
         pub struct Pretty(pub String, pub Vec<Pretty>);
@@ -1346,9 +1341,8 @@ pub mod top_tree {
             Ok(())
         }
 
-        /// A wrapper for `sum_path`.
-        /// To handle both path and subtree sums, you must store the aggregates
-        /// in the cluster types `Cx::C` and `Cx::R`.
+        /// A wrapper for `sum_path`. To handle both path and subtree sums,
+        /// store both aggregates (and lazy tags) in `Cx::C` and `Cx::R`.
         pub fn sum_subtree(
             &mut self,
             root: usize,
