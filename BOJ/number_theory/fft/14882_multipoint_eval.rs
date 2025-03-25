@@ -1,3 +1,43 @@
+use std::io::Write;
+
+mod simple_io {
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
+pub mod debug {
+    pub fn with(#[allow(unused_variables)] f: impl FnOnce()) {
+        #[cfg(debug_assertions)]
+        f()
+    }
+}
+
 pub mod algebra {
     use std::ops::*;
     pub trait SemiRing:
@@ -427,18 +467,17 @@ pub mod poly {
     }
 
     impl<T: NTTSpec + PartialEq + Field> Poly<T> {
-        pub fn prod_mod_xk(xs: impl IntoIterator<Item = Self>, k: usize) -> Self {
+        pub fn prod(xs: impl IntoIterator<Item = Self>) -> Self {
             let mut factors: VecDeque<_> = xs.into_iter().collect();
 
             while factors.len() >= 2 {
                 let mut lhs = factors.pop_front().unwrap();
                 let rhs = factors.pop_front().unwrap();
                 lhs *= rhs;
-                lhs.mod_xk_in_place(k);
                 factors.push_back(lhs);
             }
 
-            factors.pop_front().unwrap_or(Self::one()).mod_xk(k)
+            factors.pop_front().unwrap_or(Self::one())
         }
 
         pub fn multipoint_eval(&self, ps: impl IntoIterator<Item = T>) -> Vec<T> {
@@ -458,9 +497,9 @@ pub mod poly {
             let mut remainders = vec![Poly::zero(); 2 * n - 1];
             remainders[2 * n - 2] = self.clone();
             for i in (0..n - 1).rev() {
-                remainders[i + n] %= std::mem::take(&mut divisors[i + n]);
+                remainders[i + n] %= divisors[i + n].clone();
                 remainders[i << 1] = remainders[i + n].clone();
-                remainders[i << 1 | 1] = std::mem::take(&mut remainders[i + n]);
+                remainders[i << 1 | 1] = remainders[i + n].clone();
             }
             (0..n)
                 .map(|i| remainders[i].eval(-divisors[i].0[0].clone()))
@@ -663,37 +702,21 @@ pub mod poly {
                 return;
             }
 
-            let mut lhs = std::mem::take(self);
-            let n = lhs.len() + rhs.len() - 1;
-
-            if lhs.len() < rhs.len() {
-                std::mem::swap(&mut lhs, &mut rhs);
-            }
-            if rhs.len() <= 20 {
-                self.0 = vec![T::zero(); n];
-                for (i, x) in lhs.0.into_iter().enumerate() {
-                    for j in 0..rhs.len() {
-                        self.0[i + j] += rhs.0[j].clone() * &x;
-                    }
-                }
-                return;
-            }
-
+            let n = self.len() + rhs.len() - 1;
             let n_padded = n.next_power_of_two();
 
-            lhs.0.resize(n_padded, T::zero());
+            self.0.resize(n_padded, T::zero());
             rhs.0.resize(n_padded, T::zero());
 
             if let Some(proot) = T::try_nth_proot(n_padded as u32) {
-                ntt::run(proot.clone(), &mut lhs.0);
+                ntt::run(proot.clone(), &mut self.0);
                 ntt::run(proot.clone(), &mut rhs.0);
-                lhs.0.iter_mut().zip(&rhs.0).for_each(|(a, b)| *a *= b);
-                ntt::run(proot.inv(), &mut lhs.0);
+                self.0.iter_mut().zip(&rhs.0).for_each(|(a, b)| *a *= b);
+                ntt::run(proot.inv(), &mut self.0);
                 let n_inv = T::from(n_padded as u32).inv();
-                lhs.0.iter_mut().for_each(|c| c.mul_assign(&n_inv));
+                self.0.iter_mut().for_each(|c| c.mul_assign(&n_inv));
 
-                lhs.0.truncate(n);
-                *self = lhs;
+                self.0.truncate(n);
             } else {
                 use ntt::sample::p104857601 as p0;
                 use ntt::sample::p167772161 as p1;
@@ -701,14 +724,14 @@ pub mod poly {
 
                 let into_u64 = |x: &T| -> u64 { x.clone().into() };
 
-                let lhs_u64 = || lhs.0.iter().map(into_u64);
+                let self_u64 = || self.0.iter().map(into_u64);
                 let rhs_u64 = || rhs.0.iter().map(into_u64);
 
-                let h0 = Poly::from_iter(lhs_u64().map(p0::ModP::from))
+                let h0 = Poly::from_iter(self_u64().map(p0::ModP::from))
                     * Poly::from_iter(rhs_u64().map(p0::ModP::from));
-                let h1 = Poly::from_iter(lhs_u64().map(p1::ModP::from))
+                let h1 = Poly::from_iter(self_u64().map(p1::ModP::from))
                     * Poly::from_iter(rhs_u64().map(p1::ModP::from));
-                let h2 = Poly::from_iter(lhs_u64().map(p2::ModP::from))
+                let h2 = Poly::from_iter(self_u64().map(p2::ModP::from))
                     * Poly::from_iter(rhs_u64().map(p2::ModP::from));
 
                 let (q, ms) = {
@@ -1206,7 +1229,39 @@ pub mod p100000007 {
     }
 }
 
-use algebra::{Field, SemiRing};
-use p100000007 as m;
+pub mod p786433 {
+    use crate::{
+        algebra::PowBy,
+        ntt::NTTSpec,
+        num_mod::{ByU64Prime, ModInt},
+    };
+    pub const P: u64 = 786433;
+    pub const GEN: u64 = 10;
+    pub type ModP = ModInt<ByU64Prime<P>>;
+    impl NTTSpec for ModP {
+        fn try_nth_proot(n: u32) -> Option<Self> {
+            assert!((P - 1) % n as u64 == 0);
+            ModP::from(GEN).pow((P - 1) / n as u64).into()
+        }
+    }
+}
 
-use m::ModP;
+use p786433 as m;
+
+use m::ModP as M;
+use poly::Poly;
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    let n: u64 = input.value();
+    let f = Poly::<M>::new((0..n + 1).map(|_| input.value()).collect());
+
+    let k: u64 = input.value();
+    let xs: Vec<M> = (0..k).map(|_| input.value()).collect();
+
+    for a in f.multipoint_eval(xs) {
+        writeln!(output, "{}", a).unwrap();
+    }
+}

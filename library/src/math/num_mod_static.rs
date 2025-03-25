@@ -22,9 +22,6 @@ pub mod algebra {
         fn one() -> Self;
     }
 
-    // Non-commutative algebras are not my business (yet)
-    // pub trait Ring: SemiRing + Neg<Output = Self> {}
-
     pub trait CommRing: SemiRing + Neg<Output = Self> {}
 
     pub trait PowBy<E> {
@@ -150,6 +147,12 @@ pub mod num_mod {
     #[derive(Clone, Copy, PartialEq, Eq)]
     pub struct ModInt<M: ModSpec>(M::U);
 
+    impl<M: ModSpec> ModInt<M> {
+        pub fn new(s: M::U) -> Self {
+            Self(s % M::MODULUS)
+        }
+    }
+
     macro_rules! impl_modspec {
         ($($t:ident $u:ty),+) => {
             $(
@@ -179,7 +182,7 @@ pub mod num_mod {
     }
     impl_by_prime!(ByU32Prime u32, ByU64Prime u64, ByU128Prime u128);
 
-    impl<'a, M: ModSpec> AddAssign<&'a Self> for ModInt<M> {
+    impl<M: ModSpec> AddAssign<&'_ Self> for ModInt<M> {
         fn add_assign(&mut self, rhs: &Self) {
             self.0 += rhs.0;
             if self.0 >= M::MODULUS {
@@ -188,7 +191,7 @@ pub mod num_mod {
         }
     }
 
-    impl<'a, M: ModSpec> SubAssign<&'a Self> for ModInt<M> {
+    impl<M: ModSpec> SubAssign<&'_ Self> for ModInt<M> {
         fn sub_assign(&mut self, rhs: &Self) {
             if self.0 < rhs.0 {
                 self.0 += M::MODULUS;
@@ -197,7 +200,7 @@ pub mod num_mod {
         }
     }
 
-    impl<'a, M: ModSpec> MulAssign<&'a Self> for ModInt<M> {
+    impl<M: ModSpec> MulAssign<&'_ Self> for ModInt<M> {
         fn mul_assign(&mut self, rhs: &Self) {
             self.0 *= rhs.0;
             self.0 %= M::MODULUS;
@@ -220,7 +223,7 @@ pub mod num_mod {
     macro_rules! impl_op_by_op_assign {
         ($($Op:ident $op:ident $op_assign:ident),+) => {
             $(
-                impl<'a, M: ModSpec> $Op<&'a Self> for ModInt<M> {
+                impl<M: ModSpec> $Op<&'_ Self> for ModInt<M> {
                     type Output = Self;
                     fn $op(mut self, rhs: &Self) -> Self {
                         self.$op_assign(rhs);
@@ -239,7 +242,7 @@ pub mod num_mod {
     }
     impl_op_by_op_assign!(Add add add_assign, Mul mul mul_assign, Sub sub sub_assign);
 
-    impl<'a, M: ModSpec> Neg for &'a ModInt<M> {
+    impl<M: ModSpec> Neg for &'_ ModInt<M> {
         type Output = ModInt<M>;
         fn neg(self) -> ModInt<M> {
             let mut res = M::MODULUS - self.0;
@@ -270,7 +273,7 @@ pub mod num_mod {
     }
     impl<M: ModSpec> CommRing for ModInt<M> {}
 
-    impl<'a, M: ByPrime> DivAssign<&'a Self> for ModInt<M>
+    impl<M: ByPrime> DivAssign<&'_ Self> for ModInt<M>
     where
         ModInt<M>: PowBy<M::U>,
     {
@@ -288,7 +291,7 @@ pub mod num_mod {
         }
     }
 
-    impl<'a, M: ByPrime> Div<&'a Self> for ModInt<M>
+    impl<M: ByPrime> Div<&'_ Self> for ModInt<M>
     where
         ModInt<M>: PowBy<M::U>,
     {
@@ -414,6 +417,13 @@ pub mod num_mod {
     impl<U: std::fmt::Display, M: ModSpec<U = U>> std::fmt::Display for ModInt<M> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             self.0.fmt(f)
+        }
+    }
+
+    impl<U: std::str::FromStr, M: ModSpec<U = U>> std::str::FromStr for ModInt<M> {
+        type Err = <U as std::str::FromStr>::Err;
+        fn from_str(s: &str) -> Result<Self, Self::Err> {
+            s.parse().map(|x| ModInt::new(x))
         }
     }
 }
