@@ -158,6 +158,10 @@ pub mod suffix_trie {
                 p = self.nodes[p as usize].rev_parent;
             }
         }
+
+        pub fn push_sep(&mut self) {
+            self.tail = 0;
+        }
     }
 
     pub fn suffix_array<S>(s: &[S], mut f: impl FnMut(&S) -> T) -> Vec<u32> {
