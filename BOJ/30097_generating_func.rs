@@ -1,37 +1,45 @@
+use std::io::Write;
+
+mod simple_io {
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
+pub mod debug {
+    pub fn with(#[allow(unused_variables)] f: impl FnOnce()) {
+        #[cfg(debug_assertions)]
+        f()
+    }
+}
+
 pub mod algebra {
     use std::ops::*;
-    pub trait Unsigned:
-        Copy
-        + Default
-        + SemiRing
-        + Div<Output = Self>
-        + Rem<Output = Self>
-        + RemAssign
-        + PartialEq
-        + Eq
-        + PartialOrd
-        + Ord
-        + From<u8>
-    {
-        fn zero() -> Self {
-            Self::default()
-        }
-        fn one() -> Self;
-    }
-
-    macro_rules! impl_unsigned {
-        ($($t:ty)+) => {
-            $(
-                impl Unsigned for $t {
-                    fn one() -> Self {
-                        1
-                    }
-                }
-            )+
-        };
-    }
-    impl_unsigned!(u8 u16 u32 u64 u128 usize);
-
     pub trait SemiRing:
         Add<Output = Self>
         + Sub<Output = Self>
@@ -52,23 +60,13 @@ pub mod algebra {
             Self::default()
         }
         fn one() -> Self;
-
-        fn pow<U: Unsigned>(&self, exp: U) -> Self {
-            let mut res = Self::one();
-            let mut base = self.clone();
-            let mut exp = exp;
-            while exp > U::from(0u8) {
-                if exp % U::from(2u8) == U::from(1u8) {
-                    res *= base.clone();
-                }
-                base *= base.clone();
-                exp = exp / U::from(2);
-            }
-            res
-        }
     }
 
     pub trait CommRing: SemiRing + Neg<Output = Self> {}
+
+    pub trait PowBy<E> {
+        fn pow(&self, exp: E) -> Self;
+    }
 
     pub trait Field:
         CommRing
@@ -103,6 +101,46 @@ pub mod algebra {
     impl_semiring!(u8 u16 u32 u64 u128 usize);
     impl_semiring!(i8 i16 i32 i64 i128 isize);
     impl_commring!(i8 i16 i32 i64 i128 isize);
+
+    macro_rules! impl_powby {
+        ($(($uexp:ty, $iexp:ty),)+) => {
+            $(
+                impl<R: CommRing> PowBy<$uexp> for R {
+                    fn pow(&self, exp: $uexp) -> R {
+                        let mut res = R::one();
+                        let mut base = self.clone();
+                        let mut exp = exp;
+                        while exp > 0 {
+                            if exp & 1 == 1 {
+                                res *= base.clone();
+                            }
+                            base *= base.clone();
+                            exp >>= 1;
+                        }
+                        res
+                    }
+                }
+
+                impl<R: Field> PowBy<$iexp> for R {
+                    fn pow(&self, exp: $iexp) -> R {
+                        if exp < 0 {
+                            self.inv().pow((-exp) as $uexp)
+                        } else {
+                            self.pow(exp as $uexp)
+                        }
+                    }
+                }
+            )+
+        };
+    }
+    impl_powby!(
+        (u8, i8),
+        (u16, i16),
+        (u32, i32),
+        (u64, i64),
+        (u128, i128),
+        (usize, isize),
+    );
 }
 
 pub mod ntt {
@@ -123,7 +161,7 @@ pub mod ntt {
         }
     }
 
-    pub fn run<T: CommRing>(proot: T, xs: &mut [T]) {
+    pub fn run<T: CommRing + PowBy<u32> + Clone>(proot: T, xs: &mut [T]) {
         if xs.len() <= 20 {
             naive(proot, xs);
         } else {
@@ -132,7 +170,7 @@ pub mod ntt {
     }
 
     // naive O(n^2)
-    pub fn naive<T: CommRing>(proot: T, xs: &mut [T]) {
+    pub fn naive<T: CommRing + PowBy<u32> + Clone>(proot: T, xs: &mut [T]) {
         let n = xs.len().next_power_of_two();
         let proot_pow: Vec<T> =
             std::iter::successors(Some(T::one()), |acc| Some(acc.clone() * &proot))
@@ -150,7 +188,7 @@ pub mod ntt {
         }
     }
 
-    pub fn radix4<T: CommRing>(proot: T, xs: &mut [T]) {
+    pub fn radix4<T: CommRing + PowBy<u32> + Clone>(proot: T, xs: &mut [T]) {
         let n = xs.len();
         assert!(n.is_power_of_two());
         let n_log2 = u32::BITS - (n as u32).leading_zeros() - 1;
@@ -243,17 +281,17 @@ pub mod ntt {
         // https://oeis.org/A050526
         // https://oeis.org/A300407
         use super::NTTSpec;
-        use crate::algebra::SemiRing;
-        use crate::mint::*;
+        use crate::algebra::PowBy;
+        use crate::num_mod::*;
         pub mod p13631489 {
             use super::*;
             pub const P: u64 = 13631489;
             pub const GEN: u64 = 15;
-            pub type M = M64<P>;
-            impl NTTSpec for M {
+            pub type ModP = ModInt<ByU64Prime<P>>;
+            impl NTTSpec for ModP {
                 fn try_nth_proot(n: u32) -> Option<Self> {
                     assert!((P - 1) % n as u64 == 0);
-                    M::from(GEN).pow((P - 1) / n as u64).into()
+                    ModP::from(GEN).pow((P - 1) / n as u64).into()
                 }
             }
         }
@@ -262,11 +300,11 @@ pub mod ntt {
             use super::*;
             pub const P: u64 = 104857601;
             pub const GEN: u64 = 3;
-            pub type M = M64<P>;
-            impl NTTSpec for M {
+            pub type ModP = ModInt<ByU64Prime<P>>;
+            impl NTTSpec for ModP {
                 fn try_nth_proot(n: u32) -> Option<Self> {
                     assert!((P - 1) % n as u64 == 0);
-                    M::from(GEN).pow((P - 1) / n as u64).into()
+                    ModP::from(GEN).pow((P - 1) / n as u64).into()
                 }
             }
         }
@@ -275,11 +313,11 @@ pub mod ntt {
             use super::*;
             pub const P: u64 = 167772161;
             pub const GEN: u64 = 3;
-            pub type M = M64<P>;
-            impl NTTSpec for M {
+            pub type ModP = ModInt<ByU64Prime<P>>;
+            impl NTTSpec for ModP {
                 fn try_nth_proot(n: u32) -> Option<Self> {
                     assert!((P - 1) % n as u64 == 0);
-                    M::from(GEN).pow((P - 1) / n as u64).into()
+                    ModP::from(GEN).pow((P - 1) / n as u64).into()
                 }
             }
         }
@@ -288,11 +326,11 @@ pub mod ntt {
             use super::*;
             pub const P: u64 = 998244353;
             pub const GEN: u64 = 3;
-            pub type M = M64<P>;
-            impl NTTSpec for M {
+            pub type ModP = ModInt<ByU64Prime<P>>;
+            impl NTTSpec for ModP {
                 fn try_nth_proot(n: u32) -> Option<Self> {
                     assert!((P - 1) % n as u64 == 0);
-                    M::from(GEN).pow((P - 1) / n as u64).into()
+                    ModP::from(GEN).pow((P - 1) / n as u64).into()
                 }
             }
         }
@@ -301,11 +339,11 @@ pub mod ntt {
             use super::*;
             pub const P: u64 = 1092616193;
             pub const GEN: u64 = 3;
-            pub type M = M64<P>;
-            impl NTTSpec for M {
+            pub type ModP = ModInt<ByU64Prime<P>>;
+            impl NTTSpec for ModP {
                 fn try_nth_proot(n: u32) -> Option<Self> {
                     assert!((P - 1) % n as u64 == 0);
-                    M::from(GEN).pow((P - 1) / n as u64).into()
+                    ModP::from(GEN).pow((P - 1) / n as u64).into()
                 }
             }
         }
@@ -356,6 +394,10 @@ pub mod poly {
             Self(vec![T::one()])
         }
 
+        pub fn lagrange(_ps: impl IntoIterator<Item = (T, T)>) -> Self {
+            todo!()
+        }
+
         pub fn pop_zeros(&mut self) {
             while self.0.last().filter(|&c| c == &T::zero()).is_some() {
                 self.0.pop();
@@ -380,15 +422,11 @@ pub mod poly {
             self.0.last().cloned().unwrap_or(T::zero())
         }
 
-        pub fn coeff(&self, i: usize) -> T {
-            self.0.get(i).cloned().unwrap_or_default()
-        }
-
         pub fn eval(&self, x: T) -> T {
             let mut res = T::zero();
             for c in self.0.iter().rev() {
-                res *= &x;
-                res += c;
+                res *= x.clone();
+                res += c.clone();
             }
             res
         }
@@ -414,8 +452,8 @@ pub mod poly {
                 .collect();
         }
 
-        pub fn div_xk(&self, k: usize) -> Self {
-            Self(self.0[k..].to_vec())
+        pub fn div_xk_in_place(&mut self, _k: usize) {
+            todo!()
         }
 
         pub fn factor_out_xk(&self) -> (usize, Self) {
@@ -428,55 +466,19 @@ pub mod poly {
         }
     }
 
-    impl<T> FromIterator<T> for Poly<T> {
-        fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
-            Self(iter.into_iter().collect())
-        }
-    }
-
     impl<T: NTTSpec + PartialEq + Field> Poly<T> {
-        pub fn prod(xs: impl IntoIterator<Item = Self>) -> Self {
+        pub fn prod_mod_xk(xs: impl IntoIterator<Item = Self>, k: usize) -> Self {
             let mut factors: VecDeque<_> = xs.into_iter().collect();
 
             while factors.len() >= 2 {
                 let mut lhs = factors.pop_front().unwrap();
                 let rhs = factors.pop_front().unwrap();
                 lhs *= rhs;
+                lhs.mod_xk_in_place(k);
                 factors.push_back(lhs);
             }
 
-            factors.pop_front().unwrap_or(Self::one())
-        }
-
-        pub fn sum_frac(fs: impl IntoIterator<Item = (Self, Self)>) -> (Self, Self) {
-            let mut factors: VecDeque<_> = fs.into_iter().collect();
-
-            while factors.len() >= 2 {
-                let (n0, d0) = factors.pop_front().unwrap();
-                let (n1, d1) = factors.pop_front().unwrap();
-                factors.push_back((n0 * d1.clone() + n1 * d0.clone(), d0 * d1));
-            }
-
-            factors.pop_front().unwrap_or((Self::zero(), Self::one()))
-        }
-
-        pub fn interp(ps: impl IntoIterator<Item = (T, T)>) -> Self {
-            let ps: Vec<_> = ps.into_iter().collect();
-
-            // Potential optimization: Reduce redundant computation of the polynomial tree of `f`
-            // from three times to once - one in multipoint_eval, and the other in sum_frac.
-            let f = Self::prod(
-                ps.iter()
-                    .map(|(x, _)| Poly::new(vec![-x.clone(), T::one()])),
-            );
-            let df_dx = f.deriv().multipoint_eval(ps.iter().map(|(x, _)| x.clone()));
-            let (d, _n) = Poly::sum_frac(ps.into_iter().zip(df_dx).map(|((x, y), m)| {
-                (
-                    Poly::from(y * m.inv()),
-                    Poly::new(vec![-x.clone(), T::one()]),
-                )
-            }));
-            d
+            factors.pop_front().unwrap_or(Self::one()).mod_xk(k)
         }
 
         pub fn multipoint_eval(&self, ps: impl IntoIterator<Item = T>) -> Vec<T> {
@@ -601,7 +603,7 @@ pub mod poly {
             let c0 = p.0[0].clone();
             debug_assert!(c0 != T::zero());
 
-            p = p.div_xk(1);
+            p.div_xk_in_place(1);
             p *= c0.inv();
             p = self.sqrt_1p_mx_mod_xk(k.saturating_sub(l / 2));
             p.mul_xk_in_place(k);
@@ -742,12 +744,12 @@ pub mod poly {
                 let lhs_u64 = || lhs.0.iter().map(into_u64);
                 let rhs_u64 = || rhs.0.iter().map(into_u64);
 
-                let h0 = Poly::from_iter(lhs_u64().map(p0::M::from))
-                    * Poly::from_iter(rhs_u64().map(p0::M::from));
-                let h1 = Poly::from_iter(lhs_u64().map(p1::M::from))
-                    * Poly::from_iter(rhs_u64().map(p1::M::from));
-                let h2 = Poly::from_iter(lhs_u64().map(p2::M::from))
-                    * Poly::from_iter(rhs_u64().map(p2::M::from));
+                let h0 = Poly::from_iter(lhs_u64().map(p0::ModP::from))
+                    * Poly::from_iter(rhs_u64().map(p0::ModP::from));
+                let h1 = Poly::from_iter(lhs_u64().map(p1::ModP::from))
+                    * Poly::from_iter(rhs_u64().map(p1::ModP::from));
+                let h2 = Poly::from_iter(lhs_u64().map(p2::ModP::from))
+                    * Poly::from_iter(rhs_u64().map(p2::ModP::from));
 
                 let (q, ms) = {
                     thread_local! {
@@ -757,8 +759,11 @@ pub mod poly {
                     COEFF.with(|coeff| {
                         *coeff.get_or_init(|| {
                             let q = p0::P as u128 * p1::P as u128 * p2::P as u128;
-                            let (qs, rs) =
-                                crt3_coeff_u64::<p0::M, p1::M, p2::M, T>([p0::P, p1::P, p2::P]);
+                            let (qs, rs) = crt3_coeff_u64::<p0::ModP, p1::ModP, p2::ModP, T>([
+                                p0::P,
+                                p1::P,
+                                p2::P,
+                            ]);
                             let ms = [
                                 qs[0] as u128 * u64::from(rs.0) as u128,
                                 qs[1] as u128 * u64::from(rs.1) as u128,
@@ -843,42 +848,86 @@ pub mod poly {
     }
 }
 
-pub mod mint {
+pub mod num_mod {
     use super::algebra::*;
     use std::ops::*;
+
+    pub trait Unsigned:
+        Copy
+        + Default
+        + SemiRing
+        + Div<Output = Self>
+        + Rem<Output = Self>
+        + RemAssign
+        + PartialEq
+        + PartialOrd
+        + From<u8>
+    {
+        fn zero() -> Self {
+            Self::default()
+        }
+        fn one() -> Self;
+    }
+
+    macro_rules! impl_unsigned {
+        ($($t:ty)+) => {
+            $(
+                impl Unsigned for $t {
+                    fn one() -> Self {
+                        1
+                    }
+                }
+            )+
+        };
+    }
+    impl_unsigned!(u8 u16 u32 u64 u128 usize);
 
     pub trait ModSpec: Copy {
         type U: Unsigned;
         const MODULUS: Self::U;
     }
 
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    pub struct MInt<M: ModSpec>(M::U);
+    pub trait ByPrime: ModSpec {}
 
-    impl<M: ModSpec> MInt<M> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub struct ModInt<M: ModSpec>(M::U);
+
+    impl<M: ModSpec> ModInt<M> {
         pub fn new(s: M::U) -> Self {
             Self(s % M::MODULUS)
         }
     }
 
     macro_rules! impl_modspec {
-        ($wrapper:ident $spec:ident $u:ty) => {
-            #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-            pub struct $spec<const M: $u>;
+        ($($t:ident $u:ty),+) => {
+            $(
+                #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+                pub struct $t<const M: $u>;
 
-            impl<const MOD: $u> ModSpec for $spec<MOD> {
-                type U = $u;
-                const MODULUS: $u = MOD;
-            }
+                impl<const MOD: $u> ModSpec for $t<MOD> {
+                    type U = $u;
+                    const MODULUS: $u = MOD;
+                }
 
-            pub type $wrapper<const M: $u> = MInt<$spec<M>>;
+            )+
         };
     }
-    impl_modspec!(M32 __ByU32 u32);
-    impl_modspec!(M64 __ByU64 u64);
-    impl_modspec!(M128 __ByU128 u128);
+    impl_modspec!(
+        ByU32 u32, ByU32Prime u32,
+        ByU64 u64, ByU64Prime u64,
+        ByU128 u128, ByU128Prime u128
+    );
 
-    impl<M: ModSpec> AddAssign<&'_ Self> for MInt<M> {
+    macro_rules! impl_by_prime {
+        ($($t:ident $u:ty),+) => {
+            $(
+                impl<const MOD: $u> ByPrime for $t<MOD> {}
+            )+
+        };
+    }
+    impl_by_prime!(ByU32Prime u32, ByU64Prime u64, ByU128Prime u128);
+
+    impl<M: ModSpec> AddAssign<&'_ Self> for ModInt<M> {
         fn add_assign(&mut self, rhs: &Self) {
             self.0 += rhs.0;
             if self.0 >= M::MODULUS {
@@ -887,7 +936,7 @@ pub mod mint {
         }
     }
 
-    impl<M: ModSpec> SubAssign<&'_ Self> for MInt<M> {
+    impl<M: ModSpec> SubAssign<&'_ Self> for ModInt<M> {
         fn sub_assign(&mut self, rhs: &Self) {
             if self.0 < rhs.0 {
                 self.0 += M::MODULUS;
@@ -896,80 +945,122 @@ pub mod mint {
         }
     }
 
-    impl<M: ModSpec> MulAssign<&'_ Self> for MInt<M> {
+    impl<M: ModSpec> MulAssign<&'_ Self> for ModInt<M> {
         fn mul_assign(&mut self, rhs: &Self) {
             self.0 *= rhs.0;
             self.0 %= M::MODULUS;
         }
     }
 
-    impl<M: ModSpec> DivAssign<&'_ Self> for MInt<M> {
-        fn div_assign(&mut self, rhs: &Self) {
-            self.mul_assign(&rhs.inv());
-        }
-    }
-
-    macro_rules! forward_binop {
-        ($OpAssign:ident $op_assign:ident, $Op:ident $op:ident) => {
-            impl<M: ModSpec> $OpAssign for MInt<M> {
-                fn $op_assign(&mut self, rhs: Self) {
-                    self.$op_assign(&rhs);
+    macro_rules! forward_ref_binop {
+        ($($OpAssign:ident $op_assign:ident),+) => {
+            $(
+                impl<M: ModSpec> $OpAssign for ModInt<M> {
+                    fn $op_assign(&mut self, rhs: Self) {
+                        self.$op_assign(&rhs);
+                    }
                 }
-            }
-
-            impl<M: ModSpec> $Op<&'_ Self> for MInt<M> {
-                type Output = Self;
-                fn $op(mut self, rhs: &Self) -> Self {
-                    self.$op_assign(rhs);
-                    self
-                }
-            }
-
-            impl<M: ModSpec> $Op for MInt<M> {
-                type Output = MInt<M>;
-                fn $op(self, rhs: Self) -> Self::Output {
-                    self.clone().$op(&rhs)
-                }
-            }
+            )+
         };
     }
-    forward_binop!(AddAssign add_assign, Add add);
-    forward_binop!(SubAssign sub_assign, Sub sub);
-    forward_binop!(MulAssign mul_assign, Mul mul);
-    forward_binop!(DivAssign div_assign, Div div);
+    forward_ref_binop!(AddAssign add_assign, MulAssign mul_assign, SubAssign sub_assign);
 
-    impl<M: ModSpec> Neg for &'_ MInt<M> {
-        type Output = MInt<M>;
-        fn neg(self) -> MInt<M> {
+    macro_rules! impl_op_by_op_assign {
+        ($($Op:ident $op:ident $op_assign:ident),+) => {
+            $(
+                impl<M: ModSpec> $Op<&'_ Self> for ModInt<M> {
+                    type Output = Self;
+                    fn $op(mut self, rhs: &Self) -> Self {
+                        self.$op_assign(rhs);
+                        self
+                    }
+                }
+
+                impl< M: ModSpec> $Op for ModInt<M> {
+                    type Output = ModInt<M>;
+                    fn $op(self, rhs: Self) -> Self::Output {
+                        self.clone().$op(&rhs)
+                    }
+                }
+            )+
+        };
+    }
+    impl_op_by_op_assign!(Add add add_assign, Mul mul mul_assign, Sub sub sub_assign);
+
+    impl<M: ModSpec> Neg for &'_ ModInt<M> {
+        type Output = ModInt<M>;
+        fn neg(self) -> ModInt<M> {
             let mut res = M::MODULUS - self.0;
             if res == M::MODULUS {
                 res = 0.into();
             }
-            MInt(res)
+            ModInt(res)
         }
     }
 
-    impl<M: ModSpec> Neg for MInt<M> {
+    impl<M: ModSpec> Neg for ModInt<M> {
         type Output = Self;
         fn neg(self) -> Self::Output {
             (&self).neg()
         }
     }
 
-    impl<M: ModSpec> Default for MInt<M> {
+    impl<M: ModSpec> Default for ModInt<M> {
         fn default() -> Self {
             Self(M::U::default())
         }
     }
 
-    impl<M: ModSpec> SemiRing for MInt<M> {
+    impl<M: ModSpec> SemiRing for ModInt<M> {
         fn one() -> Self {
             Self(1.into())
         }
     }
-    impl<M: ModSpec> CommRing for MInt<M> {}
+    impl<M: ModSpec> CommRing for ModInt<M> {}
 
-    impl<M: ModSpec> Field for MInt<M> {
+    impl<M: ByPrime> DivAssign<&'_ Self> for ModInt<M>
+    where
+        ModInt<M>: PowBy<M::U>,
+    {
+        fn div_assign(&mut self, rhs: &Self) {
+            self.mul_assign(&rhs.inv());
+        }
+    }
+
+    impl<M: ByPrime> DivAssign for ModInt<M>
+    where
+        ModInt<M>: PowBy<M::U>,
+    {
+        fn div_assign(&mut self, rhs: Self) {
+            self.div_assign(&rhs);
+        }
+    }
+
+    impl<M: ByPrime> Div<&'_ Self> for ModInt<M>
+    where
+        ModInt<M>: PowBy<M::U>,
+    {
+        type Output = Self;
+        fn div(mut self, rhs: &Self) -> Self {
+            self.div_assign(rhs);
+            self
+        }
+    }
+
+    impl<M: ByPrime> Div for ModInt<M>
+    where
+        ModInt<M>: PowBy<M::U>,
+    {
+        type Output = Self;
+        fn div(self, rhs: Self) -> Self {
+            self / &rhs
+        }
+    }
+
+    impl<M: ByPrime> Field for ModInt<M>
+    where
+        ModInt<M>: PowBy<M::U>,
+    {
         fn inv(&self) -> Self {
             self.pow(M::MODULUS - M::U::from(2))
         }
@@ -983,39 +1074,62 @@ pub mod mint {
     }
 
     macro_rules! impl_cmp_utype {
-        (@pairwise $lhs:ident $rhs:ident => $wider:ident) => {
-            impl CmpUType<$rhs> for $lhs {
-                type MaxT = $wider;
-                fn upcast(lhs: Self) -> Self::MaxT {
-                    lhs as Self::MaxT
-                }
-                fn upcast_rhs(rhs: $rhs) -> Self::MaxT {
-                    rhs as Self::MaxT
-                }
-                fn downcast(wider: Self::MaxT) -> Self {
-                    wider as Self
-                }
-            }
-        };
-
-        (@cascade $target:ident $($upper:ident)*) => {
+        (
+            $( $($lower:ident)* < $target:ident < $($upper:ident)* ),* $(,)?
+        ) => {
             $(
-                impl_cmp_utype!(@pairwise $target $upper => $upper);
-                impl_cmp_utype!(@pairwise $upper $target => $upper);
+                $(
+                    impl CmpUType<$lower> for $target {
+                        type MaxT = $target;
+                        fn upcast(lhs: Self) -> Self::MaxT {
+                            lhs as Self::MaxT
+                        }
+                        fn upcast_rhs(rhs: $lower) -> Self::MaxT {
+                            rhs as Self::MaxT
+                        }
+                        fn downcast(max: Self::MaxT) -> Self {
+                            max as Self
+                        }
+                    }
+                )*
+                impl CmpUType<$target> for $target {
+                    type MaxT = $target;
+                    fn upcast(lhs: Self) -> Self::MaxT {
+                        lhs as Self::MaxT
+                    }
+                    fn upcast_rhs(rhs: $target) -> Self::MaxT {
+                        rhs as Self::MaxT
+                    }
+                    fn downcast(max: Self::MaxT) -> Self {
+                        max as Self
+                    }
+                }
+                $(
+                    impl CmpUType<$upper> for $target {
+                        type MaxT = $upper;
+                        fn upcast(lhs: Self) -> Self::MaxT {
+                            lhs as Self::MaxT
+                        }
+                        fn upcast_rhs(rhs: $upper) -> Self::MaxT {
+                            rhs as Self::MaxT
+                        }
+                        fn downcast(max: Self::MaxT) -> Self {
+                            max as Self
+                        }
+                    }
+                )*
             )*
-            impl_cmp_utype!(@pairwise $target $target => $target);
         };
-
-        ($target:ident $($rest:ident)*) => {
-            impl_cmp_utype!(@cascade $target $($rest)*);
-            impl_cmp_utype!($($rest)*);
-        };
-
-        () => {};
     }
-    impl_cmp_utype!(u8 u16 u32 u64 u128);
+    impl_cmp_utype!(
+        < u8 < u16 u32 u64 u128,
+        u8 < u16 < u32 u64 u128,
+        u8 u16 < u32 < u64 u128,
+        u8 u16 u32 < u64 < u128,
+        u8 u16 u32 u64 < u128 <,
+    );
 
-    impl<U, S, M> From<S> for MInt<M>
+    impl<U, S, M> From<S> for ModInt<M>
     where
         U: CmpUType<S>,
         S: Unsigned,
@@ -1029,8 +1143,8 @@ pub mod mint {
     macro_rules! impl_cast_to_unsigned {
         ($($u:ty)+) => {
             $(
-                impl<M: ModSpec<U = $u>> From<MInt<M>> for $u {
-                    fn from(n: MInt<M>) -> Self {
+                impl<M: ModSpec<U = $u>> From<ModInt<M>> for $u {
+                    fn from(n: ModInt<M>) -> Self {
                         n.0
                     }
                 }
@@ -1039,98 +1153,67 @@ pub mod mint {
     }
     impl_cast_to_unsigned!(u8 u16 u32 u64 u128);
 
-    impl<U: std::fmt::Debug, M: ModSpec<U = U>> std::fmt::Debug for MInt<M> {
+    impl<U: std::fmt::Debug, M: ModSpec<U = U>> std::fmt::Debug for ModInt<M> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             self.0.fmt(f)
         }
     }
 
-    impl<U: std::fmt::Display, M: ModSpec<U = U>> std::fmt::Display for MInt<M> {
+    impl<U: std::fmt::Display, M: ModSpec<U = U>> std::fmt::Display for ModInt<M> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             self.0.fmt(f)
         }
     }
 
-    impl<U: std::str::FromStr, M: ModSpec<U = U>> std::str::FromStr for MInt<M> {
+    impl<U: std::str::FromStr, M: ModSpec<U = U>> std::str::FromStr for ModInt<M> {
         type Err = <U as std::str::FromStr>::Err;
         fn from_str(s: &str) -> Result<Self, Self::Err> {
-            s.parse().map(|x| MInt::new(x))
+            s.parse().map(|x| ModInt::new(x))
         }
     }
 }
 
-pub mod linear_recurrence {
-    use crate::algebra::Field;
+use algebra::{Field, SemiRing};
 
-    use super::algebra::CommRing;
-    use super::ntt::NTTSpec;
-    use super::poly::Poly;
-
-    pub fn berlekamp_massey<T: CommRing>(_seq: &[T]) -> Vec<T> {
-        unimplemented!()
-    }
-
-    pub fn next<T: CommRing + Copy>(recurrence: &[T], init: &[T]) -> T {
-        let l = recurrence.len();
-        let n = init.len();
-        assert!(n >= l);
-        let mut value = recurrence[0] * init[n - 1];
-        for i in 1..l {
-            value += recurrence[i] * init[n - 1 - i];
-        }
-        value
-    }
-
-    // Kitamasa method, O(L log L log N)
-    pub fn nth_by_ntt<T: NTTSpec + Field + PartialEq + Copy>(
-        recurrence: &[T],
-        init: &[T],
-        mut n: u64,
-    ) -> T {
-        let l = recurrence.len();
-        assert!(1 <= l && l == init.len());
-
-        let modulus = Poly::new(
-            recurrence
-                .iter()
-                .rev()
-                .map(|&c| -c)
-                .chain(Some(T::one()))
-                .collect(),
-        );
-        let mut pow = Poly::new(vec![T::one()]);
-        let mut base = Poly::new(vec![T::zero(), T::one()]);
-
-        while n > 0 {
-            if n & 1 == 1 {
-                pow *= base.clone();
-                pow %= modulus.clone();
-            }
-            base *= base.clone();
-            base %= modulus.clone();
-            n >>= 1;
-        }
-
-        pow.0.resize(l, T::zero());
-        (0..l)
-            .map(|i| init[i] * pow.0[i])
-            .fold(T::zero(), |acc, x| acc + x)
-    }
-}
-
-pub mod p100000007 {
-    use crate::{mint::M64, ntt::NTTSpec};
-    pub const P: u64 = 1000000007;
-    pub type M = M64<P>;
-    impl NTTSpec for M {
-        fn try_nth_proot(_: u32) -> Option<Self> {
-            None
-        }
-    }
-}
-
-use algebra::SemiRing;
 use poly::Poly;
 
-type M = ntt::sample::p998244353::M;
-// type M = p100000007::M;
+type M = ntt::sample::p998244353::ModP;
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    let n_bound = 4000;
+
+    let mut fs = [Poly::<M>::one(), Poly::one()];
+    for i in 1..=n_bound {
+        let [mut e_shift, mut o_shift] = fs.clone();
+        e_shift.mul_xk_in_place(i);
+        e_shift.mod_xk_in_place(n_bound + 1);
+        o_shift.mul_xk_in_place(i);
+        o_shift.mod_xk_in_place(n_bound + 1);
+
+        let [e, o] = &mut fs;
+        *e += &e_shift;
+        *o -= &o_shift;
+    }
+    let fs_inv = [fs[0].inv_mod_xk(n_bound + 1), fs[1].inv_mod_xk(n_bound + 1)];
+
+    for _ in 0..input.value() {
+        let n: usize = input.value();
+        let k: usize = input.value();
+
+        let ans = if k > 0 {
+            let c = |j: usize| {
+                ((n + 1).saturating_sub(fs[j].len()).div_ceil(k)..=(n / k).min(fs_inv[j].len() - 1))
+                    .map(|l| fs[j].0[n - k * l] * fs_inv[j].0[l])
+                    .fold(M::zero(), |acc, x| acc + x)
+            };
+            c(0) + c(1)
+        } else {
+            let c = |j: usize| fs[j].0.get(n).copied().unwrap_or_default();
+            c(0) + c(1)
+        } * M::from(2u8).inv();
+        writeln!(output, "{}", ans).ok();
+    }
+}

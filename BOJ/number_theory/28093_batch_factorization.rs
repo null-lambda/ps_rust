@@ -1,3 +1,43 @@
+use std::io::Write;
+
+mod simple_io {
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
+pub mod debug {
+    pub fn with(#[allow(unused_variables)] f: impl FnOnce()) {
+        #[cfg(debug_assertions)]
+        f()
+    }
+}
+
 pub mod algebra {
     use std::ops::*;
     pub trait SemiRing:
@@ -425,5 +465,132 @@ pub mod num_mod {
         fn from_str(s: &str) -> Result<Self, Self::Err> {
             s.parse().map(|x| ModInt::new(x))
         }
+    }
+}
+
+use algebra::{Field, PowBy, SemiRing};
+
+fn gcd(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        let temp = b;
+        b = a % b;
+        a = temp;
+    }
+    a
+}
+
+fn linear_sieve(n_max: u32) -> (Vec<u32>, Vec<u32>) {
+    let mut min_prime_factor = vec![0; n_max as usize + 1];
+    let mut primes = Vec::new();
+
+    for i in 2..=n_max {
+        if min_prime_factor[i as usize] == 0 {
+            primes.push(i);
+        }
+        for &p in primes.iter() {
+            if i * p > n_max {
+                break;
+            }
+            min_prime_factor[(i * p) as usize] = p;
+            if i % p == 0 {
+                break;
+            }
+        }
+    }
+
+    (min_prime_factor, primes)
+}
+
+fn gen_euler_phi(min_prime_factor: &[u32]) -> Vec<u32> {
+    let n_bound = min_prime_factor.len();
+    let mut phi = vec![0; n_bound];
+    phi[1] = 1;
+    for i in 2..n_bound {
+        let p = min_prime_factor[i as usize];
+        phi[i] = if p == 0 {
+            i as u32 - 1
+        } else {
+            let m = i as u32 / p;
+            phi[m as usize] * if m % p == 0 { p } else { p - 1 }
+        };
+    }
+    phi
+}
+
+fn factorize(n: u32, min_prime_factor: &[u32]) -> Vec<(u32, u8)> {
+    let mut factors = Vec::new();
+    let mut x = n;
+    while x > 1 {
+        let p = min_prime_factor[x as usize];
+        if p == 0 {
+            factors.push((x as u32, 1));
+            break;
+        }
+        let mut exp = 0;
+        while x % p == 0 {
+            exp += 1;
+            x /= p;
+        }
+        factors.push((p, exp));
+    }
+
+    factors
+}
+
+fn for_each_divisor(factors: &[(u32, u8)], mut visitor: impl FnMut(u32)) {
+    let mut stack = vec![(1, 0u32)];
+    while let Some((mut d, i)) = stack.pop() {
+        if i as usize == factors.len() {
+            visitor(d);
+        } else {
+            let (p, exp) = factors[i as usize];
+            for _ in 0..=exp {
+                stack.push((d, i + 1));
+                d *= p;
+            }
+        }
+    }
+}
+
+const P: u64 = 1_000_000_007;
+const P_M1: u64 = P - 1;
+type M = num_mod::ModInt<num_mod::ByU64Prime<P>>;
+type M2 = num_mod::ModInt<num_mod::ByU64<P_M1>>;
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    let n: u64 = input.value();
+    let m: u64 = input.value();
+
+    let (mpf, _primes) = linear_sieve(m as u32);
+    let phi = gen_euler_phi(&mpf);
+
+    let p = |k: u64| {
+        let base = M::from(2u8).pow(u64::from(M2::from(k).pow(n - 1)));
+        let denom = base.pow(k);
+        let mut ans = denom;
+
+        let mut c = k;
+        while c % 2 == 0 {
+            c /= 2;
+        }
+
+        for_each_divisor(&factorize(c as u32, &mpf), |d| {
+            if d >= 3 {
+                ans += M::from(phi[d as usize]) * base.pow(k / d as u64);
+            }
+        });
+
+        ans /= M::from(k) * denom;
+        ans
+    };
+
+    let pm = p(m);
+    if let Some(ans) = (1..m).find(|&k| pm == p(k)) {
+        writeln!(output, "{}", ans).ok();
+    } else {
+        writeln!(output, "Smart Oldbie").ok();
     }
 }
