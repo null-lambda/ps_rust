@@ -36,7 +36,7 @@ fn gen_euler_phi(min_prime_factor: &[u32]) -> Vec<u32> {
     phi
 }
 
-fn gen_mobius(min_prime_factor: &[u32]) -> Vec<i32> {
+fn gen_mobius(min_prime_factor: &[u32]) -> Vec<i8> {
     let n_max = min_prime_factor.len() - 1;
     let mut mu = vec![0; n_max + 1];
     mu[1] = 1;
@@ -53,7 +53,7 @@ fn gen_mobius(min_prime_factor: &[u32]) -> Vec<i32> {
     mu
 }
 
-fn factorize(n: u32, min_prime_factor: &[u32]) -> Vec<(u32, u8)> {
+fn factorize(min_prime_factor: &[u32], n: u32) -> Vec<(u32, u8)> {
     let mut factors = Vec::new();
     let mut x = n;
     while x > 1 {

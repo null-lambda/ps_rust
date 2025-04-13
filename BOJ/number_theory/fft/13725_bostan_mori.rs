@@ -1,3 +1,36 @@
+use std::io::Write;
+
+mod simple_io {
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
 pub mod algebra {
     use std::ops::*;
     pub trait Unsigned:
@@ -1165,19 +1198,20 @@ pub mod linear_recurrence {
     }
 }
 
-use algebra::SemiRing;
-use poly::Poly;
-
-pub mod p1000000007 {
-    pub const P: u32 = 1000000007;
-    pub const GEN: u32 = 3;
-    pub type M = super::mint_mont::M32<P>;
-    impl super::ntt::NTTSpec for M {
-        fn try_nth_proot(_n: u32) -> Option<Self> {
-            None
-        }
-    }
-}
-
 // type M = ntt::sample::p998244353::M;
-type M = mint_mont::M32<1000000007>;
+// type M = mint_mont::M32<1000000007>;
+
+type M = ntt::sample::p104857601::M;
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    let k: usize = input.value();
+    let n: u64 = input.value();
+    let init: Vec<M> = (0..k).map(|_| input.value()).collect();
+    let recurrence: Vec<M> = (0..k).map(|_| input.value()).collect();
+
+    let ans = linear_recurrence::nth_by_ntt(&recurrence, &init, n - 1);
+    writeln!(output, "{}", u32::from(ans)).unwrap();
+}

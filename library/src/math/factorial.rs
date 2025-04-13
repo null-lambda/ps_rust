@@ -8,13 +8,11 @@ fn gen_factorials<T: algebra::Field + Clone + From<u32> + std::fmt::Debug>(
         fac.push(fac[i as usize - 1].clone() * T::from(i));
     }
 
-    let ifac = fac.iter().map(|x| x.inv()).collect();
-
-    // let mut ifac = vec![T::one(); n_bound as usize + 1];
-    // ifac[n_bound as usize] = fac[n_bound as usize].inv();
-    // for i in (2..=n_bound).rev() {
-    //     ifac[i as usize - 1] = ifac[i as usize].clone() * T::from(i);
-    // }
+    let mut ifac = vec![T::one(); n_bound as usize + 1];
+    ifac[n_bound as usize] = fac[n_bound as usize].inv();
+    for i in (2..=n_bound).rev() {
+        ifac[i as usize - 1] = ifac[i as usize].clone() * T::from(i);
+    }
 
     (fac, ifac)
 }

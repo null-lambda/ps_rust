@@ -203,10 +203,4 @@ pub mod mint_dyn {
             s.parse().map(|x| M64::new(x))
         }
     }
-
-    impl crate::ntt::NTTSpec for M64 {
-        fn try_nth_proot(_: u32) -> Option<Self> {
-            None
-        }
-    }
 }
