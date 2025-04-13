@@ -1,15 +1,11 @@
 const UNSET: u32 = !0;
-fn bipartite_match<'a>(
-    n: usize,
-    m: usize,
-    neighbors: &'a impl jagged::Jagged<'a, u32>,
-) -> [Vec<u32>; 2] {
+fn bipartite_match(n: usize, m: usize, neighbors: &impl jagged::Jagged<u32>) -> [Vec<u32>; 2] {
     // Hopcroft-Karp
     const INF: u32 = u32::MAX / 2;
 
     let mut assignment = [vec![UNSET; n], vec![UNSET; m]];
     let mut left_level = vec![INF; n];
-    let mut queue = VecDeque::new();
+    let mut queue = std::collections::VecDeque::new();
     loop {
         left_level.fill(INF);
         queue.clear();
@@ -21,7 +17,7 @@ fn bipartite_match<'a>(
         }
 
         while let Some(u) = queue.pop_front() {
-            for &v in neighbors.get(u as usize) {
+            for &v in &neighbors[u as usize] {
                 let w = assignment[1][v as usize];
                 if w == UNSET || left_level[w as usize] != INF {
                     continue;
@@ -31,13 +27,13 @@ fn bipartite_match<'a>(
             }
         }
 
-        fn dfs<'a>(
+        fn dfs(
             u: u32,
-            neighbors: &'a impl jagged::Jagged<'a, u32>,
+            neighbors: &impl jagged::Jagged<u32>,
             assignment: &mut [Vec<u32>; 2],
             left_level: &Vec<u32>,
         ) -> bool {
-            for &v in neighbors.get(u as usize) {
+            for &v in &neighbors[u as usize] {
                 let w = assignment[1][v as usize];
                 if w == UNSET
                     || left_level[w as usize] == left_level[u as usize] + 1

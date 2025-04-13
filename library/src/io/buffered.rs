@@ -40,7 +40,7 @@ mod buffered_io {
         s
     }
 
-    use std::io::{BufRead, BufReader, BufWriter, Read, Stdin, StdinLock, Stdout};
+    use std::io::{BufRead, BufReader, BufWriter, Stdin, Stdout};
 
     pub struct LineSyncedInput<R: BufRead> {
         line_buf: Vec<u8>,
