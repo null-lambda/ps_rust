@@ -1,14 +1,13 @@
-use std::io::Write;
-use std::{collections::HashMap, io::BufRead};
-
 #[macro_use]
 pub mod parser {
     use std::mem;
 
     pub type ParseResult<S, A> = Option<(A, S)>;
-    pub trait Stream<'a>: Sized + Clone + std::fmt::Debug + 'a {
+    pub trait Stream: Sized + Clone + std::fmt::Debug {
         type Item;
-        type ItemGroup;
+        type ItemGroup<'a>
+        where
+            Self: 'a;
 
         fn empty() -> Self;
         fn next(self) -> ParseResult<Self, Self::Item>;
@@ -17,17 +16,23 @@ pub mod parser {
             self.clone().next().map(|(b, _)| b)
         }
 
-        fn take_while(
+        fn take_while<'a>(
             self,
             pred: impl Fn(&Self::Item) -> bool,
-        ) -> ParseResult<Self, Self::ItemGroup>;
+        ) -> ParseResult<Self, Self::ItemGroup<'a>>;
+
+        fn skip_while(self, pred: impl Fn(&Self::Item) -> bool) -> ParseResult<Self, ()> {
+            let (_, s) = self.take_while(pred)?;
+            Some(((), s))
+        }
     }
 
-    pub trait U8Stream<'a>: Stream<'a, Item = u8, ItemGroup = &'a [u8]> {}
-
-    impl<'a> Stream<'a> for &'a [u8] {
+    impl<'a> Stream for &'a [u8] {
         type Item = u8;
-        type ItemGroup = &'a [u8];
+        type ItemGroup<'b>
+            = &'b [u8]
+        where
+            'a: 'b;
 
         fn empty() -> Self {
             &[]
@@ -37,7 +42,10 @@ pub mod parser {
             self.split_first().map(|(b, s)| (*b, s))
         }
 
-        fn take_while(self, pred: impl Fn(&u8) -> bool) -> ParseResult<Self, &'a [u8]> {
+        fn take_while<'b>(self, pred: impl Fn(&u8) -> bool) -> ParseResult<Self, &'b [u8]>
+        where
+            'a: 'b,
+        {
             let mut i = 0;
             while i < self.len() && pred(&self[i]) {
                 i += 1;
@@ -46,9 +54,7 @@ pub mod parser {
         }
     }
 
-    impl<'a> U8Stream<'a> for &'a [u8] {}
-
-    pub trait Parser<'a, S: Stream<'a>, A>: Sized {
+    pub trait Parser<S: Stream, A>: Sized {
         fn run(&mut self, s: S) -> ParseResult<S, A>;
 
         fn run_in_place(&mut self, s: &mut S) -> Option<A> {
@@ -73,7 +79,7 @@ pub mod parser {
 
         fn and_then<B, PB, F>(self, p: F) -> AndThen<Self, F, A>
         where
-            PB: Parser<'a, S, B>,
+            PB: Parser<S, B>,
             F: Fn(A) -> PB,
         {
             AndThen(self, p, Default::default())
@@ -95,7 +101,7 @@ pub mod parser {
 
         fn or_else<P>(self, p: P) -> OrElse<Self, P>
         where
-            P: Parser<'a, S, A>,
+            P: Parser<S, A>,
         {
             OrElse(self, p)
         }
@@ -103,10 +109,10 @@ pub mod parser {
 
     // Can be replaced with impl trait on method return types (rust >= 1.75)
     pub struct Map<PA, F, A>(PA, F, std::marker::PhantomData<A>);
-    impl<'a, S, A, B, PA, F> Parser<'a, S, B> for Map<PA, F, A>
+    impl<'a, S, A, B, PA, F> Parser<S, B> for Map<PA, F, A>
     where
-        S: Stream<'a>,
-        PA: Parser<'a, S, A>,
+        S: Stream,
+        PA: Parser<S, A>,
         F: Fn(A) -> B,
     {
         fn run(&mut self, s: S) -> ParseResult<S, B> {
@@ -115,10 +121,10 @@ pub mod parser {
     }
 
     pub struct Inspect<PA, F, A>(PA, F, std::marker::PhantomData<A>);
-    impl<'a, S, A, PA, F> Parser<'a, S, A> for Inspect<PA, F, A>
+    impl<'a, S, A, PA, F> Parser<S, A> for Inspect<PA, F, A>
     where
-        S: Stream<'a>,
-        PA: Parser<'a, S, A>,
+        S: Stream,
+        PA: Parser<S, A>,
         F: Fn(&A, &S),
     {
         fn run(&mut self, s: S) -> ParseResult<S, A> {
@@ -130,11 +136,11 @@ pub mod parser {
     }
 
     pub struct AndThen<PA, F, A>(PA, F, std::marker::PhantomData<A>);
-    impl<'a, S, A, B, PA, PB, F> Parser<'a, S, B> for AndThen<PA, F, A>
+    impl<'a, S, A, B, PA, PB, F> Parser<S, B> for AndThen<PA, F, A>
     where
-        S: Stream<'a>,
-        PA: Parser<'a, S, A>,
-        PB: Parser<'a, S, B>,
+        S: Stream,
+        PA: Parser<S, A>,
+        PB: Parser<S, B>,
         F: Fn(A) -> PB,
     {
         fn run(&mut self, s: S) -> ParseResult<S, B> {
@@ -143,10 +149,10 @@ pub mod parser {
     }
 
     pub struct MapOption<PA, F, A>(PA, F, std::marker::PhantomData<A>);
-    impl<'a, S, A, B, PA, F> Parser<'a, S, B> for MapOption<PA, F, A>
+    impl<'a, S, A, B, PA, F> Parser<S, B> for MapOption<PA, F, A>
     where
-        S: Stream<'a>,
-        PA: Parser<'a, S, A>,
+        S: Stream,
+        PA: Parser<S, A>,
         F: Fn(A) -> Option<B>,
     {
         fn run(&mut self, s: S) -> ParseResult<S, B> {
@@ -155,10 +161,10 @@ pub mod parser {
     }
 
     pub struct Filter<PA, F>(PA, F);
-    impl<'a, S, A, PA, F> Parser<'a, S, A> for Filter<PA, F>
+    impl<'a, S, A, PA, F> Parser<S, A> for Filter<PA, F>
     where
-        S: Stream<'a>,
-        PA: Parser<'a, S, A>,
+        S: Stream,
+        PA: Parser<S, A>,
         F: Fn(&A) -> bool,
     {
         fn run(&mut self, s: S) -> ParseResult<S, A> {
@@ -168,20 +174,20 @@ pub mod parser {
 
     pub struct OrElse<P, Q>(P, Q);
 
-    impl<'a, S, A, P, Q> Parser<'a, S, A> for OrElse<P, Q>
+    impl<'a, S, A, P, Q> Parser<S, A> for OrElse<P, Q>
     where
-        S: Stream<'a>,
-        P: Parser<'a, S, A>,
-        Q: Parser<'a, S, A>,
+        S: Stream,
+        P: Parser<S, A>,
+        Q: Parser<S, A>,
     {
         fn run(&mut self, s: S) -> ParseResult<S, A> {
             self.0.run(s.clone()).or_else(|| self.1.run(s))
         }
     }
 
-    impl<'a, S, A, F> Parser<'a, S, A> for F
+    impl<'a, S, A, F> Parser<S, A> for F
     where
-        S: Stream<'a>,
+        S: Stream,
         F: FnMut(S) -> ParseResult<S, A>,
     {
         fn run(&mut self, s: S) -> ParseResult<S, A> {
@@ -190,60 +196,61 @@ pub mod parser {
     }
 
     macro_rules! gen_tuple_parser {
-        ($($A:tt $PA:tt $a:tt $i:tt),+) => {
-            impl<'a,S:Stream<'a>,$($A,)+$($PA,)+> Parser<'a,S,($($A,)+)> for ($($PA,)+)
-            where $($PA: Parser<'a,S,$A>,)+
+        (@tuple $($A:tt $PA:tt $a:tt),+) => {
+            impl<'a,S:Stream,$($A,)+$($PA,)+> Parser<S,($($A,)+)> for ($($PA,)+)
+            where $($PA: Parser<S,$A>,)+
             {
-                fn run(&mut self, s: S) -> ParseResult<S, ($($A,)+)> {
-                    $(let ($a, s):($A,S) = self.$i.run(s)?;)+
-                    Some((($($a,)+),s))
+                fn run(&mut self, mut s: S) -> ParseResult<S, ($($A,)+)> {
+                    let ($($a,)+) = self;
+                    let a = ($($a.run_in_place(&mut s)?,)+);
+                    Some((a, s))
                 }
             }
-        }
+        };
+
+        () => {};
+        ($A:tt $PA:tt $a:tt$(, $($rest:tt)+)?) => {
+            $(gen_tuple_parser!($($rest)+);)?
+            gen_tuple_parser!(@tuple $A $PA $a$(, $($rest)+)?);
+        };
     }
 
-    gen_tuple_parser!(A0 PA0 a0 0, A1 PA1 a1 1);
-    gen_tuple_parser!(A0 PA0 a0 0, A1 PA1 a1 1, A2 PA2 a2 2);
-    gen_tuple_parser!(A0 PA0 a0 0, A1 PA1 a1 1, A2 PA2 a2 2, A3 PA3 a3 3);
-    gen_tuple_parser!(A0 PA0 a0 0, A1 PA1 a1 1, A2 PA2 a2 2, A3 PA3 a3 3, A4 PA4 a4 4);
-    gen_tuple_parser!(A0 PA0 a0 0, A1 PA1 a1 1, A2 PA2 a2 2, A3 PA3 a3 3, A4 PA4 a4 4, A5 PA5 a5 5);
+    gen_tuple_parser!(A0 PA0 pa0, A1 PA1 pa1, A2 PA2 pa2, A3 PA3 pa3, A4 PA4 pa4, A5 PA5 pa5);
 
     pub fn fail<S, A>(_s: S) -> ParseResult<S, A> {
         None
     }
 
-    pub fn eof<'a, S: Stream<'a>>(s: S) -> ParseResult<S, ()> {
+    pub fn eof<'a, S: Stream>(s: S) -> ParseResult<S, ()> {
         match s.next() {
             Some(_) => None,
             None => Some(((), S::empty())),
         }
     }
 
-    pub fn single<'a, S: Stream<'a>>(s: S) -> ParseResult<S, S::Item> {
+    pub fn single<'a, S: Stream>(s: S) -> ParseResult<S, S::Item> {
         s.next()
     }
 
-    pub fn between<'a, S: Stream<'a>, A, O, E>(
-        p_open: impl Parser<'a, S, O>,
-        p: impl Parser<'a, S, A>,
-        p_close: impl Parser<'a, S, E>,
-    ) -> impl Parser<'a, S, A> {
+    pub fn between<'a, S: Stream, A, O, E>(
+        p_open: impl Parser<S, O>,
+        p: impl Parser<S, A>,
+        p_close: impl Parser<S, E>,
+    ) -> impl Parser<S, A> {
         (p_open, p, p_close).map(|(_, a, _)| a)
     }
 
-    pub fn optional<'a, S: Stream<'a>, A>(
-        mut p: impl Parser<'a, S, A>,
-    ) -> impl Parser<'a, S, Option<A>> {
+    pub fn optional<'a, S: Stream, A>(mut p: impl Parser<S, A>) -> impl Parser<S, Option<A>> {
         move |s: S| match p.run(s.clone()) {
             Some((a, s_new)) => Some((Some(a), s_new)),
             None => Some((None, s)),
         }
     }
 
-    pub fn fold<'a, S: Stream<'a>, A, F>(
-        mut init: impl Parser<'a, S, A>,
-        mut p: impl Parser<'a, S, F>,
-    ) -> impl Parser<'a, S, A>
+    pub fn fold<'a, S: Stream, A, F>(
+        mut init: impl Parser<S, A>,
+        mut p: impl Parser<S, F>,
+    ) -> impl Parser<S, A>
     where
         F: Fn(A) -> A,
     {
@@ -258,7 +265,7 @@ pub mod parser {
         }
     }
 
-    pub fn many<'a, S: Stream<'a>, A>(mut p: impl Parser<'a, S, A>) -> impl Parser<'a, S, Vec<A>> {
+    pub fn many<'a, S: Stream, A>(mut p: impl Parser<S, A>) -> impl Parser<S, Vec<A>> {
         move |mut s: S| {
             let mut result = Vec::new();
             while let Some((e, s_new)) = p.run(s.clone()) {
@@ -269,7 +276,7 @@ pub mod parser {
         }
     }
 
-    pub fn many1<'a, S: Stream<'a>, A>(mut p: impl Parser<'a, S, A>) -> impl Parser<'a, S, Vec<A>> {
+    pub fn many1<'a, S: Stream, A>(mut p: impl Parser<S, A>) -> impl Parser<S, Vec<A>> {
         move |mut s: S| {
             let mut result = Vec::new();
             let (e, s_new) = p.run(s.clone())?;
@@ -284,10 +291,10 @@ pub mod parser {
         }
     }
 
-    pub fn many_sep1<'a, S: Stream<'a>, A>(
-        mut p: impl Parser<'a, S, A>,
-        mut p_sep: impl Parser<'a, S, ()>,
-    ) -> impl Parser<'a, S, Vec<A>> {
+    pub fn many_sep1<'a, S: Stream, A>(
+        mut p: impl Parser<S, A>,
+        mut p_sep: impl Parser<S, ()>,
+    ) -> impl Parser<S, Vec<A>> {
         move |mut s: S| -> ParseResult<S, Vec<A>> {
             let mut result = Vec::new();
             let (e, s_new) = p.run(s)?;
@@ -309,32 +316,29 @@ pub mod parser {
     }
 
     // chained unary operators
-    pub fn unary_prefix<'a, S: Stream<'a>, A, F, PF, P>(p_op: PF, p: P) -> impl Parser<'a, S, A>
+    pub fn unary_prefix<'a, S: Stream, A, F, PF, P>(p_op: PF, p: P) -> impl Parser<S, A>
     where
-        P: Parser<'a, S, A>,
-        PF: Parser<'a, S, F>,
+        P: Parser<S, A>,
+        PF: Parser<S, F>,
         F: FnMut(A) -> A + 'a,
     {
         (many(p_op), p)
             .map(move |(cs, e): (Vec<F>, A)| cs.into_iter().rev().fold(e, |acc, mut c| c(acc)))
     }
 
-    pub fn unary_postfix<'a, S: Stream<'a>, A, F, PF, P>(p_op: PF, p: P) -> impl Parser<'a, S, A>
+    pub fn unary_postfix<'a, S: Stream, A, F, PF, P>(p_op: PF, p: P) -> impl Parser<S, A>
     where
-        P: Parser<'a, S, A>,
-        PF: Parser<'a, S, F>,
+        P: Parser<S, A>,
+        PF: Parser<S, F>,
         F: FnMut(A) -> A + 'a,
     {
         (p, many(p_op)).map(move |(e, cs): (A, Vec<F>)| cs.into_iter().fold(e, |acc, mut c| c(acc)))
     }
 
-    pub fn binary_lassoc<'a, S: Stream<'a>, A, F, PF, P>(
-        mut p_op: PF,
-        mut p: P,
-    ) -> impl Parser<'a, S, A>
+    pub fn binary_lassoc<'a, S: Stream, A, F, PF, P>(mut p_op: PF, mut p: P) -> impl Parser<S, A>
     where
-        P: Parser<'a, S, A>,
-        PF: Parser<'a, S, F>,
+        P: Parser<S, A>,
+        PF: Parser<S, F>,
         F: FnMut(A, A) -> A + 'a,
     {
         move |mut s: S| {
@@ -352,13 +356,10 @@ pub mod parser {
         }
     }
 
-    pub fn binary_rassoc<'a, S: Stream<'a>, A, F, PF, P>(
-        mut p_op: PF,
-        mut p: P,
-    ) -> impl Parser<'a, S, A>
+    pub fn binary_rassoc<'a, S: Stream, A, F, PF, P>(mut p_op: PF, mut p: P) -> impl Parser<S, A>
     where
-        P: Parser<'a, S, A>,
-        PF: Parser<'a, S, F>,
+        P: Parser<S, A>,
+        PF: Parser<S, F>,
         F: FnMut(A, A) -> A + 'a,
     {
         move |mut s: S| {
@@ -385,6 +386,43 @@ pub mod parser {
         }
     }
 
+    pub fn take_while<'a, S: Stream + 'a>(
+        pred: impl Fn(&S::Item) -> bool,
+    ) -> impl Parser<S, S::ItemGroup<'a>> {
+        move |s: S| s.take_while(|b| pred(b))
+    }
+
+    pub fn skip_while<'a, S: Stream + 'a>(pred: impl Fn(&S::Item) -> bool) -> impl Parser<S, ()> {
+        move |s: S| s.skip_while(|b| pred(b))
+    }
+
+    pub fn satisfy<S: Stream>(f: impl Fn(&S::Item) -> bool) -> impl Parser<S, S::Item> {
+        move |s: S| s.next().filter(|(b, _)| f(b))
+    }
+
+    pub fn lit_single<'a, S: Stream>(c: S::Item) -> impl Parser<S, ()>
+    where
+        S::Item: PartialEq,
+    {
+        satisfy(move |b| b == &c).map(|_| ())
+    }
+
+    pub fn lit<'a, S: Stream>(keyword: &'static [S::Item]) -> impl Parser<S, ()>
+    where
+        S::Item: PartialEq,
+    {
+        move |mut s: S| {
+            for c in keyword {
+                let (b, s_new) = s.next()?;
+                if &b != c {
+                    return None;
+                }
+                s = s_new;
+            }
+            Some(((), s))
+        }
+    }
+
     pub mod u8 {
         use super::*;
 
@@ -392,60 +430,27 @@ pub mod parser {
         #[macro_export]
         macro_rules! parser_fn {
             (let $name:ident: $T:ty = $body:expr) => {
-                fn $name<'a, S: U8Stream<'a>>(s: S) -> ParseResult<S, $T> {
+                fn $name<'a, S: U8Stream>(s: S) -> ParseResult<S, $T> {
                     $body.run(s)
                 }
             };
         }
 
-        pub fn take_while<'a, S: U8Stream<'a>>(
-            pred: impl Fn(&u8) -> bool,
-        ) -> impl Parser<'a, S, &'a [u8]> {
-            move |s: S| s.take_while(|b| pred(b))
-        }
-
-        pub fn skip_while<'a, S: U8Stream<'a>>(
-            pred: impl Fn(&u8) -> bool,
-        ) -> impl Parser<'a, S, ()> {
-            take_while(move |b| pred(b)).map(|_| ())
-        }
-
-        pub fn satisfy<'a, S: U8Stream<'a>>(f: impl Fn(&u8) -> bool) -> impl Parser<'a, S, u8> {
-            move |s: S| s.next().filter(|(b, _)| f(b))
-        }
-
-        pub fn lit_byte<'a, S: U8Stream<'a>>(c: u8) -> impl Parser<'a, S, ()> {
-            satisfy(move |b| b == &c).map(|_| ())
-        }
-
-        pub fn lit<'a, S: U8Stream<'a>>(keyword: &'static [u8]) -> impl Parser<'a, S, ()> {
-            move |mut s: S| {
-                for &c in keyword {
-                    let (b, s_new) = s.next()?;
-                    if b != c {
-                        return None;
-                    }
-                    s = s_new;
-                }
-                Some(((), s))
-            }
-        }
-
-        pub fn spaces<'a, S: U8Stream<'a>>(s: S) -> ParseResult<S, ()> {
+        pub fn spaces<'a, S: Stream<Item = u8>>(s: S) -> ParseResult<S, ()> {
             skip_while(|b: &u8| b.is_ascii_whitespace()).run(s)
         }
 
-        pub fn rspaces<'a, S: U8Stream<'a>, A, P: Parser<'a, S, A>>(p: P) -> impl Parser<'a, S, A> {
+        pub fn rspaces<'a, S: Stream<Item = u8>, A, P: Parser<S, A>>(p: P) -> impl Parser<S, A> {
             between(spaces, p, spaces)
         }
 
-        pub fn uint<'a, S: U8Stream<'a>>(s: S) -> ParseResult<S, i32> {
+        pub fn uint<'a, S: Stream<Item = u8>>(s: S) -> ParseResult<S, i32> {
             let mut s = s;
-            let (b, s_new) = satisfy(|b| b.is_ascii_digit()).run(s.clone())?;
+            let (b, s_new) = satisfy(|b: &u8| b.is_ascii_digit()).run(s.clone())?;
             let mut result = (b - b'0') as i32;
             s = s_new;
 
-            while let Some((b, s_new)) = satisfy(|b| b.is_ascii_digit()).run(s.clone()) {
+            while let Some((b, s_new)) = satisfy(|b: &u8| b.is_ascii_digit()).run(s.clone()) {
                 result = result * 10 + (b - b'0') as i32;
                 s = s_new;
             }
@@ -453,7 +458,7 @@ pub mod parser {
             Some((result, s))
         }
 
-        pub fn int<'a, S: U8Stream<'a>>(s: S) -> ParseResult<S, i32> {
+        pub fn int<'a, S: Stream<Item = u8>>(s: S) -> ParseResult<S, i32> {
             let mut s = s;
             let mut sign = 1;
             if let Some((_, s_new)) = satisfy(|&b| b == b'-').run(s.clone()) {
@@ -462,11 +467,11 @@ pub mod parser {
             }
 
             // at least one digit is required
-            let (b, s_new) = satisfy(|b| b.is_ascii_digit()).run(s.clone())?;
+            let (b, s_new) = satisfy(|b: &u8| b.is_ascii_digit()).run(s.clone())?;
             let mut result = (b - b'0') as i32;
             s = s_new;
 
-            while let Some((b, s_new)) = satisfy(|b| b.is_ascii_digit()).run(s.clone()) {
+            while let Some((b, s_new)) = satisfy(|b: &u8| b.is_ascii_digit()).run(s.clone()) {
                 result = result * 10 + (b - b'0') as i32;
                 s = s_new;
             }
