@@ -1,33 +1,5 @@
 pub mod rc_acyclic {
     // Shared rc pointers without weak references.
-
-    //     pub trait Rc<T: Clone>: Deref<Target = T> + Clone {
-    //         fn new(value: T) -> Self;
-    //         fn make_mut(&mut self) -> &mut T;
-    //         fn try_unwrap(self) -> Result<T, Self>;
-    //         fn unwrap_or_clone(self) -> T {
-    //             Self::try_unwrap(self).unwrap_or_else(|this| (*this).clone())
-    //         }
-    //     }
-
-    //     impl<T: Clone> Rc<T> for std::rc::Rc<T> {
-    //         fn new(value: T) -> Self {
-    //             std::rc::Rc::new(value)
-    //         }
-
-    //         fn make_mut(&mut self) -> &mut T {
-    //             std::rc::Rc::make_mut(self)
-    //         }
-
-    //         fn try_unwrap(self) -> Result<T, Self> {
-    //             std::rc::Rc::try_unwrap(self)
-    //         }
-
-    //         fn unwrap_or_clone(self) -> T {
-    //             std::rc::Rc::unwrap_or_clone(self)
-    //         }
-    //     }
-
     use std::{cell::Cell, mem::MaybeUninit, ops::Deref, ptr::NonNull};
 
     #[allow(non_camel_case_types)]
