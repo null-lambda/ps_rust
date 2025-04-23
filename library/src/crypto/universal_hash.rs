@@ -102,7 +102,7 @@ pub mod universal_hash {
                 let upper = rng.next_u64();
                 ((lower as u128) << 64) | upper as u128
             };
-            let a = (next_u128() % (P - 1)) + 1;
+            let a = next_u128().wrapping_mul(2).wrapping_add(1) % P;
             let b = next_u128() % P;
             Self { a, b }
         }
