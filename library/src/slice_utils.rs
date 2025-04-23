@@ -1,3 +1,30 @@
+fn group_indices_by<'a, T>(
+    xs: &'a [T],
+    mut pred: impl 'a + FnMut(&T, &T) -> bool,
+) -> impl 'a + Iterator<Item = [usize; 2]> {
+    let mut i = 0;
+    std::iter::from_fn(move || {
+        if i == xs.len() {
+            return None;
+        }
+
+        let mut j = i + 1;
+        while j < xs.len() && pred(&xs[j - 1], &xs[j]) {
+            j += 1;
+        }
+        let res = [i, j];
+        i = j;
+        Some(res)
+    })
+}
+
+fn group_by<'a, T>(
+    xs: &'a [T],
+    pred: impl 'a + FnMut(&T, &T) -> bool,
+) -> impl 'a + Iterator<Item = &'a [T]> {
+    group_indices_by(xs, pred).map(|w| &xs[w[0]..w[1]])
+}
+
 fn partition_in_place<T>(xs: &mut [T], mut pred: impl FnMut(&T) -> bool) -> (&mut [T], &mut [T]) {
     let n = xs.len();
     let mut i = 0;
@@ -8,21 +35,4 @@ fn partition_in_place<T>(xs: &mut [T], mut pred: impl FnMut(&T) -> bool) -> (&mu
         }
     }
     xs.split_at_mut(i)
-}
-
-// chunk_by in std >= 1.77
-fn group_by<T, P, F>(xs: &[T], mut pred: P, mut f: F)
-where
-    P: FnMut(&T, &T) -> bool,
-    F: FnMut(&[T]),
-{
-    let mut i = 0;
-    while i < xs.len() {
-        let mut j = i + 1;
-        while j < xs.len() && pred(&xs[j - 1], &xs[j]) {
-            j += 1;
-        }
-        f(&xs[i..j]);
-        i = j;
-    }
 }
