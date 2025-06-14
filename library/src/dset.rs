@@ -1,6 +1,7 @@
 mod dset {
     use std::{cell::Cell, mem};
 
+    #[derive(Clone)]
     pub struct DisjointSet {
         // Represents parent if >= 0, size if < 0
         parent_or_size: Vec<Cell<i32>>,
