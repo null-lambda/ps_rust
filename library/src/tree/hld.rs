@@ -39,7 +39,7 @@ pub mod hld {
 
         pub fn from_edges<'a>(
             n: usize,
-            edges: impl IntoIterator<Item = (u32, u32)>,
+            edges: impl IntoIterator<Item = [u32; 2]>,
             root: usize,
             use_dfs_ordering: bool,
         ) -> Self {
@@ -47,10 +47,12 @@ pub mod hld {
             // https://codeforces.com/blog/entry/135239
             let mut degree = vec![0u32; n];
             let mut xor_neighbors: Vec<u32> = vec![0u32; n];
-            for (u, v) in edges.into_iter().flat_map(|(u, v)| [(u, v), (v, u)]) {
+            for [u, v] in edges {
                 debug_assert!(u != v);
                 degree[u as usize] += 1;
+                degree[v as usize] += 1;
                 xor_neighbors[u as usize] ^= v;
+                xor_neighbors[v as usize] ^= u;
             }
 
             let mut size = vec![1; n];

@@ -63,21 +63,29 @@ pub mod map {
                 return false;
             }
             match self {
-                Self::Small(arr, size) if *size < STACK_CAP => {
-                    arr[*size] = MaybeUninit::new(key);
-                    *size += 1;
-                    true
-                }
                 Self::Small(arr, size) => {
-                    let arr =
-                        std::mem::replace(arr, std::array::from_fn(|_| MaybeUninit::uninit()));
-                    *size = 0;
-                    *self = Self::Large(
-                        arr.into_iter()
-                            .map(|x| unsafe { x.assume_init() })
-                            .chain(Some(key))
-                            .collect(),
-                    );
+                    if arr[..*size]
+                        .iter()
+                        .find(|&x| unsafe { x.assume_init_ref() } == &key)
+                        .is_some()
+                    {
+                        return false;
+                    }
+
+                    if *size < STACK_CAP {
+                        arr[*size] = MaybeUninit::new(key);
+                        *size += 1;
+                    } else {
+                        let arr =
+                            std::mem::replace(arr, std::array::from_fn(|_| MaybeUninit::uninit()));
+                        *size = 0; // Prevent `drop` call on arr elements
+                        *self = Self::Large(
+                            arr.into_iter()
+                                .map(|x| unsafe { x.assume_init() })
+                                .chain(Some(key))
+                                .collect(),
+                        );
+                    }
                     true
                 }
                 Self::Large(set) => set.insert(key),
@@ -119,8 +127,10 @@ pub mod map {
 }
 
 pub mod tree_decomp {
+    use std::collections::VecDeque;
+
     // pub type HashSet<T> = std::collections::HashSet<T>;
-    pub type HashSet<T> = crate::map::AdaptiveHashSet<T, 6>;
+    pub type HashSet<T> = crate::map::AdaptiveHashSet<T, 5>;
 
     pub const UNSET: u32 = u32::MAX;
 
@@ -146,16 +156,23 @@ pub mod tree_decomp {
 
             let mut visited = vec![false; n_verts];
             let mut parents = vec![[UNSET; 2]; n_verts];
-            let mut topological_order: Vec<_> = (0..n_verts as u32)
-                .filter(|&u| neighbors[u as usize].len() <= 2)
-                .inspect(|&u| visited[u as usize] = true)
-                .collect();
+
+            let mut topological_order = vec![];
             let mut t_in = vec![UNSET; n_verts];
-            let mut timer = 0;
             let mut root = None;
-            while let Some(&u) = topological_order.get(timer) {
-                t_in[u as usize] = timer as u32;
-                timer += 1;
+
+            let mut queue: [_; 3] = std::array::from_fn(|_| VecDeque::new());
+            for u in 0..n_verts {
+                let d = neighbors[u].len();
+                if d <= 2 {
+                    visited[u] = true;
+                    queue[d].push_back(u as u32);
+                }
+            }
+
+            while let Some(u) = (0..=2).flat_map(|i| queue[i].pop_front()).next() {
+                t_in[u as usize] = topological_order.len() as u32;
+                topological_order.push(u);
 
                 match neighbors[u as usize].len() {
                     0 => {
@@ -173,7 +190,7 @@ pub mod tree_decomp {
 
                         if !visited[p as usize] && neighbors[p as usize].len() <= 2 {
                             visited[p as usize] = true;
-                            topological_order.push(p);
+                            queue[neighbors[p as usize].len()].push_back(p);
                         }
                     }
                     2 => {
@@ -196,7 +213,7 @@ pub mod tree_decomp {
                         for w in [p, q] {
                             if !visited[w as usize] && neighbors[w as usize].len() <= 2 {
                                 visited[w as usize] = true;
-                                topological_order.push(w);
+                                queue[neighbors[w as usize].len()].push_back(w);
                             }
                         }
                     }
@@ -207,7 +224,7 @@ pub mod tree_decomp {
             if topological_order.len() != n_verts {
                 return None;
             }
-            assert_eq!(root.as_ref(), topological_order.iter().last());
+            assert_eq!(root, topological_order.iter().last().copied());
 
             for u in 0..n_verts {
                 let ps = &mut parents[u];

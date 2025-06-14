@@ -70,7 +70,7 @@ pub mod reroot {
         n_verts: usize,
         edges: impl IntoIterator<Item = (u32, u32, R::E)>,
         data: &mut [R::V],
-        yield_edge_dp: &mut impl FnMut(usize, &R::F, &R::F, &R::E),
+        mut yield_edge_dp: impl FnMut(usize, &R::F, &R::F, &R::E),
     ) where
         R: DpSpec,
         R::E: Default + AsBytes<N>,
