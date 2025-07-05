@@ -1,6 +1,5 @@
 pub mod jagged {
     use std::fmt::Debug;
-    use std::iter;
     use std::mem::MaybeUninit;
     use std::ops::{Index, IndexMut};
 
@@ -58,30 +57,34 @@ pub mod jagged {
     }
 
     impl<T: Clone> CSR<T> {
-        pub fn from_pairs(n: usize, pairs: &[(u32, T)]) -> Self {
+        pub fn from_pairs<I>(n: usize, pairs: I) -> Self
+        where
+            I: IntoIterator<Item = (u32, T)>,
+            I::IntoIter: Clone,
+        {
             let mut head = vec![0u32; n + 1];
 
-            for &(u, _) in pairs {
+            let pairs = pairs.into_iter();
+            for (u, _) in pairs.clone() {
                 debug_assert!(u < n as u32);
-                head[u as usize + 1] += 1;
+                head[u as usize] += 1;
             }
-            for i in 2..n + 1 {
-                head[i] += head[i - 1];
+            for i in 0..n {
+                head[i + 1] += head[i];
             }
-            let mut data: Vec<_> = iter::repeat_with(|| MaybeUninit::uninit())
-                .take(head[n] as usize)
-                .collect();
-            let mut pos = head.clone();
+            let mut data: Vec<_> = (0..head[n]).map(|_| MaybeUninit::uninit()).collect();
 
             for (u, v) in pairs {
-                data[pos[*u as usize] as usize] = MaybeUninit::new(v.clone());
-                pos[*u as usize] += 1;
+                head[u as usize] -= 1;
+                data[head[u as usize] as usize] = MaybeUninit::new(v.clone());
             }
 
-            let data = std::mem::ManuallyDrop::new(data);
-            let data = unsafe {
-                Vec::from_raw_parts(data.as_ptr() as *mut T, data.len(), data.capacity())
-            };
+            // Rustc is likely to perform in‑place iteration without new allocation.
+            // [https://doc.rust-lang.org/stable/std/iter/trait.FromIterator.html#impl-FromIterator%3CT%3E-for-Vec%3CT%3E]
+            let data = data
+                .into_iter()
+                .map(|x| unsafe { x.assume_init() })
+                .collect();
 
             CSR { data, head }
         }
