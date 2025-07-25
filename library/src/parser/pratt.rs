@@ -1,8 +1,5 @@
 mod parser {
-    use std::{
-        iter::Peekable,
-        ops::{Add, Range, RangeInclusive, Sub},
-    };
+    use std::iter::Peekable;
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum Token {
