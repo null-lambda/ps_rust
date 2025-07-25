@@ -25,6 +25,12 @@ fn egcd(a: u64, b: u64) -> (u64, i64, i64) {
     (c.0, x.0, y.0)
 }
 
+// Find (d, x, y) satisfying d = gcd(abs(a), abs(b)) and a * x + b * y = d
+fn egcd_i64(a: i64, b: i64) -> (i64, i64, i64) {
+    let (d, x, y) = egcd(a.abs() as u64, b.abs() as u64);
+    (d as i64, x as i64 * a.signum(), y as i64 * b.signum())
+}
+
 fn crt(a1: u64, m1: u64, a2: u64, m2: u64) -> Option<(u64, u64)> {
     let (d, x, _y) = egcd(m1, m2);
     let m = m1 / d * m2;
