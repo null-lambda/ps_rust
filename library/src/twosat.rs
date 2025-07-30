@@ -103,8 +103,10 @@ impl TwoSat {
     }
 
     pub fn solve(&self) -> Option<Vec<bool>> {
-        let (scc_count, scc_index) =
-            gen_scc(&jagged::CSR::from_assoc_list(self.n_props * 2, &self.edges));
+        let (scc_count, scc_index) = gen_scc(&jagged::CSR::from_pairs(
+            self.n_props * 2,
+            self.edges.iter().copied(),
+        ));
 
         let mut scc = vec![vec![]; scc_count];
         for (i, &scc_idx) in scc_index.iter().enumerate() {

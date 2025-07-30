@@ -57,14 +57,9 @@ pub mod jagged {
     }
 
     impl<T: Clone> CSR<T> {
-        pub fn from_pairs<I>(n: usize, pairs: I) -> Self
-        where
-            I: IntoIterator<Item = (u32, T)>,
-            I::IntoIter: Clone,
-        {
+        pub fn from_pairs(n: usize, pairs: impl Iterator<Item = (u32, T)> + Clone) -> Self {
             let mut head = vec![0u32; n + 1];
 
-            let pairs = pairs.into_iter();
             for (u, _) in pairs.clone() {
                 debug_assert!(u < n as u32);
                 head[u as usize] += 1;
