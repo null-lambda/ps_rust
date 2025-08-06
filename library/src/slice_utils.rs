@@ -25,6 +25,13 @@ fn group_by<'a, T>(
     group_indices_by(xs, pred).map(|w| &xs[w[0]..w[1]])
 }
 
+fn group_by_key<'a, T, K: PartialEq>(
+    xs: &'a [T],
+    mut key: impl 'a + FnMut(&T) -> K,
+) -> impl 'a + Iterator<Item = &'a [T]> {
+    group_by(xs, move |a, b| key(a) == key(b))
+}
+
 fn partition_in_place<T>(xs: &mut [T], mut pred: impl FnMut(&T) -> bool) -> (&mut [T], &mut [T]) {
     let n = xs.len();
     let mut i = 0;
