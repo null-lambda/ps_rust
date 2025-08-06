@@ -1,11 +1,12 @@
 pub mod jagged {
-    const UNSET: u32 = u32::MAX;
+    pub type EdgeId = u32;
+    const UNSET: EdgeId = u32::MAX;
 
     // Forward-star representation (linked lists) for incremental jagged array
     #[derive(Clone, PartialEq, Eq)]
     pub struct FS<T> {
-        head: Vec<u32>,
-        links: Vec<(u32, T)>,
+        pub head: Vec<EdgeId>,
+        pub links: Vec<(EdgeId, T)>,
     }
 
     pub struct RowIter<'a, T> {
@@ -34,10 +35,11 @@ pub mod jagged {
             }
         }
 
-        pub fn insert(&mut self, u: usize, v: T) {
+        pub fn insert(&mut self, u: usize, v: T) -> EdgeId {
             let e = self.links.len() as u32;
             self.links.push((self.head[u], v));
             self.head[u] = e;
+            e
         }
 
         pub fn iter_row<'a>(&'a self, u: usize) -> RowIter<'a, T> {

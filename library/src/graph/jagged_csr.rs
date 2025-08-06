@@ -3,57 +3,12 @@ pub mod jagged {
     use std::mem::MaybeUninit;
     use std::ops::{Index, IndexMut};
 
-    // Trait for painless switch between different representations of a jagged array
-    pub trait Jagged<T>: IndexMut<usize, Output = [T]> {
-        fn len(&self) -> usize;
-    }
-
-    impl<T, C> Jagged<T> for C
-    where
-        C: AsRef<[Vec<T>]> + IndexMut<usize, Output = [T]>,
-    {
-        fn len(&self) -> usize {
-            <Self as AsRef<[Vec<T>]>>::as_ref(self).len()
-        }
-    }
-
-    // Compressed sparse row format for jagged array
-    // Provides good locality for graph traversal, but works only for static ones.
+    // Compressed sparse row format, for static jagged array
+    // Provides good locality for graph traversal
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
     pub struct CSR<T> {
-        data: Vec<T>,
+        pub links: Vec<T>,
         head: Vec<u32>,
-    }
-
-    impl<T> Debug for CSR<T>
-    where
-        T: Debug,
-    {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            let v: Vec<Vec<&T>> = (0..self.len()).map(|i| self[i].iter().collect()).collect();
-            v.fmt(f)
-        }
-    }
-
-    impl<T, I> FromIterator<I> for CSR<T>
-    where
-        I: IntoIterator<Item = T>,
-    {
-        fn from_iter<J>(iter: J) -> Self
-        where
-            J: IntoIterator<Item = I>,
-        {
-            let mut data = vec![];
-            let mut head = vec![];
-            head.push(0);
-
-            let mut cnt = 0;
-            for row in iter {
-                data.extend(row.into_iter().inspect(|_| cnt += 1));
-                head.push(cnt);
-            }
-            CSR { data, head }
-        }
     }
 
     impl<T: Clone> CSR<T> {
@@ -81,7 +36,38 @@ pub mod jagged {
                 .map(|x| unsafe { x.assume_init() })
                 .collect();
 
-            CSR { data, head }
+            CSR { links: data, head }
+        }
+    }
+
+    impl<T, I> FromIterator<I> for CSR<T>
+    where
+        I: IntoIterator<Item = T>,
+    {
+        fn from_iter<J>(iter: J) -> Self
+        where
+            J: IntoIterator<Item = I>,
+        {
+            let mut data = vec![];
+            let mut head = vec![];
+            head.push(0);
+
+            let mut cnt = 0;
+            for row in iter {
+                data.extend(row.into_iter().inspect(|_| cnt += 1));
+                head.push(cnt);
+            }
+            CSR { links: data, head }
+        }
+    }
+
+    impl<T> CSR<T> {
+        fn len(&self) -> usize {
+            self.head.len() - 1
+        }
+
+        fn edge_range(&self, index: usize) -> std::ops::Range<usize> {
+            self.head[index] as usize..self.head[index as usize + 1] as usize
         }
     }
 
@@ -89,19 +75,24 @@ pub mod jagged {
         type Output = [T];
 
         fn index(&self, index: usize) -> &Self::Output {
-            &self.data[self.head[index] as usize..self.head[index + 1] as usize]
+            &self.links[self.edge_range(index)]
         }
     }
 
     impl<T> IndexMut<usize> for CSR<T> {
         fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-            &mut self.data[self.head[index] as usize..self.head[index + 1] as usize]
+            let es = self.edge_range(index);
+            &mut self.links[es]
         }
     }
 
-    impl<T> Jagged<T> for CSR<T> {
-        fn len(&self) -> usize {
-            self.head.len() - 1
+    impl<T> Debug for CSR<T>
+    where
+        T: Debug,
+    {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let v: Vec<Vec<&T>> = (0..self.len()).map(|i| self[i].iter().collect()).collect();
+            v.fmt(f)
         }
     }
 }
