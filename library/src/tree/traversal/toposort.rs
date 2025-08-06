@@ -22,23 +22,6 @@ fn xor_traversal(
     }
     toposort.push(root);
 
-    let mut parent = xor_neighbors;
-    parent[root as usize] = root;
+    let parent = xor_neighbors;
     (toposort, parent)
-}
-
-fn toposort(
-    n_verts: usize,
-    edges: impl IntoIterator<Item = [u32; 2]>,
-    root: u32,
-) -> (Vec<u32>, Vec<u32>) {
-    let mut degree = vec![0u32; n_verts];
-    let mut xor_neighbors = vec![0u32; n_verts];
-    for [u, v] in edges {
-        degree[u as usize] += 1;
-        degree[v as usize] += 1;
-        xor_neighbors[u as usize] ^= v;
-        xor_neighbors[v as usize] ^= u;
-    }
-    xor_traversal(degree, xor_neighbors, root)
 }

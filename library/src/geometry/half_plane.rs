@@ -57,7 +57,9 @@ pub mod geometry {
             .into_iter()
         }
 
-        pub fn intersection<T: Scalar>(
+        // pub fn intersection<T: Scalar>(
+        pub fn intersection<T: Scalar + std::fmt::Debug>(
+            // WIP
             half_planes: impl IntoIterator<Item = HalfPlane<T>>,
             bottom_left: Point<T>,
             top_right: Point<T>,
@@ -66,7 +68,16 @@ pub mod geometry {
                 .into_iter()
                 .chain(bbox(bottom_left, top_right)) // Handling caseworks without a bbox is a huge pain.
                 .collect();
-            half_planes.sort_unstable_by_key(|h| (Angle(h.normal_outward), h.shift));
+
+            half_planes.sort_unstable_by(|h, l| {
+                Angle(h.normal_outward)
+                    .cmp(&Angle(l.normal_outward))
+                    .then_with(|| {
+                        let f = |x: T| x * x * x.signum();
+                        let g = |h: &HalfPlane<T>| h.normal_outward.dot(h.normal_outward);
+                        (f(h.shift) * g(l)).cmp(&(f(l.shift) * g(h)))
+                    })
+            });
             half_planes.dedup_by_key(|h| Angle(h.normal_outward)); // Dedup parallel half planes
 
             let mut half_planes = half_planes.into_iter();

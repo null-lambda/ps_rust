@@ -89,7 +89,12 @@ pub mod segtree {
                 node
             }
 
-            pub fn set(&mut self, root: NodeRef, idx: usize, value: M::X) -> NodeRef {
+            pub fn modify(
+                &mut self,
+                root: NodeRef,
+                idx: usize,
+                mut update_with: impl FnMut(&mut M::X),
+            ) -> NodeRef {
                 debug_assert!(idx < self.n);
 
                 let mut path = vec![];
@@ -112,6 +117,8 @@ pub mod segtree {
                     }
                 }
 
+                let mut value = self.get_node(node).value.clone();
+                update_with(&mut value);
                 let mut curr = self.alloc(Node {
                     value,
                     children: None,
