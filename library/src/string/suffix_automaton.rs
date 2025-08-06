@@ -162,6 +162,15 @@ pub mod suffix_trie {
         pub fn push_sep(&mut self) {
             self.tail = 0;
         }
+
+        // The range in the original text for the reversed edge u -> rev_parent[u].
+        pub fn substr_range(&self, u: NodeRef) -> std::ops::Range<usize> {
+            let u = &self.nodes[u as usize];
+            let p = &self.nodes[u.rev_parent as usize];
+            let s = u.first_endpos - u.rev_depth + 1;
+            let e = s + u.rev_depth - p.rev_depth;
+            s as usize..e as usize
+        }
     }
 
     pub fn suffix_array<S>(s: &[S], mut f: impl FnMut(&S) -> T) -> Vec<u32> {
