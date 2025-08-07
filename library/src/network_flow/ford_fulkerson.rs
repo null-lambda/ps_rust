@@ -15,24 +15,16 @@ pub mod ford_fulkerson {
 
         max_flow: Flow,
 
-        pub src: u32,
-        pub sink: u32,
-
         parent_edge: Vec<EdgeId>,
     }
 
     impl MaxFlow {
-        pub fn empty(n: usize, src: u32, sink: u32) -> Self {
-            assert!(src != sink);
-
+        pub fn empty(n: usize) -> Self {
             Self {
                 neighbors: jagged::FS::with_size(n),
                 rev: vec![],
                 cap: vec![],
                 residual: vec![],
-
-                src,
-                sink,
 
                 max_flow: 0,
 
@@ -40,23 +32,27 @@ pub mod ford_fulkerson {
             }
         }
 
-        pub fn link(&mut self, u: u32, v: u32, cap: Flow) {
+        pub fn link(&mut self, u: u32, v: u32, cap: Flow) -> EdgeId {
             let e = self.neighbors.insert(u as usize, v);
             let f = self.neighbors.insert(v as usize, u);
             self.rev.extend([f, e]);
             self.cap.extend([cap, cap]);
             self.residual.extend([cap, 0]);
+            e
         }
 
         pub fn increment_cap(&mut self, e: EdgeId, cap_new: Flow) {
             let delta = cap_new - self.cap[e as usize];
             assert!(delta >= 0);
+
+            let f = self.rev[e as usize];
             self.cap[e as usize] = cap_new;
+            self.cap[f as usize] = cap_new;
             self.residual[e as usize] += delta;
         }
 
-        fn dfs(&mut self, u: u32) -> Flow {
-            if u == self.sink {
+        fn dfs(&mut self, sink: u32, u: u32) -> Flow {
+            if u == sink {
                 return INF_FLOW;
             }
 
@@ -69,7 +65,7 @@ pub mod ford_fulkerson {
                 }
 
                 self.parent_edge[v as usize] = e;
-                let delta = self.residual[e as usize].min(self.dfs(v));
+                let delta = self.residual[e as usize].min(self.dfs(sink, v));
                 if delta == 0 {
                     e = e_next;
                     continue;
@@ -81,31 +77,30 @@ pub mod ford_fulkerson {
             0
         }
 
-        fn augment(&mut self) -> bool {
-            self.parent_edge.fill(UNSET);
-            let delta = self.dfs(self.src);
-            if delta == 0 {
-                return false;
+        pub fn run(&mut self, src: u32, sink: u32) -> Flow {
+            assert_ne!(src, sink);
+
+            loop {
+                self.parent_edge.fill(UNSET);
+                let delta = self.dfs(sink, src);
+                if delta == 0 {
+                    break;
+                }
+
+                self.max_flow += delta;
+
+                let mut u = sink;
+                while u != src {
+                    let e = self.parent_edge[u as usize] as usize;
+                    let f = self.rev[e] as usize;
+                    self.residual[e] -= delta;
+                    self.residual[f] += delta;
+
+                    let (_, u_next) = self.neighbors.links[f];
+                    u = u_next;
+                }
             }
 
-            self.max_flow += delta;
-
-            let mut u = self.sink;
-            while u != self.src {
-                let e = self.parent_edge[u as usize] as usize;
-                let f = self.rev[e] as usize;
-                self.residual[e] -= delta;
-                self.residual[f] += delta;
-
-                let (_, u_next) = self.neighbors.links[f];
-                u = u_next;
-            }
-
-            true
-        }
-
-        pub fn run(&mut self) -> Flow {
-            while self.augment() {}
             self.max_flow
         }
     }
