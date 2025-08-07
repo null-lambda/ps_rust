@@ -22,6 +22,7 @@ fn xor_traversal(
     }
     toposort.push(root);
 
-    let parent = xor_neighbors;
+    let mut parent = xor_neighbors;
+    parent[root as usize] = root;
     (toposort, parent)
 }
