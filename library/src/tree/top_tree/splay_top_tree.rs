@@ -405,10 +405,6 @@ pub mod top_tree {
 
             u
         }
-
-        unsafe fn mark_free(&mut self, u: NodeRef<T>) {
-            self.free.push(u);
-        }
     }
 
     pub struct TopTree<Cx: ClusterCx> {

@@ -1,15 +1,15 @@
 pub mod centroid {
     /// Centroid Decomposition
-    use crate::jagged::Jagged;
+    use crate::jagged::CSR;
 
     pub fn init_size<'a, E: 'a>(
-        neighbors: &'a impl Jagged<'a, (u32, E)>,
+        neighbors: &'a CSR<(u32, E)>,
         size: &mut [u32],
         u: usize,
         p: usize,
     ) {
         size[u] = 1;
-        for &(v, _) in neighbors.get(u) {
+        for &(v, _) in &neighbors[u] {
             if v as usize == p {
                 continue;
             }
@@ -19,7 +19,7 @@ pub mod centroid {
     }
 
     fn reroot_to_centroid<'a, _E: 'a>(
-        neighbors: &'a impl Jagged<'a, (u32, _E)>,
+        neighbors: &'a CSR<(u32, _E)>,
         size: &mut [u32],
         visited: &[bool],
         mut u: usize,
@@ -27,7 +27,7 @@ pub mod centroid {
         let threshold = (size[u] + 1) / 2;
         let mut p = u;
         'outer: loop {
-            for &(v, _) in neighbors.get(u) {
+            for &(v, _) in &neighbors[u] {
                 if v as usize == p || visited[v as usize] {
                     continue;
                 }
@@ -45,7 +45,7 @@ pub mod centroid {
     }
 
     pub fn dnc<'a, E: 'a + Clone>(
-        neighbors: &'a impl Jagged<'a, (u32, E)>,
+        neighbors: &'a CSR<(u32, E)>,
         size: &mut [u32],
         visited: &mut [bool],
         yield_rooted_tree: &mut impl FnMut(&[u32], &[bool], usize),
@@ -54,7 +54,7 @@ pub mod centroid {
         let root = reroot_to_centroid(neighbors, size, visited, init);
         visited[root] = true;
         yield_rooted_tree(size, visited, root);
-        for &(v, _) in neighbors.get(root) {
+        for &(v, _) in &neighbors[root] {
             if visited[v as usize] {
                 continue;
             }
@@ -63,7 +63,7 @@ pub mod centroid {
     }
 
     pub fn build_centroid_tree<'a, _E: 'a + Clone>(
-        neighbors: &'a impl Jagged<'a, (u32, _E)>,
+        neighbors: &'a CSR<(u32, _E)>,
         size: &mut [u32],
         visited: &mut [bool],
         parent_centroid: &mut [u32],
@@ -72,7 +72,7 @@ pub mod centroid {
         let root = reroot_to_centroid(neighbors, size, visited, init);
         visited[root] = true;
 
-        for &(v, _) in neighbors.get(root) {
+        for &(v, _) in &neighbors[root] {
             if visited[v as usize] {
                 continue;
             }
