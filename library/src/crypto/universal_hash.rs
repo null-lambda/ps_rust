@@ -51,6 +51,10 @@ mod rand {
 
         pub fn shuffle<T>(&mut self, xs: &mut [T]) {
             let n = xs.len();
+            if n == 0 {
+                return;
+            }
+
             for i in 0..n - 1 {
                 let j = self.range_u64(i as u64..n as u64) as usize;
                 xs.swap(i, j);
