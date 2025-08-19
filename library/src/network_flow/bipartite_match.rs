@@ -1,5 +1,5 @@
 const UNSET: u32 = !0;
-fn bipartite_match(n: usize, m: usize, neighbors: &impl jagged::Jagged<u32>) -> [Vec<u32>; 2] {
+fn bipartite_match(n: usize, m: usize, neighbors: &jagged::CSR<u32>) -> [Vec<u32>; 2] {
     // Hopcroft-Karp
     const INF: u32 = u32::MAX / 2;
 
@@ -29,7 +29,7 @@ fn bipartite_match(n: usize, m: usize, neighbors: &impl jagged::Jagged<u32>) -> 
 
         fn dfs(
             u: u32,
-            neighbors: &impl jagged::Jagged<u32>,
+            neighbors: &jagged::CSR<u32>,
             assignment: &mut [Vec<u32>; 2],
             left_level: &Vec<u32>,
         ) -> bool {

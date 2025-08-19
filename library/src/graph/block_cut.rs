@@ -5,9 +5,9 @@ pub mod bcc {
 
     pub const UNSET: u32 = !0;
 
-    pub struct BlockCutForest<'a, E, J> {
+    pub struct BlockCutForest<'a, E> {
         // DFS tree structure
-        pub neighbors: &'a J,
+        pub neighbors: &'a jagged::CSR<(u32, E)>,
         pub parent: Vec<u32>,
         pub euler_in: Vec<u32>,
         pub low: Vec<u32>, // Lowest euler index on a subtree's back edge
@@ -24,8 +24,8 @@ pub mod bcc {
         pub bcc_edges: Vec<Vec<(u32, u32, E)>>,
     }
 
-    impl<'a, E: 'a + Copy, J: jagged::Jagged<(u32, E)>> BlockCutForest<'a, E, J> {
-        pub fn from_assoc_list(neighbors: &'a J) -> Self {
+    impl<'a, E: 'a + Copy> BlockCutForest<'a, E> {
+        pub fn from_assoc_list(neighbors: &'a jagged::CSR<(u32, E)>) -> Self {
             let n = neighbors.len();
 
             let mut parent = vec![UNSET; n];
