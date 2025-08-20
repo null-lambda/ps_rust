@@ -241,7 +241,7 @@ pub mod full_conn {
     //     where level 0 corresponds to roots and level lv_max to leaves (vertices).
     //   - Size invariant: Forall cluster node, n_vert <= 2^(max_level - level).
     //   - Path-compression: A cluster node is materialized when it contains an edge at a given level,
-    //     and may be dematerialized when it does not. This guarantees O(N + M) space.
+    //     and dematerialized when it does not.
     //
     // ## Reference
     //   - Holm, Jacob, Kristian de Lichtenberg, and Mikkel Thorup.
@@ -461,7 +461,6 @@ pub mod full_conn {
         }
 
         fn find_level(&self, v_adj: u32) -> Option<u8> {
-            // todo: submask iteration
             let mut rows = self.neighbors.iter().rev();
             for lv in (0..32).rev() {
                 if self.emask & (1 << lv) != 0 {
@@ -663,10 +662,10 @@ pub mod full_conn {
             }
         }
 
-        fn pull_up_to_root(&mut self, mut s: NodeRef) -> NodeRef {
+        fn pull_up_to_guard(&mut self, mut s: NodeRef, guard: NodeRef) -> NodeRef {
             loop {
                 let p = self.parent(s);
-                if p == UNSET {
+                if p == guard {
                     break s;
                 }
                 s = p;
@@ -674,22 +673,62 @@ pub mod full_conn {
             }
         }
 
+        #[inline(always)]
+        fn pull_up_to_root(&mut self, s: NodeRef) -> NodeRef {
+            self.pull_up_to_guard(s, UNSET)
+        }
+
         fn verify_strict_path_compression_invariant(&self, u: u32) {
-            let mut material_depth = 0;
             let mut s = NodeRef::new(NodeType::Leaf, u);
+
+            let mut levels_mask = 0u32;
             loop {
                 let p = self.parent(s);
                 if p == UNSET {
                     break;
                 }
                 s = p;
-
-                material_depth = (s.ty() == NodeType::Cluster) as u32;
+                if s.ty() == NodeType::Cluster {
+                    assert!(self.cluster[s].emask & (1 << self.cluster[s].lv) != 0);
+                    levels_mask |= 1 << self.level(s);
+                }
             }
 
             let l = &self.leaf[u as usize];
-            assert_eq!(material_depth, l.emask.count_ones());
-            assert_eq!(l.emask.count_ones(), l.neighbors.len() as u32);
+            assert_eq!(
+                l.emask,
+                l.emask & levels_mask,
+                "{:020b} {:020b}",
+                l.emask,
+                levels_mask,
+            );
+        }
+
+        fn verify_weak_path_compression_invariant(&self, u: u32) {
+            let mut s = NodeRef::new(NodeType::Leaf, u);
+            let mut levels_mask = 0u32;
+            let mut pc = vec![];
+            loop {
+                let p = self.parent(s);
+                if p == UNSET {
+                    break;
+                }
+                s = p;
+                if s.ty() == NodeType::Cluster {
+                    pc.push(s);
+                    levels_mask |= 1 << self.level(s);
+                }
+            }
+
+            let l = &self.leaf[u as usize];
+            assert_eq!(
+                l.emask,
+                l.emask & levels_mask,
+                "{:020b} {:020b} {:?}",
+                l.emask,
+                levels_mask,
+                pc
+            );
         }
 
         fn verify_size_invariant(&self, u: u32) {
@@ -705,11 +744,17 @@ pub mod full_conn {
             }
         }
 
-        fn verify_link(&mut self, u: u32) {
+        fn verify_link(&mut self, u: u32, guard: NodeRef) {
             let mut s = NodeRef::new(NodeType::Leaf, u);
+            if s == guard {
+                return;
+            }
 
             loop {
                 let p = self.parent(s);
+                if p == guard {
+                    break;
+                }
                 if p == UNSET {
                     if s.ty() == NodeType::Local {
                         panic!("u={u}, s={s:?}");
@@ -737,14 +782,16 @@ pub mod full_conn {
                 let prev = (self.emask(s),);
                 self.pull_up(s);
                 let curr = (self.emask(s),);
-                assert_eq!(prev, curr);
+                assert_eq!(prev, curr, "{:?} {:?}", s, self.parent(s));
             }
         }
 
         fn verify_path_to_root(&mut self, u: u32) {
+            // self.verify_weak_path_compression_invariant(u);
+
             // self.verify_strict_path_compression_invariant(u);
             // self.verify_size_invariant(u);
-            // self.verify_link(u);
+            // self.verify_link(u, UNSET);
         }
 
         // Returns the topmost cluster node (including leaf) materialized in a level >= lv
@@ -926,10 +973,10 @@ pub mod full_conn {
             true
         }
 
-        pub fn try_dematerialize(&mut self, s: &mut NodeRef, lv: u8) -> bool {
+        pub fn try_dematerialize(&mut self, s: &mut NodeRef) -> bool {
             debug_assert_eq!(s.ty(), NodeType::Cluster);
-            debug_assert_eq!(self.cluster[*s].lv, lv);
 
+            let lv = self.cluster[*s].lv;
             if self.cluster[*s].emask & (1 << lv) != 0 {
                 return false;
             }
@@ -950,14 +997,14 @@ pub mod full_conn {
             true
         }
 
-        pub fn merge_cluster_into(&mut self, mut cx: NodeRef, mut cy: NodeRef, lv: u8) -> NodeRef {
-            self.materialize(&mut cx, lv);
+        pub fn merge_cluster(&mut self, cx: &mut NodeRef, mut cy: NodeRef, lv: u8) {
+            self.materialize(cx, lv);
             self.materialize(&mut cy, lv);
 
             debug_assert!(self.parent(cy) == UNSET, "Detach cy first");
 
             // Delete rv
-            let px = self.extract_rank_forest_rev(cx);
+            let px = self.extract_rank_forest_rev(*cx);
             let py = self.extract_rank_forest_rev(cy);
             self.cluster.mark_free(cy);
 
@@ -987,17 +1034,14 @@ pub mod full_conn {
             );
 
             debug_assert!(acc[1] != UNSET);
-            self.cluster[cx].children = acc;
-            self.push_down_link(cx);
-            self.pull_up(cx);
-
-            cx
+            self.cluster[*cx].children = acc;
+            self.push_down_link(*cx);
+            self.pull_up(*cx);
         }
 
         fn detach_clusters(&mut self, cp: NodeRef, cxs: &[NodeRef]) {
             debug_assert_eq!(cp.ty(), NodeType::Cluster);
-            let mut pp = self.extract_rank_forest_rev(cp);
-
+            let pp = self.extract_rank_forest_rev(cp);
             for &r in &pp {
                 *self.parent_mut(r) = UNSET;
             }
@@ -1121,9 +1165,9 @@ pub mod full_conn {
                         .insert(v, EdgeType::Span.into());
                 }
 
-                let ru = self.pull_up_to_root(NodeRef::new(NodeType::Leaf, u));
+                let mut ru = self.pull_up_to_root(NodeRef::new(NodeType::Leaf, u));
                 let rv = self.pull_up_to_root(NodeRef::new(NodeType::Leaf, v));
-                self.merge_cluster_into(ru, rv, 0);
+                self.merge_cluster(&mut ru, rv, 0);
             };
 
             self.verify_path_to_root(u);
@@ -1132,7 +1176,7 @@ pub mod full_conn {
             true
         }
 
-        fn promote_edge(&mut self, u: u32, v: u32, lv: u8) {
+        fn promote_edge(&mut self, u: u32, v: u32, lv: u8, guard: NodeRef) {
             for [x, y] in [[u, v], [v, u]] {
                 let fx = &mut self.leaf[x as usize];
 
@@ -1147,7 +1191,7 @@ pub mod full_conn {
                 assert!(fx.get_or_default(lv + 1).insert(y, ty).is_none());
 
                 if emask_prev != fx.emask {
-                    self.pull_up_to_root(NodeRef::new(NodeType::Leaf, x));
+                    self.pull_up_to_guard(NodeRef::new(NodeType::Leaf, x), guard);
                 }
             }
         }
@@ -1164,7 +1208,10 @@ pub mod full_conn {
             assert_eq!(cp, cp_alt);
             assert_eq!(self.cluster[cp].lv, lv);
 
-            let mut ty = [EdgeType::Span; 2]; // dummy
+            self.verify_path_to_root(u);
+            self.verify_path_to_root(v);
+
+            let mut ty = [EdgeType::Span; 2]; // Dummy
             if self.leaf[u as usize].remove_if(lv, |row| {
                 ty[0] = row.remove(&v).unwrap().get();
                 row.is_empty()
@@ -1243,25 +1290,27 @@ pub mod full_conn {
 
                     // Promote all edges in trav_u from lv to lv + 1
                     for [x, y] in visited_edges {
-                        self.promote_edge(x, y, lv);
+                        self.promote_edge(x, y, lv, cp);
                     }
+                    self.pull_up(cp);
 
                     // Merge all nodes in `trav_u` from `cp`.
                     self.detach_clusters(cp, &bfs_cluster);
-                    let mut q = None;
-                    for mut t in bfs_cluster {
-                        if self.emask(t) & (1 << lv + 1) != 0 {
-                            self.materialize(&mut t, lv + 1);
-                        }
-                        q = Some(q.map_or(t, |q| self.merge_cluster_into(q, t, lv + 1)));
+                    let mut cq = bfs_cluster[0];
+                    for &ct in &bfs_cluster[1..] {
+                        self.merge_cluster(&mut cq, ct, lv + 1);
                     }
-                    let mut q = q.unwrap();
+                    if self.emask(cq) & (1 << lv + 1) != 0 {
+                        // Check `verify_weak_path_compression_invariant`
+                        self.materialize(&mut cq, lv + 1);
+                    }
 
-                    assert!(self.materialize(&mut q, lv));
-                    self.merge_cluster_into(cp, q, lv);
+                    assert!(self.materialize(&mut cq, lv));
+                    self.merge_cluster(&mut cp, cq, lv);
 
-                    self.pull_up_to_root(NodeRef::new(NodeType::Leaf, u)); // TODO
-                    self.pull_up_to_root(NodeRef::new(NodeType::Leaf, v)); // TODO
+                    self.pull_up_to_root(cp);
+                    self.verify_path_to_root(u);
+                    self.verify_path_to_root(v);
 
                     return true;
                 } else {
@@ -1297,18 +1346,11 @@ pub mod full_conn {
                         ..
                     } = trav_u;
 
-                    let mut cg = self.parent(cp);
-                    let mut sub_lv = !0;
-                    while cg != UNSET {
-                        match cg.ty() {
-                            NodeType::Leaf => unreachable!(),
-                            NodeType::Local => cg = self.local[cg].parent,
-                            NodeType::Cluster => {
-                                sub_lv = self.cluster[cg].lv;
-                                break;
-                            }
-                        }
+                    // Promote all edges in trav_u from lv to lv + 1
+                    for [x, y] in visited_edges {
+                        self.promote_edge(x, y, lv, cp);
                     }
+                    self.pull_up(cp);
 
                     // ## Diagram
                     // lv<=i-1    lv=i        lv=i+1
@@ -1319,47 +1361,55 @@ pub mod full_conn {
                     //                  +-- |------|
                     //                  +-- |trav_v|
                     //                  +-- |------|
-
-                    // Promote all edges in trav_u from lv to lv + 1
-                    for [x, y] in visited_edges {
-                        self.promote_edge(x, y, lv);
-                    }
-
+                    //
                     // Detach all nodes in `trav_u` from `cp`, then merge them as `cq` at level `lv + 1`.
                     //
-                    // ## Diagram
                     // lv<=i-1    lv=i        lv=i+1
-                    //          +----------------- q
+                    //          +-----------------cq
                     //      cg -+-- cp -+-- |------|
                     //                  +-- |trav_v|
                     //                  +-- |------|
 
                     self.detach_clusters(cp, &bfs_cluster);
-                    let mut q = None;
-                    for mut t in bfs_cluster {
-                        if self.emask(t) & (1 << lv + 1) != 0 {
-                            self.materialize(&mut t, lv + 1);
+                    let mut cq = bfs_cluster[0];
+                    for &ct in &bfs_cluster[1..] {
+                        self.merge_cluster(&mut cq, ct, lv + 1);
+                    }
+
+                    let mut cg = self.parent(cp);
+                    let mut sub_lv = !0;
+                    while cg != UNSET {
+                        self.pull_up(cg);
+                        match cg.ty() {
+                            NodeType::Leaf => unreachable!(),
+                            NodeType::Local => cg = self.local[cg].parent,
+                            NodeType::Cluster => {
+                                sub_lv = self.cluster[cg].lv;
+                                break;
+                            }
                         }
-                        q = Some(q.map_or(t, |q| self.merge_cluster_into(q, t, lv + 1)));
                     }
-                    let mut q = q.unwrap();
-
                     if cg != UNSET {
-                        assert!(self.materialize(&mut q, sub_lv));
-                        cg = self.merge_cluster_into(cg, q, sub_lv);
+                        assert!(self.materialize(&mut cq, sub_lv));
+                        self.merge_cluster(&mut cg, cq, sub_lv);
                     }
 
-                    self.try_dematerialize(&mut cp, lv);
+                    self.try_dematerialize(&mut cp);
+
+                    self.verify_link(u, cg);
+                    self.verify_link(v, cg);
 
                     if cg != UNSET {
                         lv = sub_lv;
                         cp = cg;
-                        cu = q;
+                        cu = cq;
                         cv = cp;
                         continue;
                     } else {
-                        self.pull_up_to_root(NodeRef::new(NodeType::Leaf, u));
-                        self.pull_up_to_root(NodeRef::new(NodeType::Leaf, v));
+                        if cg != UNSET {
+                            self.pull_up(cg);
+                            self.pull_up_to_root(cg);
+                        }
                         self.verify_path_to_root(u);
                         self.verify_path_to_root(v);
                         return true;
@@ -1555,38 +1605,27 @@ pub mod full_conn {
     }
 }
 
-const DECODE_QUERY: bool = true;
-// const DECODE_QUERY: bool = false;
-
 fn main() {
     let mut input = simple_io::stdin();
     let mut output = simple_io::stdout();
 
     let n: usize = input.value();
-    let q: usize = input.value();
-    let mut f = 0u64;
-    let mut n_components = n as u64;
+    let m: usize = input.value();
     let mut conn = full_conn::ClusterForest::new(n);
-    for _ in 0..q {
-        let a: u64 = input.value();
-        let b: u64 = input.value();
-        let (x, y) = if DECODE_QUERY {
-            (((a ^ f) % n as u64) as u32, ((b ^ f) % n as u64) as u32)
-        } else {
-            (a as u32, b as u32)
-        };
+    for _ in 0..m {
+        let cmd = input.token();
+        let x = input.value::<u32>() - 1;
+        let y = input.value::<u32>() - 1;
 
-        if x < y {
-            let old = conn.is_connected(x, y);
-            assert!(conn.link(x, y) || conn.cut(x, y));
-            let new = conn.is_connected(x, y);
-            n_components += old as u64;
-            n_components -= new as u64;
-        } else {
-            // assert!(x > y);
-            writeln!(output, "{}", conn.is_connected(x, y) as u8).unwrap();
+        match cmd {
+            "1" => {
+                conn.link(x, y);
+            }
+            "2" => {
+                conn.cut(x, y);
+            }
+            "3" => writeln!(output, "{}", conn.is_connected(x, y) as u8).unwrap(),
+            _ => panic!(),
         }
-
-        f += n_components as u64;
     }
 }
