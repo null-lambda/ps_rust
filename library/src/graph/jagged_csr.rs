@@ -62,11 +62,11 @@ pub mod jagged {
     }
 
     impl<T> CSR<T> {
-        pub fn len(&self) -> usize {
+        fn len(&self) -> usize {
             self.head.len() - 1
         }
 
-        pub fn edge_range(&self, index: usize) -> std::ops::Range<usize> {
+        fn edge_range(&self, index: usize) -> std::ops::Range<usize> {
             self.head[index] as usize..self.head[index as usize + 1] as usize
         }
     }
