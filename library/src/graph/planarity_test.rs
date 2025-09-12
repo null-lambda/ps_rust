@@ -492,7 +492,7 @@ pub mod boyer_myrvold {
                 let c = bcc_root - n as u32; // A unique DFS child of a bcc root in bcc.
                 let r = self.dfs.parent[c as usize];
                 if self.dfs.low[c as usize].min(self.dfs.least_ancestor[c as usize])
-                    < self.dfs.t_in[r as usize]
+                    < self.dfs.t_in[u as usize]
                 {
                     // Append externally active bcc
                     self.pertinent_roots.insert_left(r, bcc_root);
