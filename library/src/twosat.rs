@@ -1,68 +1,75 @@
-fn gen_scc(neighbors: &impl jagged::Jagged<u32>) -> (usize, Vec<u32>) {
+fn gen_scc(children: &jagged::CSR<u32>) -> (usize, Vec<u32>) {
     // Tarjan algorithm, iterative
-    let n = neighbors.len();
+    let n = children.len();
 
-    const UNSET: u32 = u32::MAX;
-    let mut scc_index: Vec<u32> = vec![UNSET; n];
-    let mut scc_count = 0;
+    const UNSET: u32 = !0;
+    let mut scc_index = vec![UNSET; n];
+    let mut n_scc = 0;
 
+    // Stackless DFS
+    let mut parent = vec![UNSET; n];
+    let mut current_edge: Vec<_> = (0..n)
+        .map(|u| children.edge_range(u).start as u32)
+        .collect();
+    let mut t_in = vec![0u32; n];
+    let mut timer = 1;
+
+    let mut low_link = vec![UNSET; n];
     let mut path_stack = vec![];
-    let mut dfs_stack = vec![];
-    let mut order_count: u32 = 1;
-    let mut order: Vec<u32> = vec![0; n];
-    let mut low_link: Vec<u32> = vec![UNSET; n];
 
-    for u in 0..n {
-        if order[u] > 0 {
+    for mut u in 0..n as u32 {
+        if t_in[u as usize] > 0 {
             continue;
         }
 
-        const UPDATE_LOW_LINK: u32 = 1 << 31;
+        parent[u as usize] = u;
+        loop {
+            let e = current_edge[u as usize];
+            current_edge[u as usize] += 1;
 
-        dfs_stack.push((u as u32, 0));
-        while let Some((u, iv)) = dfs_stack.pop() {
-            if iv & UPDATE_LOW_LINK != 0 {
-                let v = iv ^ UPDATE_LOW_LINK;
-                low_link[u as usize] = low_link[u as usize].min(low_link[v as usize]);
-                continue;
-            }
-
-            if iv == 0 {
-                // Enter node
-                order[u as usize] = order_count;
-                low_link[u as usize] = order_count;
-                order_count += 1;
+            if e == children.edge_range(u as usize).start as u32 {
+                // On enter
+                t_in[u as usize] = timer;
+                low_link[u as usize] = timer;
+                timer += 1;
                 path_stack.push(u);
             }
 
-            if iv < neighbors[u as usize].len() as u32 {
-                // Iterate neighbors
-                dfs_stack.push((u, iv + 1));
+            if e < children.edge_range(u as usize).end as u32 {
+                let v = children.links[e as usize];
+                if t_in[v as usize] == 0 {
+                    // Front edge
+                    parent[v as usize] = u;
 
-                let v = neighbors[u as usize][iv as usize];
-                if order[v as usize] == 0 {
-                    dfs_stack.push((u, v | UPDATE_LOW_LINK));
-                    dfs_stack.push((v, 0));
+                    u = v;
                 } else if scc_index[v as usize] == UNSET {
-                    low_link[u as usize] = low_link[u as usize].min(order[v as usize]);
+                    // Back edge or cross edge, scc not constructed yet
+                    low_link[u as usize] = low_link[u as usize].min(t_in[v as usize]);
                 }
             } else {
-                // Exit node
-                if low_link[u as usize] == order[u as usize] {
-                    // Found a strongly connected component
+                // On exit
+                if low_link[u as usize] == t_in[u as usize] {
+                    // Found a scc
                     loop {
                         let v = path_stack.pop().unwrap();
-                        scc_index[v as usize] = scc_count;
+                        scc_index[v as usize] = n_scc;
                         if v == u {
                             break;
                         }
                     }
-                    scc_count += 1;
+                    n_scc += 1;
                 }
+
+                let p = parent[u as usize];
+                if p == u {
+                    break;
+                }
+                low_link[p as usize] = low_link[p as usize].min(low_link[u as usize]);
+                u = p;
             }
         }
     }
-    (scc_count as usize, scc_index)
+    (n_scc as usize, scc_index)
 }
 
 pub struct TwoSat {
@@ -102,35 +109,36 @@ impl TwoSat {
         }
     }
 
-    pub fn solve(&self) -> Option<Vec<bool>> {
-        let (scc_count, scc_index) = gen_scc(&jagged::CSR::from_pairs(
-            self.n_props * 2,
-            self.edges.iter().copied(),
-        ));
+    pub fn solve<'a>(&'a self) -> Option<impl 'a + FnOnce() -> Vec<bool>> {
+        let children = jagged::CSR::from_pairs(self.n_props * 2, self.edges.iter().copied());
+        let (n_scc, scc_index) = gen_scc(&children);
 
-        let mut scc = vec![vec![]; scc_count];
-        for (i, &scc_idx) in scc_index.iter().enumerate() {
-            scc[scc_idx as usize].push(i as u32);
-        }
+        let scc = jagged::CSR::from_pairs(
+            n_scc,
+            (0..self.n_props * 2).map(|u| (scc_index[u], u as u32)),
+        );
 
-        let satisfiable = (0..self.n_props as u32).all(|p| {
-            scc_index[self.prop_to_node((p, true)) as usize]
-                != scc_index[self.prop_to_node((p, false)) as usize]
-        });
-        if !satisfiable {
-            return None;
-        }
-
-        let mut interpretation = vec![None; self.n_props];
-        for component in &scc {
-            for &i in component.iter() {
-                let (p, p_value) = self.node_to_prop(i);
-                if interpretation[p as usize].is_some() {
-                    break;
-                }
-                interpretation[p as usize] = Some(p_value);
+        for p in 0..self.n_props as u32 {
+            if scc_index[self.prop_to_node((p, true)) as usize]
+                == scc_index[self.prop_to_node((p, false)) as usize]
+            {
+                return None;
             }
         }
-        Some(interpretation.into_iter().map(|x| x.unwrap()).collect())
+
+        Some(move || {
+            let mut interpretation = vec![2u8; self.n_props];
+            for u in 0..n_scc {
+                for &i in &scc[u] {
+                    let (p, v) = self.node_to_prop(i);
+                    if interpretation[p as usize] != 2u8 {
+                        break;
+                    }
+                    interpretation[p as usize] = v as u8;
+                }
+            }
+
+            interpretation.into_iter().map(|x| x != 0).collect()
+        })
     }
 }
