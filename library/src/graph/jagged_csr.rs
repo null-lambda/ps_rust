@@ -11,6 +11,15 @@ pub mod jagged {
         head: Vec<u32>,
     }
 
+    impl<T> Default for CSR<T> {
+        fn default() -> Self {
+            Self {
+                links: vec![],
+                head: vec![0],
+            }
+        }
+    }
+
     impl<T: Clone> CSR<T> {
         pub fn from_pairs(n: usize, pairs: impl Iterator<Item = (u32, T)> + Clone) -> Self {
             let mut head = vec![0u32; n + 1];

@@ -1,15 +1,15 @@
 pub mod bcc {
     /// Biconnected components & 2-edge-connected components
     /// Verified with [Yosupo library checker](https://judge.yosupo.jp/problem/biconnected_components)
-    use super::jagged;
+    use super::jagged::CSR;
 
     pub const UNSET: u32 = !0;
 
-    pub struct BlockCutForest<'a, E> {
+    pub struct BlockCutForest {
         // DFS tree structure
-        pub neighbors: &'a jagged::CSR<(u32, E)>,
+        pub neighbors: CSR<u32>,
         pub parent: Vec<u32>,
-        pub euler_in: Vec<u32>,
+        pub t_in: Vec<u32>,
         pub low: Vec<u32>, // Lowest euler index on a subtree's back edge
 
         /// Block-cut tree structure,  
@@ -21,54 +21,55 @@ pub mod bcc {
         pub bct_degree: Vec<u32>,
 
         /// BCC structure
-        pub bcc_edges: Vec<Vec<(u32, u32, E)>>,
+        pub bcc_edges: Vec<Vec<[u32; 2]>>,
     }
 
-    impl<'a, E: 'a + Copy> BlockCutForest<'a, E> {
-        pub fn from_assoc_list(neighbors: &'a jagged::CSR<(u32, E)>) -> Self {
-            let n = neighbors.len();
+    impl BlockCutForest {
+        pub fn from_edges(n_verts: usize, edges: impl Iterator<Item = [u32; 2]> + Clone) -> Self {
+            let neighbors = CSR::from_pairs(n_verts, edges.flat_map(|[u, v]| [(u, v), (v, u)]));
 
-            let mut parent = vec![UNSET; n];
-            let mut low = vec![0; n];
-            let mut euler_in = vec![0; n];
-            let mut timer = 1u32;
+            let mut t_in = vec![UNSET; n_verts];
+            let mut parent: Vec<_> = (0..n_verts as u32).collect();
+            let mut low = vec![0; n_verts];
+            let mut timer = 0;
 
-            let mut bct_parent = vec![UNSET; n];
-            let mut bct_degree = vec![1u32; n];
+            let mut bct_parent = vec![UNSET; n_verts];
+            let mut bct_degree = vec![1u32; n_verts];
 
             let mut bcc_edges = vec![];
 
-            bct_parent.reserve_exact(n * 2);
-
-            let mut current_edge = vec![0u32; n];
+            let mut current_edge: Vec<_> = (0..n_verts)
+                .map(|u| neighbors.edge_range(u).start as u32)
+                .collect();
             let mut stack = vec![];
-            let mut edges_stack: Vec<(u32, u32, E)> = vec![];
-            for root in 0..n {
-                if euler_in[root] != 0 {
+            let mut edges_stack: Vec<[u32; 2]> = vec![];
+            for root in 0..n_verts {
+                if t_in[root] != UNSET {
                     continue;
                 }
+                t_in[root] = timer;
+                timer += 1;
 
                 bct_degree[root] -= 1;
-                parent[root] = UNSET;
                 let mut u = root as u32;
                 loop {
                     let p = parent[u as usize];
-                    let iv = &mut current_edge[u as usize];
-                    if *iv == 0 {
+                    let e = current_edge[u as usize];
+                    current_edge[u as usize] += 1;
+                    if e == neighbors.edge_range(u as usize).start as u32 {
                         // On enter
-                        euler_in[u as usize] = timer;
-                        low[u as usize] = timer + 1;
+                        t_in[u as usize] = timer;
+                        low[u as usize] = timer;
                         timer += 1;
                         stack.push(u);
                     }
-                    if (*iv as usize) == neighbors[u as usize].len() {
+                    if e == neighbors.edge_range(u as usize).end as u32 {
                         // On exit
-                        if p == UNSET {
+                        if p == u {
                             break;
                         }
 
-                        low[p as usize] = low[p as usize].min(low[u as usize]);
-                        if low[u as usize] >= euler_in[p as usize] {
+                        if low[u as usize] >= t_in[p as usize] {
                             // Found a BCC
                             let bcc_node = bct_parent.len() as u32;
                             bct_degree[p as usize] += 1;
@@ -88,36 +89,37 @@ pub mod bcc {
                             let mut es = vec![];
                             while let Some(e) = edges_stack.pop() {
                                 es.push(e);
-                                if (e.0, e.1) == (p, u) {
+                                if e == [p, u] {
                                     break;
                                 }
                             }
                             bcc_edges.push(es);
                         }
 
+                        low[p as usize] = low[p as usize].min(low[u as usize]);
+
                         u = p;
                         continue;
                     }
 
-                    let (v, w) = neighbors[u as usize][*iv as usize];
-                    *iv += 1;
+                    let v = neighbors.links[e as usize];
                     if v == p {
                         continue;
                     }
 
-                    if euler_in[v as usize] < euler_in[u as usize] {
-                        // Unvisited edge
-                        edges_stack.push((u, v, w));
-                    }
-                    if euler_in[v as usize] != 0 {
-                        // Back edge
-                        low[u as usize] = low[u as usize].min(euler_in[v as usize]);
-                        continue;
-                    }
+                    // Notes: multi-edges are pushed only once
 
-                    // Forward edge (a part of DFS spanning tree)
-                    parent[v as usize] = u;
-                    u = v;
+                    if t_in[v as usize] == UNSET {
+                        // Front edge
+                        edges_stack.push([u, v]);
+                        parent[v as usize] = u;
+
+                        u = v;
+                    } else if t_in[v as usize] < t_in[u as usize] {
+                        // Back edge
+                        edges_stack.push([u, v]);
+                        low[u as usize] = low[u as usize].min(t_in[v as usize]);
+                    }
                 }
 
                 // For an isolated vertex, manually add a virtual BCC node.
@@ -135,7 +137,7 @@ pub mod bcc {
                 neighbors,
                 parent,
                 low,
-                euler_in,
+                t_in,
 
                 bct_parent,
                 bct_degree,
@@ -151,7 +153,7 @@ pub mod bcc {
 
         pub fn is_bridge(&self, u: usize, v: usize) -> bool {
             debug_assert!(u < self.neighbors.len() && v < self.neighbors.len() && u != v);
-            self.euler_in[v] < self.low[u] || self.euler_in[u] < self.low[v]
+            self.t_in[v] < self.low[u] || self.t_in[u] < self.low[v]
         }
 
         pub fn bcc_node_range(&self) -> std::ops::Range<usize> {
