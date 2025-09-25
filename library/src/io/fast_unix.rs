@@ -3,7 +3,7 @@ mod fast_io {
     use std::io::BufWriter;
     use std::os::unix::io::FromRawFd;
 
-    extern "C" {
+    unsafe extern "C" {
         fn mmap(addr: usize, length: usize, prot: i32, flags: i32, fd: i32, offset: i64)
             -> *mut u8;
         fn fstat(fd: i32, stat: *mut usize) -> i32;

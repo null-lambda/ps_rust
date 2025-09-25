@@ -173,7 +173,7 @@ pub mod top_tree {
             indices: [NodeRef<T>; N],
         ) -> [&'a mut T; N] {
             let ptr = self.nodes.as_mut_ptr();
-            indices.map(|i| &mut *ptr.add(i.idx.get() as usize))
+            indices.map(|i| unsafe { &mut *ptr.add(i.idx.get() as usize) })
         }
     }
 
@@ -185,7 +185,7 @@ pub mod top_tree {
             }
         }
 
-        pub unsafe fn dangling() -> Self {
+        pub fn dangling() -> Self {
             Self {
                 idx: NonZeroU32::new(UNSET).unwrap(),
                 _phantom: PhantomData,
@@ -277,7 +277,7 @@ pub mod top_tree {
         }
 
         impl<Cx: ClusterCx> CompressPivot<Cx> {
-            pub unsafe fn uninit() -> Self {
+            pub fn uninit() -> Self {
                 Self {
                     children: [NodeRef::dangling(); 2],
                     rake_tree: None,
@@ -297,7 +297,7 @@ pub mod top_tree {
         pub trait BinaryNode: Sized {
             type Parent: Copy;
 
-            unsafe fn uninit() -> Self;
+            fn uninit() -> Self;
 
             fn internal_parent(&self) -> Option<NodeRef<Self>>;
             fn parent_mut(&mut self) -> &mut Self::Parent;
@@ -312,7 +312,7 @@ pub mod top_tree {
         impl<Cx: ClusterCx> BinaryNode for Compress<Cx> {
             type Parent = Option<Parent<Cx>>;
 
-            unsafe fn uninit() -> Self {
+            fn uninit() -> Self {
                 Self {
                     ends: [UNSET; 2],
 
@@ -354,7 +354,7 @@ pub mod top_tree {
         impl<Cx: ClusterCx> BinaryNode for Rake<Cx> {
             type Parent = Parent<Cx>;
 
-            unsafe fn uninit() -> Self {
+            fn uninit() -> Self {
                 Self {
                     parent: Parent::Compress(NodeRef::dangling()),
                     children: Err(NodeRef::dangling()),
@@ -386,7 +386,7 @@ pub mod top_tree {
     impl<T: BinaryNode> Default for Pool<T> {
         fn default() -> Self {
             Self {
-                nodes: vec![unsafe { node::BinaryNode::uninit() }],
+                nodes: vec![node::BinaryNode::uninit()],
                 free: vec![],
             }
         }
@@ -404,6 +404,10 @@ pub mod top_tree {
             };
 
             u
+        }
+
+        fn mark_free(&mut self, u: NodeRef<T>) {
+            self.free.push(u);
         }
     }
 
@@ -472,20 +476,22 @@ pub mod top_tree {
         /// │0   c   │     │  c   4│
         /// └────────┘     └───────┘
         unsafe fn rotate(&mut self, u: NodeRef<T>) {
-            let (p, bp) = self.branch(u).unwrap_unchecked();
-            let c = std::mem::replace(
-                &mut self.pool()[u].children_mut().unwrap_unchecked()[bp ^ 1],
-                p,
-            );
-            self.pool()[p].children_mut().unwrap_unchecked()[bp] = c;
+            unsafe {
+                let (p, bp) = self.branch(u).unwrap_unchecked();
+                let c = std::mem::replace(
+                    &mut self.pool()[u].children_mut().unwrap_unchecked()[bp ^ 1],
+                    p,
+                );
+                self.pool()[p].children_mut().unwrap_unchecked()[bp] = c;
 
-            if let Some((g, bg)) = self.branch(p) {
-                self.pool()[g].children_mut().unwrap_unchecked()[bg as usize] = u;
+                if let Some((g, bg)) = self.branch(p) {
+                    self.pool()[g].children_mut().unwrap_unchecked()[bg as usize] = u;
+                }
+                let pp = *self.pool()[p].parent_mut();
+                *self.pool()[p].parent_mut() = *self.pool()[c].parent_mut();
+                *self.pool()[c].parent_mut() = *self.pool()[u].parent_mut();
+                *self.pool()[u].parent_mut() = pp;
             }
-            let pp = *self.pool()[p].parent_mut();
-            *self.pool()[p].parent_mut() = *self.pool()[c].parent_mut();
-            *self.pool()[c].parent_mut() = *self.pool()[u].parent_mut();
-            *self.pool()[u].parent_mut() = pp;
         }
 
         /// Drag `u` up under the guard node. If `u` is a leaf, drag `parent(u)` if it exists.
@@ -764,7 +770,9 @@ pub mod top_tree {
 
         unsafe fn update_virtual_parent_link(&mut self, u: NodeRef<node::Rake<Cx>>) {
             if let node::Parent::Compress(cu) = self.rs[u].parent {
-                self.cs[cu].pivot.as_mut().unwrap_unchecked().rake_tree = Some(u);
+                unsafe {
+                    self.cs[cu].pivot.as_mut().unwrap_unchecked().rake_tree = Some(u);
+                }
             }
         }
     }
@@ -863,7 +871,7 @@ pub mod top_tree {
             cv: NodeRef<node::Compress<Cx>>,
         ) {
             assert!(1 <= N && N <= 3);
-            self.guarded_splay(cv, guard);
+            unsafe { self.guarded_splay(cv, guard) };
 
             // Flip guard if necessary, ensuring it's not spliced off from the root path.
             if let Some(g) = guard {
@@ -884,14 +892,14 @@ pub mod top_tree {
 
             // Swap path
             let ru = r_path[0];
-            let c1 = self.cs[cv].pivot.as_ref().unwrap_unchecked().children[1];
+            let c1 = unsafe { self.cs[cv].pivot.as_ref().unwrap_unchecked().children[1] };
 
             self.rs[ru].children = Err(c1);
-            self.cs[cv].pivot.as_mut().unwrap_unchecked().children[1] = *cu;
+            unsafe { self.cs[cv].pivot.as_mut().unwrap_unchecked().children[1] = *cu };
             self.cs[*cu].parent = Some(node::Parent::Compress(cv));
             self.cs[c1].parent = Some(node::Parent::Rake(ru));
 
-            self.update_boundary_handles(c1);
+            unsafe { self.update_boundary_handles(c1) };
             for &r in &r_path {
                 self.pull_up(r);
             }
@@ -1023,9 +1031,9 @@ pub mod top_tree {
                     let cp = self.cs.alloc(node::Compress {
                         pivot: Some(node::CompressPivot {
                             children: [cu, *ce],
-                            ..unsafe { node::CompressPivot::uninit() }
+                            ..node::CompressPivot::uninit()
                         }),
-                        ..unsafe { node::Compress::uninit() }
+                        ..node::Compress::uninit()
                     });
 
                     self.cs[cu].parent = Some(node::Parent::Compress(cp));
@@ -1042,7 +1050,7 @@ pub mod top_tree {
                     fn lifetime_hint<A, B, F: Fn(&mut A) -> &mut B>(f: F) -> F {
                         f
                     }
-                    let cu_pivot = lifetime_hint(|this: &mut Self| {
+                    let cu_pivot = lifetime_hint(|this: &mut Self| unsafe {
                         this.cs[cu].pivot.as_mut().unwrap_unchecked()
                     });
 
@@ -1051,16 +1059,16 @@ pub mod top_tree {
 
                     let r1 = self.rs.alloc(node::Rake {
                         children: Err(c1),
-                        ..unsafe { node::Rake::uninit() }
+                        ..node::Rake::uninit()
                     });
                     self.cs[c1].parent = Some(node::Parent::Rake(r1));
-                    self.update_boundary_handles(c1);
+                    unsafe { self.update_boundary_handles(c1) };
                     self.pull_up(r1);
 
                     if let Some(r0) = cu_pivot(self).rake_tree {
                         let rp = self.rs.alloc(node::Rake {
                             children: Ok([r0, r1]),
-                            ..unsafe { node::Rake::uninit() }
+                            ..node::Rake::uninit()
                         });
                         self.rs[r0].parent = node::Parent::Rake(rp);
                         self.rs[r1].parent = node::Parent::Rake(rp);
@@ -1091,7 +1099,7 @@ pub mod top_tree {
             let mut ce = self.cs.alloc(node::Compress {
                 ends: [u as u32, v as u32],
                 sum: e,
-                ..unsafe { node::Compress::uninit() }
+                ..node::Compress::uninit()
             });
 
             unsafe {
@@ -1108,7 +1116,7 @@ pub mod top_tree {
         }
 
         unsafe fn cut_right_path(&mut self, u: usize) -> NodeRef<node::Compress<Cx>> {
-            let cu = self.handle[u].unwrap_unchecked();
+            let cu = unsafe { self.handle[u].unwrap_unchecked() };
             debug_assert!(u as u32 != self.cs[cu].ends[1]);
 
             if u as u32 == self.cs[cu].ends[0] {
@@ -1123,12 +1131,13 @@ pub mod top_tree {
                 fn lifetime_hint<A, B, F: Fn(&mut A) -> &mut B>(f: F) -> F {
                     f
                 }
-                let cu_pivot =
-                    lifetime_hint(|this: &mut Self| this.cs[cu].pivot.as_mut().unwrap_unchecked());
+                let cu_pivot = lifetime_hint(|this: &mut Self| unsafe {
+                    this.cs[cu].pivot.as_mut().unwrap_unchecked()
+                });
 
                 let [c0, c1] = cu_pivot(self).children;
                 self.cs[c1].parent = None;
-                self.update_boundary_handles(c1);
+                unsafe { self.update_boundary_handles(c1) };
 
                 if let Some(r0) = cu_pivot(self).rake_tree {
                     match self.rs[r0].children {
@@ -1152,11 +1161,11 @@ pub mod top_tree {
                                 ..
                             } = self.rs[rr]
                             else {
-                                unreachable_unchecked()
+                                unsafe { unreachable_unchecked() }
                             };
-                            let r0 = self.rs[rp].children.unwrap_unchecked()[0];
+                            let r0 = unsafe { self.rs[rp].children.unwrap_unchecked()[0] };
                             debug_assert!(self.rs[rp].parent == node::Parent::Compress(cu));
-                            debug_assert!(self.rs[rp].children.unwrap_unchecked()[1] == rr);
+                            debug_assert!(self.rs[rp].children.unwrap()[1] == rr);
 
                             self.push_down(rp);
                             self.push_down(rr);
@@ -1175,7 +1184,7 @@ pub mod top_tree {
                 } else {
                     // If the rake tree is empty, the vertex `u` becomes a boundary vertex, and `cu` is freed.
                     self.cs[c0].parent = None;
-                    self.update_boundary_handles(c0);
+                    unsafe { self.update_boundary_handles(c0) };
                     self.cs.mark_free(cu);
                 }
 

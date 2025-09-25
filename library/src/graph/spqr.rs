@@ -5,8 +5,8 @@ pub mod spqr {
     /// J. E. Hopcroft and R. E. Tarjan, 'Dividing a Graph into Triconnected Components', 1973.
     /// C. Gutwenger and P. Mutzel, 'A linear time implementation of SPQR-trees', 2000.
     /// C. Gutwenger, 'Application of SPQR-trees in the planarization approach for drawing graphs', 2010.
-    use jagged::CSR;
-    use linked_list::CyclicListPool;
+    use self::jagged::CSR;
+    use self::linked_list::CyclicListPool;
     use std::cmp::Ordering;
 
     pub const UNSET: u32 = u32::MAX;
@@ -57,6 +57,7 @@ pub mod spqr {
 
     pub mod jagged {
         use std::fmt::Debug;
+        use std::iter::FromIterator;
         use std::mem::MaybeUninit;
         use std::ops::{Index, IndexMut};
 
@@ -1146,7 +1147,7 @@ pub mod spqr {
                 .iter()
                 .enumerate()
                 .rev()
-                .filter(|(_, &c)| c != UNSET)
+                .filter(|&(_, &c)| c != UNSET)
                 .map(|(e, &c)| (c, e as u32)),
         );
     }
