@@ -1,3 +1,89 @@
+use std::io::Write;
+
+mod simple_io {
+    pub struct InputAtOnce<'a> {
+        _buf: String,
+        iter: std::str::SplitAsciiWhitespace<'a>,
+    }
+
+    impl<'a> InputAtOnce<'a> {
+        pub fn token(&mut self) -> &'a str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.token().parse().unwrap()
+        }
+    }
+
+    pub fn stdin<'a>() -> InputAtOnce<'a> {
+        let _buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let iter = _buf.split_ascii_whitespace();
+        let iter = unsafe { std::mem::transmute(iter) };
+        InputAtOnce { _buf, iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
+pub mod jagged {
+    pub type EdgeId = u32;
+    const UNSET: EdgeId = u32::MAX;
+
+    // Forward-star representation (linked lists) for incremental jagged array
+    #[derive(Clone, PartialEq, Eq)]
+    pub struct FS<T> {
+        pub head: Vec<EdgeId>,
+        pub links: Vec<(EdgeId, T)>,
+    }
+
+    pub struct RowIter<'a, T> {
+        owner: &'a FS<T>,
+        e: u32,
+    }
+
+    impl<'a, T> Iterator for RowIter<'a, T> {
+        type Item = &'a T;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.e == UNSET {
+                return None;
+            }
+            let (e_next, value) = &self.owner.links[self.e as usize];
+            self.e = *e_next;
+            Some(value)
+        }
+    }
+
+    impl<T> FS<T> {
+        pub fn with_size(n: usize) -> Self {
+            Self {
+                head: vec![UNSET; n],
+                links: vec![],
+            }
+        }
+
+        pub fn insert(&mut self, u: usize, v: T) -> EdgeId {
+            let e = self.links.len() as u32;
+            self.links.push((self.head[u], v));
+            self.head[u] = e;
+            e
+        }
+
+        pub fn iter_row<'a>(&'a self, u: usize) -> RowIter<'a, T> {
+            RowIter {
+                owner: &self,
+                e: self.head[u],
+            }
+        }
+    }
+}
+
 pub mod mcmf {
     use std::{
         cmp::Reverse,
@@ -132,7 +218,12 @@ pub mod mcmf {
             }
         }
 
-        pub fn run(&mut self, src: u32, sink: u32) -> (Flow, Cost) {
+        pub fn run(
+            &mut self,
+            src: u32,
+            sink: u32,
+            mut yield_state: impl FnMut(&Self),
+        ) -> (Flow, Cost) {
             assert_ne!(src, sink);
 
             self.johnson_spfa();
@@ -177,9 +268,43 @@ pub mod mcmf {
 
                 self.max_flow += delta_flow;
                 self.min_cost += delta_cost;
+
+                yield_state(self);
             }
 
             (self.max_flow, self.min_cost)
         }
     }
+}
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    let n: u32 = input.value();
+    let m: u32 = input.value();
+    let p: i64 = input.value();
+    let s = input.value::<u32>() - 1;
+    let t = input.value::<u32>() - 1;
+
+    let mut net = mcmf::SuccessiveSP::empty(n as usize);
+    for _ in 0..m {
+        let u = input.value::<u32>() - 1;
+        let v = input.value::<u32>() - 1;
+        let d: i64 = input.value();
+        let c: i64 = input.value();
+        net.link(u, v, c, d);
+    }
+
+    let mut ans = f64::INFINITY;
+    let (mut prev_cost, mut prev_flow) = (0, 0);
+    net.run(s, t, |net| {
+        let (cost, flow) = (net.min_cost, net.max_flow);
+
+        ans = ans.min((cost + p) as f64 / flow as f64);
+
+        prev_cost = cost;
+        prev_flow = flow;
+    });
+    writeln!(output, "{}", ans).unwrap();
 }
