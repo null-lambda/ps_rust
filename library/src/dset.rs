@@ -4,41 +4,24 @@ mod dset {
     #[derive(Clone)]
     pub struct DisjointSet {
         // Represents parent if >= 0, size if < 0
-        parent_or_size: Vec<Cell<i32>>,
+        link: Vec<Cell<i32>>,
     }
 
     impl DisjointSet {
         pub fn new(n: usize) -> Self {
             Self {
-                parent_or_size: vec![Cell::new(-1); n],
+                link: vec![Cell::new(-1); n],
             }
-        }
-
-        fn get_parent_or_size(&self, u: usize) -> Result<usize, u32> {
-            let x = self.parent_or_size[u].get();
-            if x >= 0 {
-                Ok(x as usize)
-            } else {
-                Err((-x) as u32)
-            }
-        }
-
-        fn set_parent(&self, u: usize, p: usize) {
-            self.parent_or_size[u].set(p as i32);
-        }
-
-        fn set_size(&self, u: usize, s: u32) {
-            self.parent_or_size[u].set(-(s as i32));
         }
 
         pub fn find_root_with_size(&self, u: usize) -> (usize, u32) {
-            match self.get_parent_or_size(u) {
-                Ok(p) => {
-                    let (root, size) = self.find_root_with_size(p);
-                    self.set_parent(u, root);
-                    (root, size)
-                }
-                Err(size) => (u, size),
+            let p = self.link[u].get();
+            if p >= 0 {
+                let (root, size) = self.find_root_with_size(p as usize);
+                self.link[u].set(root as i32);
+                (root, size)
+            } else {
+                (u, (-p) as u32)
             }
         }
 
@@ -46,7 +29,7 @@ mod dset {
             self.find_root_with_size(u).0
         }
 
-        // Returns true if two sets were previously disjoint
+        // Returns true iif two sets were previously disjoint
         pub fn merge(&mut self, u: usize, v: usize) -> bool {
             let (mut u, size_u) = self.find_root_with_size(u);
             let (mut v, size_v) = self.find_root_with_size(v);
@@ -57,8 +40,8 @@ mod dset {
             if size_u < size_v {
                 mem::swap(&mut u, &mut v);
             }
-            self.set_parent(v, u);
-            self.set_size(u, size_u + size_v);
+            self.link[v].set(u as i32);
+            self.link[u].set(-((size_u + size_v) as i32));
             true
         }
     }
