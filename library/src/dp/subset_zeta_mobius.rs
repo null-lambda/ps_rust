@@ -18,7 +18,7 @@ pub mod dp_sos {
             .map(move |block| block.split_at_mut(block_size))
     }
 
-    fn propagate_subset_sum<T: CommGroup>(xs: &mut [T], modifier: impl Fn(&mut T, &mut T)) {
+    fn kronecker_prod<T: CommGroup>(xs: &mut [T], modifier: impl Fn(&mut T, &mut T)) {
         let n = xs.len();
         for e in unit_bits(n) {
             for (zs, os) in chunks_exact_mut_paired(xs, e) {
@@ -30,25 +30,25 @@ pub mod dp_sos {
     }
 
     pub fn subset_sums<T: CommGroup>(xs: &mut [T]) {
-        propagate_subset_sum(xs, |z, o| *o += z.clone());
+        kronecker_prod(xs, |z, o| *o += z.clone());
     }
 
     pub fn inv_subset_sums<T: CommGroup>(xs: &mut [T]) {
-        propagate_subset_sum(xs, |z, o| *o -= z.clone());
+        kronecker_prod(xs, |z, o| *o -= z.clone());
     }
 
     pub fn superset_sums<T: CommGroup>(xs: &mut [T]) {
-        propagate_subset_sum(xs, |z, o| *z += o.clone());
+        kronecker_prod(xs, |z, o| *z += o.clone());
     }
 
     pub fn inv_superset_sums<T: CommGroup>(xs: &mut [T]) {
-        propagate_subset_sum(xs, |z, o| *z -= o.clone());
+        kronecker_prod(xs, |z, o| *z -= o.clone());
     }
 
     // Fast Walsh-Hadamard Transform.
     // For an inverse transform, do fwht and then divide by 2^n == xs.len().
     pub fn fwht<T: CommGroup>(xs: &mut [T]) {
-        propagate_subset_sum(xs, |z, o| {
+        kronecker_prod(xs, |z, o| {
             let o_old = o.clone();
             *o = z.clone();
             *z += o_old.clone();

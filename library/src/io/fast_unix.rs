@@ -1,3 +1,4 @@
+#[allow(unused)]
 mod fast_io {
     use std::fs::File;
     use std::io::BufWriter;

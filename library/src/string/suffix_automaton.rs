@@ -168,7 +168,7 @@ pub mod suffix_trie {
             let u = &self.nodes[u as usize];
             let p = &self.nodes[u.rev_parent as usize];
             let s = u.first_endpos - u.rev_depth + 1;
-            let e = s + u.rev_depth - p.rev_depth;
+            let e = u.first_endpos - p.rev_depth + 1;
             s as usize..e as usize
         }
     }
@@ -184,40 +184,51 @@ pub mod suffix_trie {
         // Construct CSR of the suffix tree
         let mut head = vec![0u32; n_nodes + 1];
         for u in 1..n_nodes {
-            head[1 + automaton.nodes[u].rev_parent as usize] += 1;
+            head[automaton.nodes[u].rev_parent as usize] += 1;
         }
-        for u in 1..n_nodes {
+        for u in 0..n_nodes {
             head[u + 1] += head[u];
         }
-        let mut cursor = head[..n_nodes].to_vec();
 
         let mut rev_children = vec![(T::default(), 0u32); head[n_nodes] as usize];
-        for (u, node) in automaton.nodes.iter().enumerate().skip(1) {
-            let parent = &automaton.nodes[node.rev_parent as usize];
-            let b = &s[s.len() - 1 - (node.first_endpos - parent.rev_depth) as usize];
+        for (u, node_u) in automaton.nodes.iter().enumerate().skip(1) {
+            let p = node_u.rev_parent as usize;
+            let b = &s[s.len() - automaton.substr_range(u as u32).end as usize];
 
-            let p = node.rev_parent as usize;
-            rev_children[cursor[p] as usize] = (f(b), u as u32);
-            cursor[p] += 1;
+            head[p] -= 1;
+            rev_children[head[p] as usize] = (f(b), u as u32);
+        }
+        for u in 0..n_nodes {
+            rev_children[head[u as usize] as usize..head[u as usize + 1] as usize].sort_unstable();
         }
 
         // Preorder traversal
-        let mut stack = vec![(0, 0)];
         let mut sa = Vec::with_capacity(s.len());
-        while let Some((u, iv)) = stack.pop() {
-            if iv == 0 {
-                rev_children[head[u] as usize..head[u + 1] as usize].sort_unstable();
-                let node = &automaton.nodes[u];
+        let mut current_edge = (0..n_nodes).map(|u| head[u]).collect::<Vec<_>>();
+        let mut u = 0;
+        loop {
+            let p = automaton.nodes[u as usize].rev_parent;
+            let e = current_edge[u as usize];
+            current_edge[u as usize] += 1;
+
+            if e == head[u as usize] {
+                let node = &automaton.nodes[u as usize];
                 if node.is_rev_terminal() {
                     sa.push(s.len() as u32 - node.rev_depth);
                 }
             }
-            if iv < head[u + 1] - head[u] {
-                let (_c, v) = rev_children[head[u] as usize..][iv as usize];
-                stack.push((u, iv + 1));
-                stack.push((v as usize, 0));
+            if e == head[u as usize + 1] {
+                if p == UNSET {
+                    break;
+                }
+                u = p;
+                continue;
             }
+
+            let (_, v) = rev_children[e as usize];
+            u = v;
         }
+
         sa
     }
 
