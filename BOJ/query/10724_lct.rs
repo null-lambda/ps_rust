@@ -395,6 +395,7 @@ fn main() {
             let weight: i32 = input.value();
 
             forest.access_vertex_path(vert_nodes[u as usize], vert_nodes[v as usize]);
+
             let (max_weight, ei) = forest.get_node(vert_nodes[u as usize]).max;
 
             if u != v {

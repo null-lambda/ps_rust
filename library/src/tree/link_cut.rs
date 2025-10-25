@@ -1,35 +1,31 @@
 pub mod link_cut {
     use std::{
-        fmt::{self, Debug},
-        num::NonZeroU32,
+        fmt::Debug,
         ops::{Index, IndexMut},
     };
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum Branch {
-        Left = 0,
-        Right = 1,
-    }
+    pub const UNSET: u32 = !0;
 
-    impl Branch {
-        pub fn usize(self) -> usize {
-            self as usize
-        }
-
-        pub fn inv(&self) -> Self {
-            match self {
-                Branch::Left => Branch::Right,
-                Branch::Right => Branch::Left,
-            }
-        }
+    fn as_option(u: u32) -> Option<u32> {
+        (u != UNSET).then(|| u)
     }
 
     // Intrusive node link
-    #[derive(Default, Debug)]
+    #[derive(Debug)]
     pub struct Link {
         pub inv: bool,
-        pub children: [Option<NodeRef>; 2],
-        pub parent: Option<NodeRef>,
+        pub children: [u32; 2],
+        pub parent: u32,
+    }
+
+    impl Default for Link {
+        fn default() -> Self {
+            Self {
+                inv: false,
+                children: [UNSET; 2],
+                parent: UNSET,
+            }
+        }
     }
 
     pub trait IntrusiveNode {
@@ -38,31 +34,13 @@ pub mod link_cut {
     }
 
     pub trait NodeSpec: IntrusiveNode {
-        fn push_down(&mut self, _children: [Option<&mut Self>; 2]) {}
-        fn pull_up(&mut self, _children: [Option<&mut Self>; 2]) {}
-    }
+        fn push_down(&mut self, _cs: [Option<&mut Self>; 2]) {}
+        fn pull_up(&mut self, _cs: [Option<&mut Self>; 2]) {}
+        // TODO: fn reverse(&mut self) {}
 
-    #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-    pub struct NodeRef {
-        pub idx: NonZeroU32,
-    }
-
-    impl NodeRef {
-        fn usize(&self) -> usize {
-            self.idx.get() as usize
-        }
-
-        pub unsafe fn dangling() -> Self {
-            Self {
-                idx: NonZeroU32::new(!0).unwrap(),
-            }
-        }
-    }
-
-    impl Debug for NodeRef {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{}", self.idx.get())
-        }
+        // Pseudo-top tree operation:
+        // Attach or detach a chain (splice) from the rake tree of `u`.
+        fn attach_virtual(&mut self, _c: &mut Self, _inv: bool) {}
     }
 
     #[derive(Debug)]
@@ -70,124 +48,130 @@ pub mod link_cut {
         pub nodes: Vec<S>,
     }
 
-    impl<S> Index<NodeRef> for LinkCutForest<S> {
+    impl<S> Index<u32> for LinkCutForest<S> {
         type Output = S;
-        fn index(&self, index: NodeRef) -> &Self::Output {
-            &self.nodes[index.usize()]
+        fn index(&self, index: u32) -> &Self::Output {
+            &self.nodes[index as usize]
         }
     }
 
-    impl<S> IndexMut<NodeRef> for LinkCutForest<S> {
-        fn index_mut(&mut self, index: NodeRef) -> &mut Self::Output {
-            &mut self.nodes[index.usize()]
+    impl<S> IndexMut<u32> for LinkCutForest<S> {
+        fn index_mut(&mut self, index: u32) -> &mut Self::Output {
+            &mut self.nodes[index as usize]
+        }
+    }
+
+    impl<S> FromIterator<S> for LinkCutForest<S> {
+        fn from_iter<T: IntoIterator<Item = S>>(iter: T) -> Self {
+            Self {
+                nodes: Vec::from_iter(iter),
+            }
         }
     }
 
     impl<S: NodeSpec> LinkCutForest<S> {
-        pub fn new() -> Self {
-            let dummy = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
-            Self { nodes: vec![dummy] }
-        }
-
-        pub fn add_root(&mut self, node: S) -> NodeRef {
-            let idx = self.nodes.len();
-            self.nodes.push(node);
-            NodeRef {
-                idx: unsafe { NonZeroU32::new(idx as u32).unwrap_unchecked() },
+        pub unsafe fn get_many<const N: usize>(&mut self, us: [u32; N]) -> Option<[&mut S; N]> {
+            if cfg!(debug_assertions) {
+                // Check for multiple aliases
+                for i in 0..N {
+                    for j in i + 1..N {
+                        if us[i] == us[j] {
+                            return None;
+                        }
+                    }
+                }
             }
+
+            let ptr = self.nodes.as_mut_ptr();
+            Some(us.map(|u| unsafe { &mut *ptr.add(u as usize) }))
         }
 
         pub unsafe fn get_with_children<'a>(
             &'a mut self,
-            u: NodeRef,
+            u: u32,
         ) -> (&'a mut S, [Option<&'a mut S>; 2]) {
             unsafe {
                 let pool_ptr = self.nodes.as_mut_ptr();
-                let node = &mut *pool_ptr.add(u.usize());
+                let node = &mut *pool_ptr.add(u as usize);
                 let children = node
                     .link()
                     .children
-                    .map(|child| child.map(|child| &mut *pool_ptr.add(child.usize())));
+                    .map(|c| as_option(c).map(|c| &mut *pool_ptr.add(c as usize)));
                 (node, children)
             }
         }
 
-        fn reverse(&mut self, u: NodeRef) {
+        fn reverse(&mut self, u: u32) {
             let link = self[u].link_mut();
             link.inv ^= true;
             link.children.swap(0, 1);
         }
 
-        fn push_down(&mut self, u: NodeRef) {
+        fn push_down(&mut self, u: u32) {
             unsafe {
                 let link = self[u].link_mut();
                 if link.inv {
                     link.inv = false;
-                    for c in link.children.into_iter().flatten() {
-                        self.reverse(c);
+                    for c in link.children {
+                        if c != UNSET {
+                            self.reverse(c);
+                        }
                     }
                 }
 
-                let (node, children) = self.get_with_children(u);
-                node.push_down(children);
+                let (u, cs) = self.get_with_children(u);
+                u.push_down(cs);
             }
         }
 
-        fn pull_up(&mut self, node: NodeRef) {
+        pub fn pull_up(&mut self, u: u32) {
             unsafe {
-                let (node, children) = self.get_with_children(node);
-                node.pull_up(children);
+                let (nu, ncs) = self.get_with_children(u);
+                nu.pull_up(ncs);
             }
         }
 
-        pub fn internal_parent(&self, u: NodeRef) -> Result<(NodeRef, Branch), Option<NodeRef>> {
-            match self[u].link().parent {
-                Some(p) => {
-                    if self[p].link().children[Branch::Left.usize()] == Some(u) {
-                        Ok((p, Branch::Left)) // parent on a chain
-                    } else if self[p].link().children[Branch::Right.usize()] == Some(u) {
-                        Ok((p, Branch::Right)) // parent on a chain
-                    } else {
-                        Err(Some(p)) // path-parent
-                    }
+        pub fn attach_virtual(&mut self, u: u32, c: u32, inv: bool) {
+            let [u, c] = unsafe { self.get_many([u, c]).unwrap() };
+            u.attach_virtual(c, inv);
+        }
+
+        pub fn internal_parent(&self, u: u32) -> Result<(u32, u8), Option<u32>> {
+            if let Some(p) = as_option(self[u].link().parent) {
+                let [l, r] = self[p].link().children;
+                if u == l {
+                    Ok((p, 0)) // parent on a chain
+                } else if u == r {
+                    Ok((p, 1)) // parent on a chain
+                } else {
+                    Err(Some(p)) // path-parent
                 }
-                None => Err(None), // true root
+            } else {
+                Err(None) // true root
             }
         }
 
-        pub fn is_root(&self, u: NodeRef) -> bool {
+        pub fn is_root(&self, u: u32) -> bool {
             self.internal_parent(u).is_err()
         }
 
-        fn attach(&mut self, u: NodeRef, child: NodeRef, branch: Branch) {
-            debug_assert_ne!(u, child);
-            self[u].link_mut().children[branch as usize] = Some(child);
-            self[child].link_mut().parent = Some(u);
-        }
-
-        fn detach(&mut self, u: NodeRef, branch: Branch) -> Option<NodeRef> {
-            let child = self[u].link_mut().children[branch as usize].take()?;
-            self[child].link_mut().parent = None;
-            Some(child)
-        }
-
-        fn rotate(&mut self, u: NodeRef) {
+        fn rotate(&mut self, u: u32) {
             let (p, bp) = self.internal_parent(u).expect("Root shouldn't be rotated");
-            let c = self[u].link_mut().children[bp.inv().usize()].replace(p);
-            self[p].link_mut().children[bp.usize()] = c;
-            if let Some(c) = c {
-                self[c].link_mut().parent = Some(p);
+            let c = std::mem::replace(&mut self[u].link_mut().children[(bp ^ 1) as usize], p);
+            self[p].link_mut().children[bp as usize] = c;
+            if let Some(c) = as_option(c) {
+                self[c].link_mut().parent = p;
             }
 
             if let Ok((g, bg)) = self.internal_parent(p) {
-                self[g].link_mut().children[bg.usize()] = Some(u);
+                self[g].link_mut().children[bg as usize] = u;
             }
 
             self[u].link_mut().parent = self[p].link().parent;
-            self[p].link_mut().parent = Some(u);
+            self[p].link_mut().parent = u;
         }
 
-        pub fn splay(&mut self, u: NodeRef) {
+        pub fn splay(&mut self, u: u32) {
             while let Ok((p, _)) = self.internal_parent(u) {
                 if let Ok((g, _)) = self.internal_parent(p) {
                     self.push_down(g);
@@ -219,80 +203,97 @@ pub mod link_cut {
             self.push_down(u);
         }
 
-        pub fn access(&mut self, u: NodeRef) {
+        pub fn access(&mut self, u: u32) {
             unsafe {
                 self.splay(u);
-                self[u].link_mut().children[Branch::Right.usize()] = None;
-                while let Some(path_parent) = self.internal_parent(u).unwrap_err_unchecked() {
-                    self.splay(path_parent);
-                    self[path_parent].link_mut().children[Branch::Right.usize()] = Some(u);
+                let c = std::mem::replace(&mut self[u].link_mut().children[1], UNSET);
+                if c != UNSET {
+                    self.attach_virtual(u, c, false);
+                    self.pull_up(u);
+                }
+
+                while let Some(p_path) = self.internal_parent(u).unwrap_err_unchecked() {
+                    self.splay(p_path);
+
+                    let old = std::mem::replace(&mut self[p_path].link_mut().children[1], u);
+                    self.attach_virtual(p_path, u, true);
+                    if old != UNSET {
+                        self.attach_virtual(p_path, old, false);
+                    }
+
                     self.splay(u);
                 }
             }
         }
 
-        pub fn reroot(&mut self, u: NodeRef) {
+        pub fn reroot(&mut self, u: u32) {
             self.access(u);
             self.reverse(u);
         }
 
-        pub fn link(&mut self, parent: NodeRef, child: NodeRef) {
-            self.reroot(child);
-            self.link_root(parent, child);
-        }
-
-        pub fn link_root(&mut self, parent: NodeRef, child: NodeRef) {
-            self.access(child);
-            self.access(parent);
-            self.attach(child, parent, Branch::Left);
-            self.pull_up(child);
-        }
-
-        pub fn cut(&mut self, child: NodeRef) {
-            self.access(child);
-            if self[child].link().children[Branch::Left.usize()].is_some() {
-                self.detach(child, Branch::Left);
-                self.pull_up(child);
+        pub fn link(&mut self, u: u32, p: u32) -> bool {
+            if self.is_connected(u, p) {
+                return false;
             }
+
+            self.access(p);
+            self.reroot(u);
+
+            self[u].link_mut().parent = p;
+            self.attach_virtual(p, u, false);
+            self.pull_up(p);
+            true
         }
 
-        pub fn find_root(&mut self, mut u: NodeRef) -> NodeRef {
+        pub fn cut(&mut self, u: u32, v: u32) -> bool {
+            self.reroot(u);
+            self.access(v);
+            if std::mem::replace(&mut self[v].link_mut().children[0], UNSET) == UNSET {
+                return false;
+            }
+
+            self[u].link_mut().parent = UNSET;
+            self.pull_up(v);
+            true
+        }
+
+        pub fn find_root(&mut self, mut u: u32) -> u32 {
             self.access(u);
-            while let Some(left) = self[u].link().children[Branch::Left.usize()] {
-                u = left;
+            while let Some(l) = as_option(self[u].link().children[0]) {
+                u = l;
                 self.push_down(u);
             }
             self.splay(u);
             u
         }
 
-        pub fn is_connected(&mut self, u: NodeRef, v: NodeRef) -> bool {
+        pub fn is_connected(&mut self, u: u32, v: u32) -> bool {
             self.find_root(u) == self.find_root(v)
         }
 
-        pub fn get_parent(&mut self, u: NodeRef) -> Option<NodeRef> {
+        pub fn get_parent(&mut self, u: u32) -> Option<u32> {
             self.access(u);
-            let mut left = self[u].link().children[Branch::Left.usize()]?;
-            self.push_down(left);
-            while let Some(right) = self[left].link().children[Branch::Right.usize()] {
-                left = right;
-                self.push_down(left);
+            let mut l = as_option(self[u].link().children[0])?;
+            self.push_down(l);
+            while let Some(right) = as_option(self[l].link().children[1]) {
+                l = right;
+                self.push_down(l);
             }
-            self.splay(left);
-            Some(left)
+            self.splay(l);
+            Some(l)
         }
 
-        pub fn get_lca(&mut self, lhs: NodeRef, rhs: NodeRef) -> NodeRef {
-            self.access(lhs);
-            self.access(rhs);
-            self.splay(lhs);
-            self[lhs].link().parent.unwrap_or(lhs)
+        pub fn get_lca(&mut self, u: u32, v: u32) -> u32 {
+            self.access(u);
+            self.access(v);
+            self.splay(u);
+            as_option(self[u].link().parent).unwrap_or(u)
         }
 
-        pub fn access_vertex_path(&mut self, path_top: NodeRef, path_bot: NodeRef) {
-            self.reroot(path_top);
-            self.access(path_bot);
-            self.splay(path_top);
+        pub fn access_vertex_path(&mut self, u: u32, v: u32) {
+            self.reroot(u);
+            self.access(v);
+            self.splay(u);
         }
     }
 }
