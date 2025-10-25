@@ -1,3 +1,41 @@
+use std::io::Write;
+
+use hld::UNSET;
+
+mod simple_io {
+    pub struct InputAtOnce {
+        iter: std::str::SplitAsciiWhitespace<'static>,
+    }
+
+    impl InputAtOnce {
+        pub fn token(&mut self) -> &'static str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn try_value<T: std::str::FromStr>(&mut self) -> Option<T> {
+            self.token().parse().ok()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.try_value().unwrap()
+        }
+    }
+
+    pub fn stdin() -> InputAtOnce {
+        let buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let buf = Box::leak(Box::new(buf));
+        let iter = buf.split_ascii_whitespace();
+        InputAtOnce { iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
 pub mod hld {
     // Heavy-Light Decomposition
     pub const UNSET: u32 = u32::MAX;
@@ -186,6 +224,100 @@ pub mod hld {
                     return Err(k + 1);
                 }
             }
+        }
+    }
+}
+
+fn global_push_down(hld: &hld::HLD, edge_weight: &mut [u32]) {
+    for &u in &hld.tour[1..] {
+        let p = hld.parent[u as usize];
+        edge_weight[u as usize] += edge_weight[p as usize];
+    }
+}
+
+fn ascend_to_last(hld: &hld::HLD, mut u: usize, mut pred: impl FnMut(usize) -> bool) -> usize {
+    if !pred(u) {
+        return UNSET as usize;
+    }
+
+    let mut t;
+    loop {
+        t = hld.chain_top[u as usize] as usize;
+        let p = hld.parent[t] as usize;
+        if p == UNSET as usize || !pred(p) {
+            break;
+        }
+
+        u = p;
+    }
+
+    let d = hld.t_in[u] - hld.t_in[t];
+    let mut left = hld.t_in[t] as usize;
+    let mut right = left + d as usize;
+    while left < right {
+        let mid = left + right >> 1;
+        if !pred(hld.tour[mid] as usize) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+
+    hld.tour[left] as usize
+}
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    for _ in 0..input.value() {
+        let n: usize = input.value();
+        let z: i64 = input.value();
+        let xs: Vec<i64> = (0..n).map(|_| input.value()).collect();
+
+        let mut parent = vec![UNSET; n + 1];
+        let mut j = 0;
+        for i in 0..n {
+            j = j.max(i + 1);
+            while j < n && xs[i] + z >= xs[j] {
+                j += 1;
+            }
+            parent[i] = j as u32;
+        }
+        let small = hld::HLD::from_edges(n + 1, (0..n).map(|u| [u as u32, parent[u]]), n);
+
+        let mut ds_small = vec![1u32; n + 1];
+        ds_small[n] = 0;
+        global_push_down(&small, &mut ds_small);
+
+        let mut junction = vec![UNSET; n + 1];
+        for i in 0..n {
+            junction[i] = small.lca(i, i + 1) as u32;
+        }
+        let large = hld::HLD::from_edges(n + 1, (0..n).map(|u| [u as u32, junction[u]]), n);
+        let mut ds_large = vec![0u32; n + 1];
+        for u in 0..n {
+            ds_large[u] = ds_small[u] + ds_small[u + 1] - 2 * ds_small[junction[u] as usize];
+        }
+        global_push_down(&large, &mut ds_large);
+
+        for _ in 0..input.value() {
+            let l = input.value::<usize>() - 1;
+            let r = input.value::<usize>() - 1;
+
+            let mut ans = 0;
+            let x = ascend_to_last(&large, l, |u| u <= r);
+            ans += ds_large[l] - ds_large[x];
+
+            let p = ascend_to_last(&small, x, |u| u <= r);
+            ans += ds_small[x] - ds_small[p] + 1;
+
+            if x + 1 <= r {
+                let q = ascend_to_last(&small, x + 1, |u| u <= r);
+                ans += ds_small[x + 1] - ds_small[q] + 1;
+            }
+
+            writeln!(output, "{}", ans).unwrap();
         }
     }
 }
