@@ -26,7 +26,7 @@ pub mod mst {
         }
         edges.sort_unstable_by_key(|&(_, _, w)| w);
         for (u, v, w) in edges.iter().copied() {
-            if dset.merge(u as usize, v as usize) {
+            if dset.merge(u, v) {
                 yield_mst_edge(u, v, w);
                 *remained_edges -= 1;
                 if *remained_edges == 0 {
@@ -79,9 +79,7 @@ pub mod mst {
             }
         }
 
-        let i = partition_in_place(upper, |&(u, v, _)| {
-            dset.find_root(u as usize) != dset.find_root(v as usize)
-        });
+        let i = partition_in_place(upper, |&(u, v, _)| dset.root(u) != dset.root(v));
         let filtered = &mut upper[..i];
         filter_kruskal(remained_edges, dset, yield_mst_edge, filtered);
     }
