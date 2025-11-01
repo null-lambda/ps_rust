@@ -28,12 +28,10 @@ pub mod link_cut {
         }
     }
 
-    pub trait IntrusiveNode {
+    pub trait NodeSpec {
         fn link(&self) -> &Link;
         fn link_mut(&mut self) -> &mut Link;
-    }
 
-    pub trait NodeSpec: IntrusiveNode {
         fn push_down(&mut self, _cs: [Option<&mut Self>; 2]) {}
         fn pull_up(&mut self, _cs: [Option<&mut Self>; 2]) {}
         // TODO: fn reverse(&mut self) {}
@@ -136,23 +134,37 @@ pub mod link_cut {
             u.attach_virtual(c, inv);
         }
 
-        pub fn internal_parent(&self, u: u32) -> Result<(u32, u8), Option<u32>> {
-            if let Some(p) = as_option(self[u].link().parent) {
-                let [l, r] = self[p].link().children;
-                if u == l {
-                    Ok((p, 0)) // parent on a chain
-                } else if u == r {
-                    Ok((p, 1)) // parent on a chain
-                } else {
-                    Err(Some(p)) // path-parent
-                }
+        pub fn internal_parent(&self, u: u32) -> Option<(u32, u8)> {
+            let p = self[u].link().parent;
+            if p == UNSET {
+                return None;
+            }
+            let [l, r] = self[p].link().children;
+            if u == l {
+                Some((p, 0))
+            } else if u == r {
+                Some((p, 1))
             } else {
-                Err(None) // true root
+                None
+            }
+        }
+
+        pub fn path_parent(&self, u: u32) -> Option<u32> {
+            let p = self[u].link().parent;
+            if p == UNSET {
+                return None;
+            }
+
+            let [l, r] = self[p].link().children;
+            if u == l || u == r {
+                None
+            } else {
+                Some(p) // path-parent
             }
         }
 
         pub fn is_root(&self, u: u32) -> bool {
-            self.internal_parent(u).is_err()
+            self[u].link().parent == UNSET
         }
 
         fn rotate(&mut self, u: u32) {
@@ -163,7 +175,7 @@ pub mod link_cut {
                 self[c].link_mut().parent = p;
             }
 
-            if let Ok((g, bg)) = self.internal_parent(p) {
+            if let Some((g, bg)) = self.internal_parent(p) {
                 self[g].link_mut().children[bg as usize] = u;
             }
 
@@ -172,14 +184,14 @@ pub mod link_cut {
         }
 
         pub fn splay(&mut self, u: u32) {
-            while let Ok((p, _)) = self.internal_parent(u) {
-                if let Ok((g, _)) = self.internal_parent(p) {
+            while let Some((p, _)) = self.internal_parent(u) {
+                if let Some((g, _)) = self.internal_parent(p) {
                     self.push_down(g);
                     self.push_down(p);
                     self.push_down(u);
 
-                    let (_, bp) = unsafe { self.internal_parent(u).unwrap_unchecked() };
-                    let (_, bg) = unsafe { self.internal_parent(p).unwrap_unchecked() };
+                    let bg = self[g].link().children[1] == p;
+                    let bp = self[p].link().children[1] == u;
                     if bp == bg {
                         self.rotate(p); // zig-zig
                     } else {
@@ -204,25 +216,23 @@ pub mod link_cut {
         }
 
         pub fn access(&mut self, u: u32) {
-            unsafe {
+            self.splay(u);
+            let c = std::mem::replace(&mut self[u].link_mut().children[1], UNSET);
+            if c != UNSET {
+                self.attach_virtual(u, c, false);
+                self.pull_up(u);
+            }
+
+            while let Some(p) = self.path_parent(u) {
+                self.splay(p);
+
+                let old = std::mem::replace(&mut self[p].link_mut().children[1], u);
+                self.attach_virtual(p, u, true);
+                if old != UNSET {
+                    self.attach_virtual(p, old, false);
+                }
+
                 self.splay(u);
-                let c = std::mem::replace(&mut self[u].link_mut().children[1], UNSET);
-                if c != UNSET {
-                    self.attach_virtual(u, c, false);
-                    self.pull_up(u);
-                }
-
-                while let Some(p_path) = self.internal_parent(u).unwrap_err_unchecked() {
-                    self.splay(p_path);
-
-                    let old = std::mem::replace(&mut self[p_path].link_mut().children[1], u);
-                    self.attach_virtual(p_path, u, true);
-                    if old != UNSET {
-                        self.attach_virtual(p_path, old, false);
-                    }
-
-                    self.splay(u);
-                }
             }
         }
 
