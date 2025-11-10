@@ -257,11 +257,12 @@ pub mod link_cut {
 
         pub fn cut(&mut self, u: u32, v: u32) -> bool {
             self.reroot(u);
-            self.access(v);
-            if std::mem::replace(&mut self[v].link_mut().children[0], UNSET) == UNSET {
+            if self.get_parent(v) != Some(u) {
                 return false;
             }
 
+            self.access(v);
+            self[v].link_mut().children[0] = UNSET;
             self[u].link_mut().parent = UNSET;
             self.pull_up(v);
             true
