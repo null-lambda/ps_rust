@@ -55,4 +55,52 @@ pub mod dp_sos {
             *o -= o_old;
         });
     }
+
+    pub fn subset_conv<T: CommGroup + std::ops::Mul<Output = T>>(lhs: &[T], rhs: &[T]) -> Vec<T> {
+        assert!(lhs.len().is_power_of_two());
+        if lhs.is_empty() {
+            return vec![];
+        }
+        let n = (usize::BITS - 1 - usize::leading_zeros(lhs.len())) as usize;
+
+        let chop = |xs: &[T]| {
+            (0..=n)
+                .map(|k| {
+                    let mut p = (0usize..1 << n)
+                        .map(|u| {
+                            if u.count_ones() == k as u32 {
+                                xs[u].clone()
+                            } else {
+                                T::default()
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    subset_sums(&mut p);
+                    p
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let xs = chop(&lhs);
+        let ys = chop(&rhs);
+
+        let mut zs = vec![T::default(); 1 << n];
+        for k in 0..=n {
+            let mut ranked_conv = vec![T::default(); 1 << n];
+            for i in 0..=k {
+                for ((x, y), z) in xs[i].iter().zip(&ys[k - i]).zip(&mut ranked_conv) {
+                    *z += x.clone() * y.clone();
+                }
+            }
+
+            inv_subset_sums(&mut ranked_conv);
+            for u in 0usize..(1 << n).min(ranked_conv.len()) {
+                if u.count_ones() == k as u32 {
+                    zs[u] += ranked_conv[u].clone();
+                }
+            }
+        }
+
+        zs
+    }
 }

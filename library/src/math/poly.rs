@@ -685,6 +685,11 @@ pub mod poly {
                 .collect();
         }
 
+        pub fn mul_xk(mut self, k: usize) -> Self {
+            self.mul_xk_in_place(k);
+            self
+        }
+
         pub fn div_xk(&self, k: usize) -> Self {
             Self(self.0[k..].to_vec())
         }
