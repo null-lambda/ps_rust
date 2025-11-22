@@ -1184,5 +1184,5 @@ pub mod p1000000007 {
     }
 }
 
-// type M = ntt::sample::p998244353::M;
-type M = mint_mont::M32<1000000007>;
+type M = ntt::sample::p998244353::M;
+// type M = p1000000007::M;
