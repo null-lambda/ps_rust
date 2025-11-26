@@ -685,13 +685,8 @@ pub mod poly {
                 .collect();
         }
 
-        pub fn mul_xk(mut self, k: usize) -> Self {
-            self.mul_xk_in_place(k);
-            self
-        }
-
         pub fn div_xk(&self, k: usize) -> Self {
-            Self(self.0[k..].to_vec())
+            Self(self.0[k.min(self.0.len())..].to_vec())
         }
 
         pub fn factor_out_xk(&self) -> (usize, Self) {
@@ -755,10 +750,27 @@ pub mod poly {
             d
         }
 
+        // Transposed version of mul(Rev[f], -) (Tellegen's principle)
+        pub fn mul_rev_t(self, rhs: Self) -> Self {
+            let shift = self.len().saturating_sub(1);
+            let old = rhs.len();
+            let mut prod = self * rhs;
+            prod.0.truncate(old);
+            prod = prod.div_xk(shift);
+            prod
+        }
+
+        // Transposed version of mul(f, -) (Tellegen's principle)
+        pub fn mul_t(mut self, rhs: Self) -> Self {
+            self.reverse();
+            self.mul_rev_t(rhs)
+        }
+
         pub fn multipoint_eval(&self, ps: impl IntoIterator<Item = T>) -> Vec<T> {
+            let ps = ps.into_iter().collect::<Vec<_>>();
             let mut divisors: Vec<_> = ps
-                .into_iter()
-                .map(|p| Poly::new(vec![-p, T::one()]))
+                .iter()
+                .map(|p| Poly::new(vec![-p.clone(), T::one()]))
                 .collect();
             if divisors.is_empty() {
                 return vec![];
@@ -769,16 +781,45 @@ pub mod poly {
                 divisors.push(divisors[i << 1].clone() * divisors[i << 1 | 1].clone());
             }
 
+            // let mut remainders = vec![Poly::zero(); 2 * n - 1];
+            // remainders[2 * n - 2] = self.clone();
+            // for i in (0..n - 1).rev() {
+            //     remainders[i + n] %= std::mem::take(&mut divisors[i + n]);
+            //     remainders[i << 1] = remainders[i + n].clone();
+            //     remainders[i << 1 | 1] = std::mem::take(&mut remainders[i + n]);
+            // }
+            // (0..n)
+            //     .map(|i| remainders[i].eval(-divisors[i].0[0].clone()))
+            //     .collect()
+
+            // Transposed version of $\sum_i c_i/(1-a_i x)$ (Tellegen's principle)
             let mut remainders = vec![Poly::zero(); 2 * n - 1];
-            remainders[2 * n - 2] = self.clone();
+
+            let mut f = self.clone();
+            let k = f.len();
+
+            let mut d = std::mem::take(&mut divisors[2 * n - 2]);
+            d.reverse();
+            d = d.inv_mod_xk(k);
+            d.0.resize(k, T::zero());
+
+            f.0.resize(n + k - 1, T::zero());
+            f = d.mul_t(f);
+            f.0.resize(n, T::zero());
+            remainders[2 * n - 2] = f;
+
             for i in (0..n - 1).rev() {
-                remainders[i + n] %= std::mem::take(&mut divisors[i + n]);
-                remainders[i << 1] = remainders[i + n].clone();
-                remainders[i << 1 | 1] = std::mem::take(&mut remainders[i + n]);
+                let mut old = std::mem::take(&mut remainders[i + n]);
+                let mut l = std::mem::take(&mut divisors[i << 1]);
+                let mut r = std::mem::take(&mut divisors[i << 1 | 1]);
+
+                l = l.mul_rev_t(old.clone());
+                r = r.mul_rev_t(old);
+
+                remainders[i << 1] = r;
+                remainders[i << 1 | 1] = l;
             }
-            (0..n)
-                .map(|i| remainders[i].eval(-divisors[i].0[0].clone()))
-                .collect()
+            (0..n).map(|i| remainders[i].coeff(0)).collect()
         }
 
         pub fn pow_mod_xk(&self, mut exp: u64, k: usize) -> Self {
