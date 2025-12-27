@@ -809,7 +809,7 @@ pub mod poly {
             remainders[2 * n - 2] = f;
 
             for i in (0..n - 1).rev() {
-                let mut old = std::mem::take(&mut remainders[i + n]);
+                let old = std::mem::take(&mut remainders[i + n]);
                 let mut l = std::mem::take(&mut divisors[i << 1]);
                 let mut r = std::mem::take(&mut divisors[i << 1 | 1]);
 
