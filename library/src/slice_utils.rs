@@ -18,6 +18,17 @@ fn group_indices_by<'a, T>(
     })
 }
 
+fn group_indices_by_key<'a, T, K: PartialEq>(
+    xs: &'a [T],
+    mut key: impl 'a + FnMut(&T) -> K,
+) -> impl 'a + Iterator<Item = [usize; 2]> {
+    group_indices_by(xs, move |a, b| key(a) == key(b))
+}
+
+fn group_indices<'a, T: PartialEq>(xs: &'a [T]) -> impl 'a + Iterator<Item = [usize; 2]> {
+    group_indices_by(xs, |x, y| x == y)
+}
+
 fn group_by<'a, T>(
     xs: &'a [T],
     pred: impl 'a + FnMut(&T, &T) -> bool,
@@ -30,6 +41,10 @@ fn group_by_key<'a, T, K: PartialEq>(
     mut key: impl 'a + FnMut(&T) -> K,
 ) -> impl 'a + Iterator<Item = &'a [T]> {
     group_by(xs, move |a, b| key(a) == key(b))
+}
+
+fn groups<'a, T: PartialEq>(xs: &'a [T]) -> impl 'a + Iterator<Item = &'a [T]> {
+    group_by(xs, |x, y| x == y)
 }
 
 fn partition_in_place<T>(xs: &mut [T], mut pred: impl FnMut(&T) -> bool) -> (&mut [T], &mut [T]) {
