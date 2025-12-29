@@ -1,3 +1,4 @@
+// TODO: cast modint from signed integers
 pub mod algebra {
     use std::ops::*;
     pub trait Unsigned:
@@ -16,20 +17,16 @@ pub mod algebra {
         }
         fn one() -> Self;
     }
-
     macro_rules! impl_unsigned {
         ($($t:ty)+) => {
-            $(
-                impl Unsigned for $t {
-                    fn one() -> Self {
-                        1
-                    }
+            $(impl Unsigned for $t {
+                fn one() -> Self {
+                    1
                 }
-            )+
+            })+
         };
     }
     impl_unsigned!(u8 u16 u32 u64 u128 usize);
-
     pub trait SemiRing:
         Add<Output = Self>
         + Sub<Output = Self>
@@ -66,9 +63,7 @@ pub mod algebra {
             res
         }
     }
-
     pub trait CommRing: SemiRing + Neg<Output = Self> {}
-
     pub trait Field:
         CommRing
         + Div<Output = Self>
@@ -78,27 +73,18 @@ pub mod algebra {
     {
         fn inv(&self) -> Self;
     }
-
     macro_rules! impl_semiring {
         ($($t:ty)+) => {
-            $(
-                impl SemiRing for $t {
-                    fn one() -> Self {
-                        1
-                    }
+            $(impl SemiRing for $t {
+                fn one() -> Self {
+                    1
                 }
-            )+
+            })+
         };
     }
-
     macro_rules! impl_commring {
-        ($($t:ty)+) => {
-            $(
-                impl CommRing for $t {}
-            )+
-        };
+        ($($t:ty)+) => { $(impl CommRing for $t {})+ };
     }
-
     impl_semiring!(u8 u16 u32 u64 u128 usize);
     impl_semiring!(i8 i16 i32 i64 i128 isize);
     impl_commring!(i8 i16 i32 i64 i128 isize);
@@ -115,13 +101,14 @@ pub mod mint_mont {
         const M_INV: Self::U;
         const R2: Self::U;
         fn to_double(u: Self::U) -> Self::D;
-        fn reduce_double(value: Self::D) -> Self::U;
+        fn reduce(value: Self::D) -> Self::U;
     }
 
     #[derive(Clone, Copy, PartialEq, Eq)]
     pub struct MInt<M: ModSpec>(M::U);
 
     impl<M: ModSpec> MInt<M> {
+        pub const MODULUS: M::U = M::MODULUS;
         fn new(value: M::U) -> Self {
             MInt(value) * MInt(M::R2)
         }
@@ -131,19 +118,16 @@ pub mod mint_mont {
         ($wrapper:ident $spec:ident $spec_impl:ident, U = $single:ty, D = $double:ty, EXP = $exp:expr, LOG2_EXP = $log2_exp: expr) => {
             #[derive(Debug, Clone, Copy, PartialEq, Eq)]
             pub struct $spec<const M: $single>;
-
             impl<const MOD: $single> ModSpec for $spec<MOD> {
                 type U = $single;
                 type D = $double;
                 const MODULUS: $single = MOD;
                 const M_INV: $single = $spec_impl::eval_m_inv(MOD);
                 const R2: $single = $spec_impl::eval_r2(MOD);
-
                 fn to_double(u: Self::U) -> Self::D {
                     u as Self::D
                 }
-
-                fn reduce_double(x: Self::D) -> Self::U {
+                fn reduce(x: Self::D) -> Self::U {
                     debug_assert!(x < (MOD as $double) * (MOD as $double));
                     let q = (x as $single).wrapping_mul(Self::M_INV);
                     let a = ((q as $double * Self::MODULUS as $double) >> $exp) as $single;
@@ -154,7 +138,6 @@ pub mod mint_mont {
                     res
                 }
             }
-
             mod $spec_impl {
                 pub const fn eval_m_inv(m: $single) -> $single {
                     debug_assert!(m % 2 == 1, "modulus must be coprime with 2");
@@ -168,13 +151,11 @@ pub mod mint_mont {
                     }
                     m_inv
                 }
-
                 pub const fn eval_r2(m: $single) -> $single {
                     let r = m.wrapping_neg() % m;
                     (r as $double * r as $double % m as $double) as $single
                 }
             }
-
             pub type $wrapper<const M: $single> = MInt<$spec<M>>;
         };
     }
@@ -189,7 +170,6 @@ pub mod mint_mont {
             }
         }
     }
-
     impl<M: ModSpec> SubAssign<&'_ Self> for MInt<M> {
         fn sub_assign(&mut self, rhs: &Self) {
             if self.0 < rhs.0 {
@@ -198,13 +178,11 @@ pub mod mint_mont {
             self.0 -= rhs.0;
         }
     }
-
     impl<M: ModSpec> MulAssign<&'_ Self> for MInt<M> {
         fn mul_assign(&mut self, rhs: &Self) {
-            self.0 = M::reduce_double(M::to_double(self.0) * M::to_double(rhs.0));
+            self.0 = M::reduce(M::to_double(self.0) * M::to_double(rhs.0));
         }
     }
-
     impl<M: ModSpec> DivAssign<&'_ Self> for MInt<M> {
         fn div_assign(&mut self, rhs: &Self) {
             self.mul_assign(&rhs.inv());
@@ -218,7 +196,6 @@ pub mod mint_mont {
                     self.$op_assign(&rhs);
                 }
             }
-
             impl<M: ModSpec> $Op<&'_ Self> for MInt<M> {
                 type Output = Self;
                 fn $op(mut self, rhs: &Self) -> Self {
@@ -226,7 +203,6 @@ pub mod mint_mont {
                     self
                 }
             }
-
             impl<M: ModSpec> $Op for MInt<M> {
                 type Output = MInt<M>;
                 fn $op(self, rhs: Self) -> Self::Output {
@@ -250,28 +226,23 @@ pub mod mint_mont {
             MInt(res)
         }
     }
-
     impl<M: ModSpec> Neg for MInt<M> {
         type Output = Self;
         fn neg(self) -> Self::Output {
             (&self).neg()
         }
     }
-
     impl<M: ModSpec> Default for MInt<M> {
         fn default() -> Self {
             Self(M::U::default())
         }
     }
-
     impl<M: ModSpec> SemiRing for MInt<M> {
         fn one() -> Self {
             Self(1.into()) * Self(M::R2)
         }
     }
-
     impl<M: ModSpec> CommRing for MInt<M> {}
-
     impl<M: ModSpec> Field for MInt<M> {
         fn inv(&self) -> Self {
             self.pow(M::MODULUS - M::U::from(2))
@@ -281,19 +252,16 @@ pub mod mint_mont {
     pub trait CastImpl<U: Unsigned>: Unsigned {
         fn cast_into<M: ModSpec<U = U>>(self) -> MInt<M>;
     }
-
     // impl<M: ModSpec, S: CastImpl<M::U>> From<S> for MInt<M> {
     //     fn from(value: S) -> Self {
     //         value.cast_into()
     //     }
     // }
-
     impl<U: Unsigned> CastImpl<U> for U {
         fn cast_into<M: ModSpec<U = U>>(self) -> MInt<M> {
             MInt::new(self)
         }
     }
-
     macro_rules! impl_cast {
         (@common $src:ident) => {
             impl<M: ModSpec> From<$src> for MInt<M>
@@ -304,11 +272,10 @@ pub mod mint_mont {
                 }
             }
         };
-
         (@eq $src:ident $u:ident) => {
             impl<M: ModSpec<U = $u>> From<MInt<M>> for $u {
                 fn from(x: MInt<M>) -> Self {
-                    M::reduce_double(M::to_double(x.0))
+                    M::reduce(M::to_double(x.0))
                 }
             }
 
@@ -327,7 +294,6 @@ pub mod mint_mont {
                 }
             }
         };
-
         (@cascade $lower:ident $($upper:ident)*) => {
             $(
                 impl_cast!(@lt $lower $upper);
@@ -352,7 +318,6 @@ pub mod mint_mont {
             M::U::from(*self).fmt(f)
         }
     }
-
     impl<M: ModSpec> std::fmt::Display for MInt<M>
     where
         M::U: std::fmt::Display + From<MInt<M>>,
@@ -361,7 +326,6 @@ pub mod mint_mont {
             M::U::from(*self).fmt(f)
         }
     }
-
     impl<M: ModSpec> std::str::FromStr for MInt<M>
     where
         M::U: std::str::FromStr,
@@ -373,7 +337,7 @@ pub mod mint_mont {
     }
 }
 
-pub mod ntt {
+pub mod conv {
     use super::algebra::*;
 
     fn bit_reversal_perm<T>(xs: &mut [T]) {
@@ -384,23 +348,13 @@ pub mod ntt {
         }
 
         for i in 0..n as u32 {
-            let rev = i.reverse_bits() >> (u32::BITS - n_log2);
+            let rev = i.reverse_bits() >> u32::BITS - n_log2;
             if i < rev {
                 xs.swap(i as usize, rev as usize);
             }
         }
     }
-
-    pub fn run<T: CommRing>(proot: T, xs: &mut [T]) {
-        if xs.len() <= 20 {
-            naive(proot, xs);
-        } else {
-            radix4(proot, xs);
-        }
-    }
-
-    // naive O(n^2)
-    pub fn naive<T: CommRing>(proot: T, xs: &mut [T]) {
+    pub fn ntt_naive<T: CommRing>(proot: T, xs: &mut [T]) {
         let n = xs.len().next_power_of_two();
         let proot_pow: Vec<T> =
             std::iter::successors(Some(T::one()), |acc| Some(acc.clone() * &proot))
@@ -417,14 +371,13 @@ pub mod ntt {
             *x = r;
         }
     }
-
-    pub fn radix4<T: CommRing>(proot: T, xs: &mut [T]) {
+    pub fn ntt_radix4<T: CommRing>(proot: T, xs: &mut [T]) {
         let n = xs.len();
         assert!(n.is_power_of_two());
-        let n_log2 = u32::BITS - (n as u32).leading_zeros() - 1;
+        let n_log = u32::BITS - (n as u32).leading_zeros() - 1;
         bit_reversal_perm(xs);
 
-        let base: Vec<_> = (0..n_log2)
+        let base: Vec<_> = (0..n_log)
             .scan(proot.clone(), |acc, _| {
                 let prev = acc.clone();
                 *acc *= acc.clone();
@@ -439,7 +392,7 @@ pub mod ntt {
 
         let update_proot_pow = |proot_pow: &mut [T], k: u32| {
             let step = 1 << k;
-            let base = base[(n_log2 - k - 1) as usize].clone();
+            let base = base[(n_log - k - 1) as usize].clone();
             for i in (0..step).rev() {
                 proot_pow[i * 2 + 1] = proot_pow[i].clone() * base.clone();
                 proot_pow[i * 2] = proot_pow[i].clone();
@@ -447,7 +400,7 @@ pub mod ntt {
         };
 
         let mut k = 0;
-        if n_log2 % 2 == 1 {
+        if n_log % 2 == 1 {
             let step = 1 << k;
             // radix-2 butterfly
             update_proot_pow(&mut proot_pow, k);
@@ -462,7 +415,7 @@ pub mod ntt {
             }
             k += 1;
         }
-        while k < n_log2 {
+        while k < n_log {
             let step = 1 << k;
             // radix-4 butterfly
             update_proot_pow(&mut proot_pow, k);
@@ -498,127 +451,192 @@ pub mod ntt {
             k += 2;
         }
     }
-
-    pub trait NTTSpec:
-        SemiRing + From<u32> + From<u64> + From<u128> + Into<u32> + std::fmt::Debug
-    {
-        fn try_nth_proot(_n: u32) -> Option<Self> {
-            None
+    pub fn ntt<T: CommRing>(proot: T, xs: &mut [T]) {
+        if xs.len() <= 20 {
+            ntt_naive(proot, xs);
+        } else {
+            ntt_radix4(proot, xs);
         }
     }
 
-    // TODO: replace with const fn
-    pub mod sample {
-        // Check:
-        // https://oeis.org/A039687
-        // https://oeis.org/A050526
-        // https://oeis.org/A300407
-        use super::NTTSpec;
-        use crate::algebra::SemiRing;
-        use crate::mint_mont::*;
-        pub mod p13631489 {
-            use super::*;
-            pub const P: u32 = 13631489;
-            pub const GEN: u32 = 15;
-            pub type M = M32<P>;
-            impl NTTSpec for M {
-                fn try_nth_proot(n: u32) -> Option<Self> {
-                    assert!((P - 1) % n as u32 == 0);
-                    M::from(GEN).pow((P - 1) / n as u32).into()
-                }
+    const P_GENS_32: &'static [[u32; 2]] = &[
+        [998244353, 3],
+        [167772161, 3],
+        [104857601, 3],
+        [13631489, 15],
+    ];
+    pub const fn try_gen_32(p: u32) -> Option<u32> {
+        let mut i = 0;
+        while i < P_GENS_32.len() {
+            if P_GENS_32[i][0] == p {
+                return Some(P_GENS_32[i][1]);
+            }
+            i += 1;
+        }
+        None
+    }
+    pub fn try_proot_m32<const P: u32>(n: usize) -> Option<crate::mint_mont::M32<P>> {
+        let g = try_gen_32(P)?;
+        if (P - 1) % n as u32 != 0 {
+            return None;
+        }
+        Some(crate::mint_mont::M32::from(g).pow((P - 1) / n as u32))
+    }
+
+    fn conv_naive<T: SemiRing>(mut lhs: Vec<T>, mut rhs: Vec<T>) -> Vec<T> {
+        if lhs.len() == 0 || rhs.len() == 0 {
+            return lhs;
+        }
+        if lhs.len() > rhs.len() {
+            std::mem::swap(&mut lhs, &mut rhs);
+        }
+        let n = lhs.len() + rhs.len() - 1;
+        let mut res = vec![T::zero(); n];
+        for i in 0..lhs.len() {
+            for j in 0..rhs.len() {
+                res[i + j] += lhs[i].clone() * rhs[j].clone();
             }
         }
-
-        pub mod p104857601 {
-            use super::*;
-            pub const P: u32 = 104857601;
-            pub const GEN: u32 = 3;
-            pub type M = M32<P>;
-            impl NTTSpec for M {
-                fn try_nth_proot(n: u32) -> Option<Self> {
-                    assert!((P - 1) % n as u32 == 0);
-                    M::from(GEN).pow((P - 1) / n as u32).into()
-                }
-            }
+        res
+    }
+    fn conv_with_proot<T: Field + From<u32>>(
+        mut lhs: Vec<T>,
+        mut rhs: Vec<T>,
+        gen_proot: fn(usize) -> Option<T>,
+    ) -> Result<Vec<T>, (Vec<T>, Vec<T>)> {
+        if lhs.len().min(rhs.len()) <= 20 {
+            return Ok(conv_naive(lhs, rhs));
         }
 
-        pub mod p167772161 {
-            use super::*;
-            pub const P: u32 = 167772161;
-            pub const GEN: u32 = 3;
-            pub type M = M32<P>;
-            impl NTTSpec for M {
-                fn try_nth_proot(n: u32) -> Option<Self> {
-                    assert!((P - 1) % n as u32 == 0);
-                    M::from(GEN).pow((P - 1) / n as u32).into()
+        let n = lhs.len() + rhs.len() - 1;
+        let n_pad = n.next_power_of_two();
+        let proot = match gen_proot(n_pad) {
+            Some(proot) => proot,
+            None => return Err((lhs, rhs)),
+        };
+
+        lhs.resize(n_pad, T::zero());
+        rhs.resize(n_pad, T::zero());
+        ntt(proot.clone(), &mut lhs);
+        ntt(proot.clone(), &mut rhs);
+        lhs.iter_mut().zip(&rhs).for_each(|(x, y)| *x *= y);
+        ntt(proot.clone().inv(), &mut lhs);
+        let n_inv = T::from(n_pad as u32).inv();
+        lhs.iter_mut().for_each(|x| *x *= n_inv.clone());
+        lhs.truncate(n);
+        Ok(lhs)
+    }
+    fn conv_with_crt_32<T: SemiRing + Into<u32> + From<u128>>(lhs: Vec<T>, rhs: Vec<T>) -> Vec<T> {
+        const fn mod_pow(mut base: u64, mut exp: u64, m: u64) -> u64 {
+            let mut res = 1;
+            while exp > 0 {
+                if exp % 2 == 1 {
+                    res = res * base % m;
                 }
+                base = base * base % m;
+                exp >>= 1;
+            }
+            res
+        }
+        const fn crt3_coeff_u32(ps: [u32; 3]) -> (u128, [u128; 3]) {
+            let ps = [ps[0] as u64, ps[1] as u64, ps[2] as u64];
+            let q = ps[0] as u128 * ps[1] as u128 * ps[2] as u128;
+            let qs = [ps[1] * ps[2], ps[0] * ps[2], ps[0] * ps[1]];
+            let rs = [
+                mod_pow(qs[0] % ps[0], ps[0] - 2, ps[0]),
+                mod_pow(qs[1] % ps[1], ps[1] - 2, ps[1]),
+                mod_pow(qs[2] % ps[2], ps[2] - 2, ps[2]),
+            ];
+            let ms = [
+                qs[0] as u128 * rs[0] as u128,
+                qs[1] as u128 * rs[1] as u128,
+                qs[2] as u128 * rs[2] as u128,
+            ];
+            (q, ms)
+        }
+        use crate::conv;
+        type M<const P: u32> = crate::mint_mont::M32<P>;
+        const P0: u32 = conv::P_GENS_32[0][0];
+        const P1: u32 = conv::P_GENS_32[1][0];
+        const P2: u32 = conv::P_GENS_32[2][0];
+        const Q: u128 = crt3_coeff_u32([P0, P1, P2]).0;
+        const MS: [u128; 3] = crt3_coeff_u32([P0, P1, P2]).1;
+
+        fn forward<T: Into<u32> + Clone, const P: u32>(lhs: &[T], rhs: &[T]) -> Vec<M<P>> {
+            let c = |x: &T| <M<P> as From<u32>>::from(x.clone().into());
+            let lhs = lhs.iter().map(c).collect();
+            let rhs = rhs.iter().map(c).collect();
+            conv_with_proot(lhs, rhs, try_proot_m32).unwrap()
+        }
+        let h0: Vec<M<P0>> = forward(&lhs, &rhs);
+        let h1: Vec<M<P1>> = forward(&lhs, &rhs);
+        let h2: Vec<M<P2>> = forward(&lhs, &rhs);
+        (h0.into_iter().zip(h1).zip(h2))
+            .map(|((x0, x1), x2)| {
+                let a = MS[0] * u32::from(x0) as u128
+                    + MS[1] * u32::from(x1) as u128
+                    + MS[2] * u32::from(x2) as u128;
+                T::from(a % Q)
+            })
+            .collect()
+    }
+
+    pub trait Conv: SemiRing {
+        fn conv(lhs: Vec<Self>, rhs: Vec<Self>) -> Vec<Self>;
+    }
+    impl<const P: u32> Conv for crate::mint_mont::M32<P> {
+        fn conv(lhs: Vec<Self>, rhs: Vec<Self>) -> Vec<Self> {
+            match conv_with_proot(lhs, rhs, try_proot_m32) {
+                Ok(res) => res,
+                Err((lhs, rhs)) => conv_with_crt_32(lhs, rhs),
             }
         }
+    }
+}
 
-        pub mod p998244353 {
-            use super::*;
-            pub const P: u32 = 998244353;
-            pub const GEN: u32 = 3;
-            pub type M = M32<P>;
-            impl NTTSpec for M {
-                fn try_nth_proot(n: u32) -> Option<Self> {
-                    assert!((P - 1) % n as u32 == 0);
-                    M::from(GEN).pow((P - 1) / n as u32).into()
-                }
+pub mod comb {
+    pub struct Comb<M> {
+        pub fc: Vec<M>,
+        pub ifc: Vec<M>,
+    }
+    impl<T: crate::algebra::Field + From<u32>> Comb<T> {
+        pub fn new(bound: usize) -> Self {
+            // Suggestion: use bound.next_power_of_two
+            assert!(bound >= 1);
+
+            let mut fc = vec![T::one()];
+            for i in 1..=bound {
+                fc.push(fc[i as usize - 1].clone() * T::from(i as u32));
             }
+
+            let mut ifc = vec![T::one(); bound as usize + 1];
+            ifc[bound as usize] = fc[bound as usize].inv();
+            for i in (2..=bound).rev() {
+                ifc[i as usize - 1] = ifc[i as usize].clone() * T::from(i as u32);
+            }
+
+            Self { fc, ifc }
         }
-
-        pub mod p1092616193 {
-            use super::*;
-            pub const P: u32 = 1092616193;
-            pub const GEN: u32 = 3;
-            pub type M = M32<P>;
-            impl NTTSpec for M {
-                fn try_nth_proot(n: u32) -> Option<Self> {
-                    assert!((P - 1) % n as u32 == 0);
-                    M::from(GEN).pow((P - 1) / n as u32).into()
-                }
-            }
+        pub fn inv(&self, i: usize) -> T {
+            self.ifc[i].clone() * self.fc[i - 1].clone()
+        }
+        pub fn binom(&self, n: usize, k: usize) -> T {
+            self.fc[n].clone() * self.ifc[k].clone() * self.ifc[n - k].clone()
         }
     }
 }
 
 pub mod poly {
     use crate::algebra::*;
-    use crate::ntt::{self, NTTSpec};
-    use std::cell::OnceCell;
+    use crate::comb::Comb;
+    use crate::conv::Conv;
     use std::collections::VecDeque;
     use std::ops::*;
-
-    // TODO: move convolution part to the trait `NTTSpec` (or rename it Conv)
-    // and implement const function gen_proot for mint_mont
-    //
-    // TODO: cast modint from signed integers
-    //
-    // TODO: add from_const for modints (remove TLS variable)
-
-    // shouldn't belong here
-    fn crt3_coeff_u64<
-        T0: NTTSpec + Field,
-        T1: NTTSpec + Field,
-        T2: NTTSpec + Field,
-        TR: NTTSpec + Field,
-    >(
-        ps: [u64; 3],
-    ) -> ([u64; 3], (T0, T1, T2)) {
-        let qs = [ps[1] * ps[2], ps[0] * ps[2], ps[0] * ps[1]];
-        let rs = (
-            T0::from(qs[0]).inv(),
-            T1::from(qs[1]).inv(),
-            T2::from(qs[2]).inv(),
-        );
-        (qs, rs)
-    }
 
     #[derive(Debug, Default, Clone, PartialEq, Eq)]
     pub struct Poly<T>(pub Vec<T>);
 
-    impl<T: SemiRing> Poly<T> {
+    impl<T: CommRing> Poly<T> {
         pub fn new(coeffs: Vec<T>) -> Self {
             Self(coeffs)
         }
@@ -668,6 +686,9 @@ pub mod poly {
             }
             self
         }
+        pub fn clone_mod_xk(&self, k: usize) -> Self {
+            Self(self.0[..self.0.len().min(k)].to_vec())
+        }
         pub fn mul_xk(mut self, k: usize) -> Self {
             ((0..k).map(|_| T::zero()))
                 .chain(std::mem::take(&mut self.0))
@@ -690,7 +711,142 @@ pub mod poly {
             Self(iter.into_iter().collect())
         }
     }
-    impl<T: NTTSpec + Field> Poly<T> {
+    impl<T: From<u32> + Field> Poly<T> {
+        pub fn deriv(&self) -> Self {
+            Self(
+                ((1u32..).zip(&self.0[1..]))
+                    .map(|(i, x)| T::from(i) * x)
+                    .collect(),
+            )
+        }
+    }
+    impl<T: CommRing> From<T> for Poly<T> {
+        fn from(c: T) -> Self {
+            Self(vec![c])
+        }
+    }
+    impl<T: CommRing> MulAssign<T> for Poly<T> {
+        fn mul_assign(&mut self, rhs: T) {
+            self.0.iter_mut().for_each(|c| c.mul_assign(rhs.clone()));
+        }
+    }
+    impl<T: CommRing> Mul<T> for Poly<T> {
+        type Output = Self;
+        fn mul(mut self, rhs: T) -> Self::Output {
+            self *= rhs;
+            self
+        }
+    }
+    impl<T: CommRing> AddAssign<&'_ Self> for Poly<T> {
+        fn add_assign(&mut self, rhs: &Self) {
+            self.0.resize(self.len().max(rhs.len()), T::zero());
+            self.0
+                .iter_mut()
+                .zip(&rhs.0)
+                .for_each(|(a, b)| a.add_assign(b));
+        }
+    }
+    impl<T: CommRing> Add<&'_ Self> for Poly<T> {
+        type Output = Self;
+        fn add(mut self, rhs: &Self) -> Self {
+            self += rhs;
+            self
+        }
+    }
+    impl<T: CommRing> Add<Self> for Poly<T> {
+        type Output = Self;
+        fn add(mut self, mut rhs: Self) -> Self {
+            if self.len() < rhs.len() {
+                std::mem::swap(&mut self, &mut rhs);
+            }
+            self += &rhs;
+            self
+        }
+    }
+    impl<T: CommRing> SubAssign<&'_ Self> for Poly<T> {
+        fn sub_assign(&mut self, rhs: &Self) {
+            self.0.resize(self.len().max(rhs.len()), T::zero());
+            self.0.iter_mut().zip(&rhs.0).for_each(|(x, y)| *x -= y);
+        }
+    }
+    impl<T: CommRing> Sub<&'_ Self> for Poly<T> {
+        type Output = Self;
+        fn sub(mut self, rhs: &Self) -> Self {
+            self -= rhs;
+            self
+        }
+    }
+    impl<T: CommRing> Sub<Self> for Poly<T> {
+        type Output = Self;
+        fn sub(mut self, mut rhs: Self) -> Self {
+            if self.len() >= rhs.len() {
+                self.0.iter_mut().zip(&rhs.0).for_each(|(x, y)| *x -= y);
+                self
+            } else {
+                std::mem::swap(&mut self, &mut rhs);
+                self.0.iter_mut().zip(&rhs.0).for_each(|(x, y)| *x -= y);
+                -self
+            }
+        }
+    }
+    impl<T: Conv + Field> Mul<Self> for Poly<T> {
+        type Output = Self;
+        fn mul(self, rhs: Self) -> Self {
+            Self(Conv::conv(self.0, rhs.0))
+        }
+    }
+    impl<T: Conv + Field> MulAssign<Self> for Poly<T> {
+        fn mul_assign(&mut self, rhs: Self) {
+            let lhs = std::mem::take(self);
+            *self = lhs * rhs;
+        }
+    }
+    impl<T: Conv + Field + From<u32>> DivAssign<Self> for Poly<T> {
+        fn div_assign(&mut self, mut rhs: Self) {
+            assert!(!rhs.is_zero());
+            self.pop_zeros();
+            rhs.pop_zeros();
+            if self.degree() < rhs.degree() {
+                self.0.clear();
+                return;
+            }
+
+            let n = self.degree();
+            let m = rhs.degree();
+            let l = n - m + 1;
+
+            self.reverse();
+            *self = std::mem::take(self).mod_xk(l);
+            rhs.reverse();
+            rhs = rhs.mod_xk(l);
+
+            *self *= rhs.inv_mod_xk(l);
+            self.0.resize(l, T::zero());
+            self.reverse();
+        }
+    }
+    impl<T: Conv + Field + From<u32>> RemAssign<Self> for Poly<T> {
+        fn rem_assign(&mut self, rhs: Self) {
+            let mut q = self.clone();
+            q /= rhs.clone();
+            q *= rhs;
+            *self -= &q;
+            self.pop_zeros();
+        }
+    }
+    impl<T: CommRing> Neg for &Poly<T> {
+        type Output = Poly<T>;
+        fn neg(self) -> Poly<T> {
+            Poly(self.0.iter().map(|c| -c.clone()).collect())
+        }
+    }
+    impl<T: CommRing> Neg for Poly<T> {
+        type Output = Self;
+        fn neg(self) -> Self {
+            -&self
+        }
+    }
+    impl<T: Conv + Field + From<u32>> Poly<T> {
         pub fn prod(xs: impl IntoIterator<Item = Self>) -> Self {
             let mut factors: VecDeque<_> = xs.into_iter().collect();
 
@@ -768,7 +924,7 @@ pub mod poly {
 
             let mut d = std::mem::take(&mut divisors[2 * n - 2]);
             d.reverse();
-            d = d.recip_mod_xk(k);
+            d = d.inv_mod_xk(k);
             d.0.resize(k, T::zero());
 
             f.0.resize(n + k - 1, T::zero());
@@ -803,50 +959,41 @@ pub mod poly {
             }
             res.mod_xk(k)
         }
-        pub fn integrate(&self) -> Self {
-            if self.0.is_empty() {
-                return self.clone();
-            }
-
-            Self(
-                std::iter::once(T::zero())
-                    .chain((1u32..).zip(&self.0).map(|(i, x)| T::from(i).inv() * x))
-                    .collect(),
-            )
+        pub fn integrate(&self, cx: &Comb<T>) -> Self {
+            std::iter::once(T::zero())
+                .chain(self.0.iter().enumerate().map(|(i, x)| cx.inv(i + 1) * x))
+                .collect()
         }
-        pub fn recip_mod_xk(&self, k: usize) -> Self {
+        pub fn inv_mod_xk(&self, k: usize) -> Self {
             assert!(self.0[0] != T::zero(), "");
             let mut res = Poly::from(self.0[0].inv());
             let mut i = 1;
             let two = Poly::from(T::from(2u32));
             while i < k {
-                i <<= 1;
-                let r = self.clone().mod_xk(i);
-                res *= two.clone() - &(res.clone() * r);
+                i = (i << 1).min(k);
+                res *= two.clone() - res.clone() * self.clone_mod_xk(i);
                 res = res.mod_xk(i);
             }
             res.mod_xk(k)
         }
-        pub fn ln_mod_xk(&self, k: usize) -> Self {
+        pub fn ln_mod_xk(&self, cx: &Comb<T>, k: usize) -> Self {
             assert!(self.0[0] != T::zero(), "");
-
-            let mut deriv_ln = self.deriv();
-            deriv_ln *= self.clone().recip_mod_xk(k);
-            deriv_ln.mod_xk(k.saturating_sub(1)).integrate()
+            let mut q = self.deriv();
+            q *= self.clone().inv_mod_xk(k);
+            q.mod_xk(k.saturating_sub(1)).integrate(cx)
         }
-        pub fn exp_mod_xk(&self, k: usize) -> Self {
+        pub fn exp_mod_xk(&self, cx: &Comb<T>, k: usize) -> Self {
             assert!(self.0.is_empty() || self.0[0] == T::zero(), "");
-            let one = Poly::from(T::from(1u32));
-            let mut res = one.clone();
+            let mut f = Poly::one();
             let mut i = 1;
             while i < k {
-                i <<= 1;
-                res *= one.clone() + &self.clone().mod_xk(i) - res.ln_mod_xk(i);
-                res = res.mod_xk(i);
+                i = (i << 1).min(k);
+                let inv_f = f.clone().inv_mod_xk(i - 1);
+                f *= Poly::one() + self.clone_mod_xk(i)
+                    - (f.deriv() * inv_f.clone()).mod_xk(i - 1).integrate(cx);
+                f = f.mod_xk(i);
             }
-
-            res = res.mod_xk(k);
-            res
+            f.mod_xk(k)
         }
         // sqrt (1 + x f(x)) mod x^k
         pub fn sqrt_1p_mx_mod_xk(&self, k: usize) -> Self {
@@ -858,16 +1005,13 @@ pub mod poly {
             let mut i = 1;
             let inv2 = T::from(2u32).inv();
             while i < k {
-                i <<= 1;
-                let mut p = f.clone().mod_xk(i);
-                p *= res.recip_mod_xk(i);
-                res += &p.mod_xk(i);
-                res *= inv2.clone();
-                res = res.mod_xk(i);
+                i = (i << 1).min(k);
+                let q = res.inv_mod_xk(i);
+                res = (res + (f.clone_mod_xk(i) * q).mod_xk(i)) * inv2.clone();
             }
             res.mod_xk(k)
         }
-        pub fn taylor_shift(&self, k: usize, ifc: &[T]) -> Self {
+        pub fn taylor_shift(&self, cx: &Comb<T>, k: usize) -> Self {
             todo!()
         }
         // Bostan-Mori, O(L log L log N)
@@ -882,10 +1026,8 @@ pub mod poly {
 
                 let u = p * q_neg.clone();
                 let v = q * q_neg;
-
                 p = u.0.into_iter().skip((n % 2) as usize).step_by(2).collect();
                 q = v.0.into_iter().step_by(2).collect();
-
                 n /= 2;
             }
             p.coeff(0) / q.coeff(0)
@@ -893,7 +1035,6 @@ pub mod poly {
         fn pad_chunks(&mut self, w_src: usize, w_dest: usize) {
             // Helper for kronecker substitution
             assert!(w_src <= w_dest);
-
             let mut res = Poly::new(vec![]);
             for r in self.0.chunks(w_src) {
                 res.0.extend(r.iter().cloned());
@@ -939,7 +1080,6 @@ pub mod poly {
 
                 let u = p * q_nx.clone();
                 let v = q * q_nx;
-
                 p =
                     u.0.chunks(w)
                         .skip(nc % 2)
@@ -955,13 +1095,11 @@ pub mod poly {
                         .flatten()
                         .cloned()
                         .collect();
-
                 nc /= 2;
             }
-
-            (p.mod_xk(n + 1) * q.mod_xk(n + 1).recip_mod_xk(n + 1)).mod_xk(n + 1)
+            (p.mod_xk(n + 1) * q.mod_xk(n + 1).inv_mod_xk(n + 1)).mod_xk(n + 1)
         }
-        pub fn comp_inv_mod_xk(&self, k: usize, fc: &[T], ifc: &[T]) -> Self {
+        pub fn comp_inv_mod_xk(&self, cx: &Comb<T>, k: usize) -> Self {
             // Power projection & Lagrange inv.
             assert!(self.0.len() >= 2 && self.0[1] != T::zero());
             assert!(self.0[0] == T::zero(), "Check algebraic generating series");
@@ -976,267 +1114,42 @@ pub mod poly {
             p.0.resize(n + 1, T::zero());
 
             for i in 1..n + 1 {
-                p.0[i] *= ifc[i].clone() * fc[i - 1].clone();
+                p.0[i] *= cx.inv(i);
             }
             p.reverse();
             p *= p.0[0].inv();
 
-            p = p.ln_mod_xk(n);
-            p *= -T::from(n as u32).inv();
-            p = p.exp_mod_xk(n);
-            p *= self.0[1].inv();
-            p.mul_xk(1)
+            p = (p.ln_mod_xk(cx, n) * (-T::from(n as u32).inv())).exp_mod_xk(cx, n);
+            (p * self.0[1].inv()).mul_xk(1)
         }
         pub fn comp_mod_xk(&self, other: &Self, k: usize) -> Self {
             // Kinoshita-Li composition
             todo!()
         }
     }
-    impl<T: NTTSpec + From<u32> + Field> Poly<T> {
-        pub fn deriv(&self) -> Self {
-            Self(
-                ((1u32..).zip(&self.0[1..]))
-                    .map(|(i, x)| T::from(i) * x)
-                    .collect(),
-            )
-        }
-    }
-    impl<T: SemiRing> From<T> for Poly<T> {
-        fn from(c: T) -> Self {
-            Self(vec![c])
-        }
-    }
-    impl<T: SemiRing> MulAssign<&'_ T> for Poly<T> {
-        fn mul_assign(&mut self, rhs: &T) {
-            self.0.iter_mut().for_each(|c| c.mul_assign(rhs.clone()));
-        }
-    }
-    impl<T: SemiRing> MulAssign<T> for Poly<T> {
-        fn mul_assign(&mut self, rhs: T) {
-            self.mul_assign(&rhs);
-        }
-    }
-    impl<T: SemiRing> AddAssign<&'_ Self> for Poly<T> {
-        fn add_assign(&mut self, rhs: &Self) {
-            self.0.resize_with(self.len().max(rhs.len()), T::zero);
-            self.0
-                .iter_mut()
-                .zip(&rhs.0)
-                .for_each(|(a, b)| a.add_assign(b));
-        }
-    }
-    impl<T: SemiRing> Add<&'_ Self> for Poly<T> {
-        type Output = Self;
-        fn add(mut self, rhs: &Self) -> Self {
-            self += rhs;
-            self
-        }
-    }
-    impl<T: SemiRing> Add<Self> for Poly<T> {
-        type Output = Self;
-        fn add(mut self, rhs: Self) -> Self {
-            self += &rhs;
-            self
-        }
-    }
-    impl<T: SemiRing> SubAssign<&'_ Self> for Poly<T> {
-        fn sub_assign(&mut self, rhs: &Self) {
-            self.0.resize_with(self.len().max(rhs.len()), T::zero);
-            self.0
-                .iter_mut()
-                .zip(&rhs.0)
-                .for_each(|(a, b)| a.sub_assign(b));
-        }
-    }
-    impl<T: SemiRing> Sub<&'_ Self> for Poly<T> {
-        type Output = Self;
-        fn sub(mut self, rhs: &Self) -> Self {
-            self -= rhs;
-            self
-        }
-    }
-    impl<T: SemiRing> Sub<Self> for Poly<T> {
-        type Output = Self;
-        fn sub(mut self, rhs: Self) -> Self {
-            self -= &rhs;
-            self
-        }
-    }
-    impl<T: NTTSpec + Field> MulAssign<Self> for Poly<T> {
-        fn mul_assign(&mut self, mut rhs: Self) {
-            self.pop_zeros();
-            rhs.pop_zeros();
-            if self.len() == 0 || rhs.len() == 0 {
-                self.0.clear();
-                return;
-            }
-
-            let mut lhs = std::mem::take(self);
-            let n = lhs.len() + rhs.len() - 1;
-
-            if lhs.len() < rhs.len() {
-                std::mem::swap(&mut lhs, &mut rhs);
-            }
-            if rhs.len() <= 20 {
-                self.0 = vec![T::zero(); n];
-                for (i, x) in lhs.0.into_iter().enumerate() {
-                    for j in 0..rhs.len() {
-                        self.0[i + j] += rhs.0[j].clone() * &x;
-                    }
-                }
-                return;
-            }
-
-            let n_padded = n.next_power_of_two();
-
-            lhs.0.resize(n_padded, T::zero());
-            rhs.0.resize(n_padded, T::zero());
-
-            if let Some(proot) = T::try_nth_proot(n_padded as u32) {
-                ntt::run(proot.clone(), &mut lhs.0);
-                ntt::run(proot.clone(), &mut rhs.0);
-                lhs.0.iter_mut().zip(&rhs.0).for_each(|(a, b)| *a *= b);
-                ntt::run(proot.inv(), &mut lhs.0);
-                let n_inv = T::from(n_padded as u32).inv();
-                lhs.0.iter_mut().for_each(|c| c.mul_assign(&n_inv));
-
-                lhs.0.truncate(n);
-                *self = lhs;
-            } else {
-                use ntt::sample::p104857601 as p0;
-                use ntt::sample::p167772161 as p1;
-                use ntt::sample::p998244353 as p2;
-
-                let into_u64 = |x: &T| -> u64 {
-                    let x: u32 = x.clone().into();
-                    x as u64
-                };
-
-                let lhs_u64 = || lhs.0.iter().map(into_u64);
-                let rhs_u64 = || rhs.0.iter().map(into_u64);
-
-                let h0 = Poly::from_iter(lhs_u64().map(p0::M::from))
-                    * Poly::from_iter(rhs_u64().map(p0::M::from));
-                let h1 = Poly::from_iter(lhs_u64().map(p1::M::from))
-                    * Poly::from_iter(rhs_u64().map(p1::M::from));
-                let h2 = Poly::from_iter(lhs_u64().map(p2::M::from))
-                    * Poly::from_iter(rhs_u64().map(p2::M::from));
-
-                let (q, ms) = {
-                    thread_local! {
-                        static COEFF: OnceCell<(u128, [u128; 3])> =
-                            OnceCell::new();
-                    }
-                    COEFF.with(|coeff| {
-                        *coeff.get_or_init(|| {
-                            let q = p0::P as u128 * p1::P as u128 * p2::P as u128;
-                            let (qs, rs) = crt3_coeff_u64::<p0::M, p1::M, p2::M, T>([
-                                p0::P as u64,
-                                p1::P as u64,
-                                p2::P as u64,
-                            ]);
-                            let ms = [
-                                qs[0] as u128 * u32::from(rs.0) as u128,
-                                qs[1] as u128 * u32::from(rs.1) as u128,
-                                qs[2] as u128 * u32::from(rs.2) as u128,
-                            ];
-                            (q, ms)
-                        })
-                    })
-                };
-
-                let m = h0.len().max(h1.len()).max(h2.len());
-                self.0 = (h0.0.into_iter().chain(std::iter::once(SemiRing::zero())))
-                    .zip(h1.0.into_iter().chain(std::iter::once(SemiRing::zero())))
-                    .zip(h2.0.into_iter().chain(std::iter::once(SemiRing::zero())))
-                    .take(m)
-                    .map(|((x0, x1), x2)| {
-                        let a = ms[0] as u128 * u32::from(x0) as u128
-                            + ms[1] as u128 * u32::from(x1) as u128
-                            + ms[2] as u128 * u32::from(x2) as u128;
-                        T::from(a % q)
-                    })
-                    .collect();
-            }
-        }
-    }
-    impl<T: NTTSpec + Field> Mul<Self> for Poly<T> {
-        type Output = Self;
-        fn mul(mut self, rhs: Self) -> Self {
-            self *= rhs;
-            self
-        }
-    }
-    impl<T: NTTSpec + Field> DivAssign<Self> for Poly<T> {
-        fn div_assign(&mut self, mut rhs: Self) {
-            assert!(!rhs.is_zero());
-            self.pop_zeros();
-            rhs.pop_zeros();
-            if self.degree() < rhs.degree() {
-                self.0.clear();
-                return;
-            }
-
-            let n = self.degree();
-            let m = rhs.degree();
-            let l = n - m + 1;
-
-            self.reverse();
-            *self = std::mem::take(self).mod_xk(l);
-            rhs.reverse();
-            rhs = rhs.mod_xk(l);
-
-            *self *= rhs.recip_mod_xk(l);
-            self.0.resize(l, T::zero());
-            self.reverse();
-        }
-    }
-    impl<T: NTTSpec + Field> RemAssign<Self> for Poly<T> {
-        fn rem_assign(&mut self, rhs: Self) {
-            let mut q = self.clone();
-            q /= rhs.clone();
-            q *= rhs;
-            *self -= &q;
-            self.pop_zeros();
-        }
-    }
-    impl<T: CommRing> Neg for &Poly<T> {
-        type Output = Poly<T>;
-        fn neg(self) -> Poly<T> {
-            Poly(self.0.iter().map(|c| -c.clone()).collect())
-        }
-    }
-    impl<T: CommRing> Neg for Poly<T> {
-        type Output = Self;
-        fn neg(self) -> Self {
-            -&self
-        }
-    }
 }
 
-pub mod linear_recurrence {
-    use crate::algebra::Field;
-
-    use super::algebra::CommRing;
-    use super::ntt::NTTSpec;
+pub mod linear_rec {
     use super::poly::Poly;
+    use crate::algebra::{CommRing, Field};
+    use crate::conv::Conv;
 
     pub fn berlekamp_massey<T: CommRing>(_seq: &[T]) -> Vec<T> {
         unimplemented!()
     }
 
-    pub fn next<T: CommRing + Copy>(recurrence: &[T], init: &[T]) -> T {
+    pub fn next<T: CommRing>(recurrence: &[T], init: &[T]) -> T {
         let l = recurrence.len();
         let n = init.len();
         assert!(n >= l);
-        let mut value = recurrence[0] * init[n - 1];
+        let mut value = recurrence[0].clone() * init[n - 1].clone();
         for i in 1..l {
-            value += recurrence[i] * init[n - 1 - i];
+            value += recurrence[i].clone() * init[n - 1 - i].clone();
         }
         value
     }
 
-    pub fn nth_by_ntt<T: NTTSpec + Field + Clone>(recurrence: &[T], init: &[T], n: u64) -> T {
+    pub fn nth_by_ntt<T: Conv + Field + From<u32>>(recurrence: &[T], init: &[T], n: u64) -> T {
         let l = recurrence.len();
         assert!(l >= 1 && l == init.len());
 
@@ -1252,21 +1165,9 @@ pub mod linear_recurrence {
     }
 }
 
-use algebra::SemiRing;
+use algebra::CommRing;
+use algebra::Field;
 use poly::Poly;
 
-use crate::algebra::Field;
-
-pub mod p1000000007 {
-    pub const P: u32 = 1000000007;
-    pub const GEN: u32 = 3;
-    pub type M = super::mint_mont::M32<P>;
-    impl super::ntt::NTTSpec for M {
-        fn try_nth_proot(_n: u32) -> Option<Self> {
-            None
-        }
-    }
-}
-
-type M = ntt::sample::p998244353::M;
-// type M = p1000000007::M;
+type M = mint_mont::M32<998244353>;
+// type M = mint_mont::M32<1000000007>;
