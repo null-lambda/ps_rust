@@ -7,9 +7,7 @@ pub mod algebra {
         + Div<Output = Self>
         + Rem<Output = Self>
         + RemAssign
-        + PartialEq
         + Eq
-        + PartialOrd
         + Ord
         + From<u8>
     {
@@ -47,6 +45,7 @@ pub mod algebra {
         + for<'a> MulAssign<&'a Self>
         + Default
         + Clone
+        + Eq
     {
         fn zero() -> Self {
             Self::default()
@@ -109,7 +108,7 @@ pub mod mint_mont {
     use crate::algebra::*;
     use std::ops::*;
 
-    pub trait ModSpec: Copy {
+    pub trait ModSpec: Copy + Eq {
         type U: Unsigned;
         type D: Unsigned;
         const MODULUS: Self::U;
@@ -508,6 +507,7 @@ pub mod ntt {
         }
     }
 
+    // TODO: replace with const fn
     pub mod sample {
         // Check:
         // https://oeis.org/A039687
@@ -590,6 +590,14 @@ pub mod poly {
     use std::collections::VecDeque;
     use std::ops::*;
 
+    // TODO: move convolution part to the trait `NTTSpec` (or rename it Conv)
+    // and implement const function gen_proot for mint_mont
+    //
+    // TODO: cast modint from signed integers
+    //
+    // TODO: add from_const for modints (remove TLS variable)
+
+    // shouldn't belong here
     fn crt3_coeff_u64<
         T0: NTTSpec + Field,
         T1: NTTSpec + Field,
@@ -610,33 +618,24 @@ pub mod poly {
     #[derive(Debug, Default, Clone, PartialEq, Eq)]
     pub struct Poly<T>(pub Vec<T>);
 
-    impl<T: SemiRing + PartialEq> Poly<T> {
+    impl<T: SemiRing> Poly<T> {
         pub fn new(coeffs: Vec<T>) -> Self {
             Self(coeffs)
         }
-
-        pub fn from_iter(coeffs: impl IntoIterator<Item = T>) -> Self {
-            Self(coeffs.into_iter().collect())
-        }
-
         pub fn zero() -> Self {
             Self(vec![])
         }
-
         pub fn one() -> Self {
             Self(vec![T::one()])
         }
-
         pub fn pop_zeros(&mut self) {
             while self.0.last().filter(|&c| c == &T::zero()).is_some() {
                 self.0.pop();
             }
         }
-
         pub fn len(&self) -> usize {
             self.0.len()
         }
-
         pub fn is_zero(&mut self) -> bool {
             self.pop_zeros();
             self.0.is_empty()
@@ -646,15 +645,12 @@ pub mod poly {
             self.pop_zeros();
             self.0.len().saturating_sub(1)
         }
-
         pub fn leading_coeff(&self) -> T {
             self.0.last().cloned().unwrap_or(T::zero())
         }
-
         pub fn coeff(&self, i: usize) -> T {
             self.0.get(i).cloned().unwrap_or_default()
         }
-
         pub fn eval(&self, x: T) -> T {
             let mut res = T::zero();
             for c in self.0.iter().rev() {
@@ -663,32 +659,26 @@ pub mod poly {
             }
             res
         }
-
         pub fn reverse(&mut self) {
             self.0.reverse()
         }
-
         pub fn mod_xk_in_place(&mut self, k: usize) {
             if self.degree() >= k {
                 self.0.truncate(k);
             }
         }
-
         pub fn mod_xk(mut self, k: usize) -> Self {
             self.mod_xk_in_place(k);
             self
         }
-
         pub fn mul_xk_in_place(&mut self, k: usize) {
             self.0 = ((0..k).map(|_| T::zero()))
                 .chain(std::mem::take(&mut self.0))
                 .collect();
         }
-
         pub fn div_xk(&self, k: usize) -> Self {
             Self(self.0[k.min(self.0.len())..].to_vec())
         }
-
         pub fn factor_out_xk(&self) -> (usize, Self) {
             if let Some(k) = self.0.iter().position(|x| x != &T::zero()) {
                 let q = self.0[k..].to_vec();
@@ -698,14 +688,12 @@ pub mod poly {
             }
         }
     }
-
     impl<T> FromIterator<T> for Poly<T> {
         fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
             Self(iter.into_iter().collect())
         }
     }
-
-    impl<T: NTTSpec + PartialEq + Field> Poly<T> {
+    impl<T: NTTSpec + Field> Poly<T> {
         pub fn prod(xs: impl IntoIterator<Item = Self>) -> Self {
             let mut factors: VecDeque<_> = xs.into_iter().collect();
 
@@ -718,7 +706,6 @@ pub mod poly {
 
             factors.pop_front().unwrap_or(Self::one())
         }
-
         pub fn sum_frac(fs: impl IntoIterator<Item = (Self, Self)>) -> (Self, Self) {
             let mut factors: VecDeque<_> = fs.into_iter().collect();
 
@@ -730,12 +717,10 @@ pub mod poly {
 
             factors.pop_front().unwrap_or((Self::zero(), Self::one()))
         }
-
         pub fn interp(ps: impl IntoIterator<Item = (T, T)>) -> Self {
-            let ps: Vec<_> = ps.into_iter().collect();
-
             // Potential optimization: Reduce redundant computation of the polynomial tree of `f`
             // from three times to once - one in multipoint_eval, and the other in sum_frac.
+            let ps: Vec<_> = ps.into_iter().collect();
             let f = Self::prod(
                 ps.iter()
                     .map(|(x, _)| Poly::new(vec![-x.clone(), T::one()])),
@@ -749,7 +734,6 @@ pub mod poly {
             }));
             d
         }
-
         // Transposed version of mul(Rev[f], -) (Tellegen's principle)
         pub fn mul_rev_t(self, rhs: Self) -> Self {
             let shift = self.len().saturating_sub(1);
@@ -759,13 +743,11 @@ pub mod poly {
             prod = prod.div_xk(shift);
             prod
         }
-
         // Transposed version of mul(f, -) (Tellegen's principle)
         pub fn mul_t(mut self, rhs: Self) -> Self {
             self.reverse();
             self.mul_rev_t(rhs)
         }
-
         pub fn multipoint_eval(&self, ps: impl IntoIterator<Item = T>) -> Vec<T> {
             let ps = ps.into_iter().collect::<Vec<_>>();
             let mut divisors: Vec<_> = ps
@@ -780,17 +762,6 @@ pub mod poly {
             for i in 0..n - 1 {
                 divisors.push(divisors[i << 1].clone() * divisors[i << 1 | 1].clone());
             }
-
-            // let mut remainders = vec![Poly::zero(); 2 * n - 1];
-            // remainders[2 * n - 2] = self.clone();
-            // for i in (0..n - 1).rev() {
-            //     remainders[i + n] %= std::mem::take(&mut divisors[i + n]);
-            //     remainders[i << 1] = remainders[i + n].clone();
-            //     remainders[i << 1 | 1] = std::mem::take(&mut remainders[i + n]);
-            // }
-            // (0..n)
-            //     .map(|i| remainders[i].eval(-divisors[i].0[0].clone()))
-            //     .collect()
 
             // Transposed version of $\sum_i c_i/(1-a_i x)$ (Tellegen's principle)
             let mut remainders = vec![Poly::zero(); 2 * n - 1];
@@ -821,7 +792,6 @@ pub mod poly {
             }
             (0..n).map(|i| remainders[i].coeff(0)).collect()
         }
-
         pub fn pow_mod_xk(&self, mut exp: u64, k: usize) -> Self {
             let mut res = Self::one().mod_xk(k);
             let mut base = self.clone().mod_xk(k);
@@ -836,7 +806,6 @@ pub mod poly {
             }
             res.mod_xk(k)
         }
-
         pub fn integrate(&self) -> Self {
             if self.0.is_empty() {
                 return self.clone();
@@ -848,7 +817,6 @@ pub mod poly {
                     .collect(),
             )
         }
-
         pub fn inv_mod_xk(&self, k: usize) -> Self {
             assert!(self.0[0] != T::zero(), "");
             let mut res = Poly::from(self.0[0].inv());
@@ -862,7 +830,6 @@ pub mod poly {
             }
             res.mod_xk(k)
         }
-
         pub fn ln_mod_xk(&self, k: usize) -> Self {
             assert!(self.0[0] != T::zero(), "");
 
@@ -870,7 +837,6 @@ pub mod poly {
             deriv_ln *= self.clone().inv_mod_xk(k);
             deriv_ln.mod_xk(k.saturating_sub(1)).integrate()
         }
-
         pub fn exp_mod_xk(&self, k: usize) -> Self {
             assert!(self.0.is_empty() || self.0[0] == T::zero(), "");
             let one = Poly::from(T::from(1u32));
@@ -885,7 +851,6 @@ pub mod poly {
             res = res.mod_xk(k);
             res
         }
-
         // sqrt (1 + x f(x)) mod x^k
         pub fn sqrt_1p_mx_mod_xk(&self, k: usize) -> Self {
             let mut f = self.clone();
@@ -906,7 +871,6 @@ pub mod poly {
             res.mod_xk(k)
         }
     }
-
     impl<T: NTTSpec + From<u32> + Field> Poly<T> {
         pub fn deriv(&self) -> Self {
             Self(
@@ -916,26 +880,22 @@ pub mod poly {
             )
         }
     }
-
     impl<T: SemiRing> From<T> for Poly<T> {
         fn from(c: T) -> Self {
             Self(vec![c])
         }
     }
-
-    impl<T: SemiRing + PartialEq> MulAssign<&'_ T> for Poly<T> {
+    impl<T: SemiRing> MulAssign<&'_ T> for Poly<T> {
         fn mul_assign(&mut self, rhs: &T) {
             self.0.iter_mut().for_each(|c| c.mul_assign(rhs.clone()));
         }
     }
-
-    impl<T: SemiRing + PartialEq> MulAssign<T> for Poly<T> {
+    impl<T: SemiRing> MulAssign<T> for Poly<T> {
         fn mul_assign(&mut self, rhs: T) {
             self.mul_assign(&rhs);
         }
     }
-
-    impl<T: SemiRing + PartialEq> AddAssign<&'_ Self> for Poly<T> {
+    impl<T: SemiRing> AddAssign<&'_ Self> for Poly<T> {
         fn add_assign(&mut self, rhs: &Self) {
             self.0.resize_with(self.len().max(rhs.len()), T::zero);
             self.0
@@ -944,24 +904,21 @@ pub mod poly {
                 .for_each(|(a, b)| a.add_assign(b));
         }
     }
-
-    impl<T: SemiRing + PartialEq> Add<&'_ Self> for Poly<T> {
+    impl<T: SemiRing> Add<&'_ Self> for Poly<T> {
         type Output = Self;
         fn add(mut self, rhs: &Self) -> Self {
             self += rhs;
             self
         }
     }
-
-    impl<T: SemiRing + PartialEq> Add<Self> for Poly<T> {
+    impl<T: SemiRing> Add<Self> for Poly<T> {
         type Output = Self;
         fn add(mut self, rhs: Self) -> Self {
             self += &rhs;
             self
         }
     }
-
-    impl<T: SemiRing + PartialEq> SubAssign<&'_ Self> for Poly<T> {
+    impl<T: SemiRing> SubAssign<&'_ Self> for Poly<T> {
         fn sub_assign(&mut self, rhs: &Self) {
             self.0.resize_with(self.len().max(rhs.len()), T::zero);
             self.0
@@ -970,24 +927,21 @@ pub mod poly {
                 .for_each(|(a, b)| a.sub_assign(b));
         }
     }
-
-    impl<T: SemiRing + PartialEq> Sub<&'_ Self> for Poly<T> {
+    impl<T: SemiRing> Sub<&'_ Self> for Poly<T> {
         type Output = Self;
         fn sub(mut self, rhs: &Self) -> Self {
             self -= rhs;
             self
         }
     }
-
-    impl<T: SemiRing + PartialEq> Sub<Self> for Poly<T> {
+    impl<T: SemiRing> Sub<Self> for Poly<T> {
         type Output = Self;
         fn sub(mut self, rhs: Self) -> Self {
             self -= &rhs;
             self
         }
     }
-
-    impl<T: NTTSpec + PartialEq + Field> MulAssign<Self> for Poly<T> {
+    impl<T: NTTSpec + Field> MulAssign<Self> for Poly<T> {
         fn mul_assign(&mut self, mut rhs: Self) {
             self.pop_zeros();
             rhs.pop_zeros();
@@ -1085,16 +1039,14 @@ pub mod poly {
             }
         }
     }
-
-    impl<T: NTTSpec + PartialEq + Field> Mul<Self> for Poly<T> {
+    impl<T: NTTSpec + Field> Mul<Self> for Poly<T> {
         type Output = Self;
         fn mul(mut self, rhs: Self) -> Self {
             self *= rhs;
             self
         }
     }
-
-    impl<T: NTTSpec + PartialEq + Field> DivAssign<Self> for Poly<T> {
+    impl<T: NTTSpec + Field> DivAssign<Self> for Poly<T> {
         fn div_assign(&mut self, mut rhs: Self) {
             assert!(!rhs.is_zero());
             self.pop_zeros();
@@ -1118,8 +1070,7 @@ pub mod poly {
             self.reverse();
         }
     }
-
-    impl<T: NTTSpec + PartialEq + Field> RemAssign<Self> for Poly<T> {
+    impl<T: NTTSpec + Field> RemAssign<Self> for Poly<T> {
         fn rem_assign(&mut self, rhs: Self) {
             let mut q = self.clone();
             q /= rhs.clone();
@@ -1128,14 +1079,12 @@ pub mod poly {
             self.pop_zeros();
         }
     }
-
     impl<T: CommRing> Neg for &Poly<T> {
         type Output = Poly<T>;
         fn neg(self) -> Poly<T> {
             Poly(self.0.iter().map(|c| -c.clone()).collect())
         }
     }
-
     impl<T: CommRing> Neg for Poly<T> {
         type Output = Self;
         fn neg(self) -> Self {
@@ -1167,7 +1116,7 @@ pub mod linear_recurrence {
     }
 
     // Bostan-Mori, O(L log L log N)
-    pub fn nth_of_frac<T: NTTSpec + Field + PartialEq + Clone>(
+    pub fn nth_of_frac<T: NTTSpec + Field + Clone>(
         numer: Poly<T>,
         denom: Poly<T>,
         mut n: u64,
@@ -1191,11 +1140,7 @@ pub mod linear_recurrence {
         p.coeff(0) / q.coeff(0)
     }
 
-    pub fn nth_by_ntt<T: NTTSpec + Field + PartialEq + Clone>(
-        recurrence: &[T],
-        init: &[T],
-        n: u64,
-    ) -> T {
+    pub fn nth_by_ntt<T: NTTSpec + Field + Clone>(recurrence: &[T], init: &[T], n: u64) -> T {
         let l = recurrence.len();
         assert!(l >= 1 && l == init.len());
 
