@@ -662,19 +662,16 @@ pub mod poly {
         pub fn reverse(&mut self) {
             self.0.reverse()
         }
-        pub fn mod_xk_in_place(&mut self, k: usize) {
+        pub fn mod_xk(mut self, k: usize) -> Self {
             if self.degree() >= k {
                 self.0.truncate(k);
             }
-        }
-        pub fn mod_xk(mut self, k: usize) -> Self {
-            self.mod_xk_in_place(k);
             self
         }
-        pub fn mul_xk_in_place(&mut self, k: usize) {
-            self.0 = ((0..k).map(|_| T::zero()))
+        pub fn mul_xk(mut self, k: usize) -> Self {
+            ((0..k).map(|_| T::zero()))
                 .chain(std::mem::take(&mut self.0))
-                .collect();
+                .collect()
         }
         pub fn div_xk(&self, k: usize) -> Self {
             Self(self.0[k.min(self.0.len())..].to_vec())
@@ -771,7 +768,7 @@ pub mod poly {
 
             let mut d = std::mem::take(&mut divisors[2 * n - 2]);
             d.reverse();
-            d = d.inv_mod_xk(k);
+            d = d.recip_mod_xk(k);
             d.0.resize(k, T::zero());
 
             f.0.resize(n + k - 1, T::zero());
@@ -798,10 +795,10 @@ pub mod poly {
             while exp > 0 {
                 if exp & 1 == 1 {
                     res *= base.clone();
-                    res.mod_xk_in_place(k);
+                    res = res.mod_xk(k);
                 }
                 base *= base.clone();
-                base.mod_xk_in_place(k);
+                base = base.mod_xk(k);
                 exp >>= 1;
             }
             res.mod_xk(k)
@@ -817,7 +814,7 @@ pub mod poly {
                     .collect(),
             )
         }
-        pub fn inv_mod_xk(&self, k: usize) -> Self {
+        pub fn recip_mod_xk(&self, k: usize) -> Self {
             assert!(self.0[0] != T::zero(), "");
             let mut res = Poly::from(self.0[0].inv());
             let mut i = 1;
@@ -834,7 +831,7 @@ pub mod poly {
             assert!(self.0[0] != T::zero(), "");
 
             let mut deriv_ln = self.deriv();
-            deriv_ln *= self.clone().inv_mod_xk(k);
+            deriv_ln *= self.clone().recip_mod_xk(k);
             deriv_ln.mod_xk(k.saturating_sub(1)).integrate()
         }
         pub fn exp_mod_xk(&self, k: usize) -> Self {
@@ -854,7 +851,7 @@ pub mod poly {
         // sqrt (1 + x f(x)) mod x^k
         pub fn sqrt_1p_mx_mod_xk(&self, k: usize) -> Self {
             let mut f = self.clone();
-            f.mul_xk_in_place(1);
+            f = f.mul_xk(1);
             f += &Self::one();
 
             let mut res = Self::one();
@@ -863,12 +860,136 @@ pub mod poly {
             while i < k {
                 i <<= 1;
                 let mut p = f.clone().mod_xk(i);
-                p *= res.inv_mod_xk(i);
+                p *= res.recip_mod_xk(i);
                 res += &p.mod_xk(i);
                 res *= inv2.clone();
                 res = res.mod_xk(i);
             }
             res.mod_xk(k)
+        }
+        pub fn taylor_shift(&self, k: usize, ifc: &[T]) -> Self {
+            todo!()
+        }
+        // Bostan-Mori, O(L log L log N)
+        pub fn nth_of_frac(numer: Self, denom: Self, mut n: u64) -> T {
+            let mut p = numer.mod_xk(n as usize + 1);
+            let mut q = denom.mod_xk(n as usize + 1);
+            while n > 0 {
+                let mut q_neg = q.clone();
+                for i in (1..q_neg.0.len()).step_by(2) {
+                    q_neg.0[i] = -q_neg.0[i].clone();
+                }
+
+                let u = p * q_neg.clone();
+                let v = q * q_neg;
+
+                p = u.0.into_iter().skip((n % 2) as usize).step_by(2).collect();
+                q = v.0.into_iter().step_by(2).collect();
+
+                n /= 2;
+            }
+            p.coeff(0) / q.coeff(0)
+        }
+        fn pad_chunks(&mut self, w_src: usize, w_dest: usize) {
+            // Helper for kronecker substitution
+            assert!(w_src <= w_dest);
+
+            let mut res = Poly::new(vec![]);
+            for r in self.0.chunks(w_src) {
+                res.0.extend(r.iter().cloned());
+                res.0.extend((0..w_dest - r.len()).map(|_| T::zero()))
+            }
+            *self = res
+        }
+        // [x^n] g(x)/(1-y f(x)) mod y^{n+1}
+        pub fn power_proj(f: &Self, g: &Self, n: usize) -> Self {
+            if f.0.is_empty() || g.0.is_empty() || n == 0 {
+                return Poly::zero();
+            };
+
+            let f0 = f.0[0].clone();
+            if f0 != T::zero() {
+                unimplemented!("f(0) != 0. Do shift yourself")
+            }
+
+            let mut nc = n;
+            let np = n + 1;
+            let mut w = 2;
+            let mut p = Poly::new(vec![T::zero(); np * w]);
+            let mut q = Poly::new(vec![T::zero(); np * w]);
+            for i in 0..np.min(g.0.len()) {
+                p.0[i * w + 0] = g.0[i].clone();
+            }
+            q.0[0 * w + 0] = T::one();
+            for i in 0..np.min(f.0.len()) {
+                q.0[i * w + 1] = -f.0[i].clone();
+            }
+            while nc > 0 {
+                let w_prev = w;
+                w = w_prev * 2 - 1;
+                p.pad_chunks(w_prev, w);
+                q.pad_chunks(w_prev, w);
+
+                let mut q_nx = q.clone();
+                for r in q_nx.0.chunks_mut(w).skip(1).step_by(2) {
+                    for x in r {
+                        *x = -x.clone();
+                    }
+                }
+
+                let u = p * q_nx.clone();
+                let v = q * q_nx;
+
+                p =
+                    u.0.chunks(w)
+                        .skip(nc % 2)
+                        .step_by(2)
+                        .take(nc / 2 + 1)
+                        .flatten()
+                        .cloned()
+                        .collect();
+                q =
+                    v.0.chunks(w)
+                        .step_by(2)
+                        .take(nc / 2 + 1)
+                        .flatten()
+                        .cloned()
+                        .collect();
+
+                nc /= 2;
+            }
+
+            (p.mod_xk(n + 1) * q.mod_xk(n + 1).recip_mod_xk(n + 1)).mod_xk(n + 1)
+        }
+        pub fn comp_inv_mod_xk(&self, k: usize, fc: &[T], ifc: &[T]) -> Self {
+            // Power projection & Lagrange inv.
+            assert!(self.0.len() >= 2 && self.0[1] != T::zero());
+            assert!(self.0[0] == T::zero(), "Check algebraic generating series");
+            if k <= 1 {
+                return Poly::zero();
+            } else if k == 2 {
+                return Poly::new(vec![T::zero(), self.0[1].inv()]);
+            }
+
+            let n = k - 1;
+            let mut p = Poly::power_proj(self, &Poly::one(), n);
+            p.0.resize(n + 1, T::zero());
+
+            for i in 1..n + 1 {
+                p.0[i] *= ifc[i].clone() * fc[i - 1].clone();
+            }
+            p.reverse();
+            p *= p.0[0].inv();
+
+            p = p.ln_mod_xk(n);
+            p *= -T::from(n as u32).inv();
+            p = p.exp_mod_xk(n);
+            p *= self.0[1].inv();
+            p.mul_xk(1)
+        }
+        pub fn comp_mod_xk(&self, other: &Self, k: usize) -> Self {
+            // Kinoshita-Li composition
+            todo!()
         }
     }
     impl<T: NTTSpec + From<u32> + Field> Poly<T> {
@@ -1061,11 +1182,11 @@ pub mod poly {
             let l = n - m + 1;
 
             self.reverse();
-            self.mod_xk_in_place(l);
+            *self = std::mem::take(self).mod_xk(l);
             rhs.reverse();
-            rhs.mod_xk_in_place(l);
+            rhs = rhs.mod_xk(l);
 
-            *self *= rhs.inv_mod_xk(l);
+            *self *= rhs.recip_mod_xk(l);
             self.0.resize(l, T::zero());
             self.reverse();
         }
@@ -1115,31 +1236,6 @@ pub mod linear_recurrence {
         value
     }
 
-    // Bostan-Mori, O(L log L log N)
-    pub fn nth_of_frac<T: NTTSpec + Field + Clone>(
-        numer: Poly<T>,
-        denom: Poly<T>,
-        mut n: u64,
-    ) -> T {
-        let mut p = numer.mod_xk(n as usize + 1);
-        let mut q = denom.mod_xk(n as usize + 1);
-        while n > 0 {
-            let mut q_neg = q.clone();
-            for i in (1..q_neg.0.len()).step_by(2) {
-                q_neg.0[i] = -q_neg.0[i].clone();
-            }
-
-            let u = p * q_neg.clone();
-            let v = q * q_neg;
-
-            p = Poly::new(u.0.into_iter().skip((n % 2) as usize).step_by(2).collect());
-            q = Poly::new(v.0.into_iter().step_by(2).collect());
-
-            n /= 2;
-        }
-        p.coeff(0) / q.coeff(0)
-    }
-
     pub fn nth_by_ntt<T: NTTSpec + Field + Clone>(recurrence: &[T], init: &[T], n: u64) -> T {
         let l = recurrence.len();
         assert!(l >= 1 && l == init.len());
@@ -1152,12 +1248,14 @@ pub mod linear_recurrence {
         let q = Poly::new(q);
         let p = (Poly::new(init.to_vec()) * q.clone()).mod_xk(l);
 
-        nth_of_frac(p, q, n)
+        Poly::nth_of_frac(p, q, n)
     }
 }
 
 use algebra::SemiRing;
 use poly::Poly;
+
+use crate::algebra::Field;
 
 pub mod p1000000007 {
     pub const P: u32 = 1000000007;
