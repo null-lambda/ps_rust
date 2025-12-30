@@ -252,11 +252,6 @@ pub mod mint_mont {
     pub trait CastImpl<U: Unsigned>: Unsigned {
         fn cast_into<M: ModSpec<U = U>>(self) -> MInt<M>;
     }
-    // impl<M: ModSpec, S: CastImpl<M::U>> From<S> for MInt<M> {
-    //     fn from(value: S) -> Self {
-    //         value.cast_into()
-    //     }
-    // }
     impl<U: Unsigned> CastImpl<U> for U {
         fn cast_into<M: ModSpec<U = U>>(self) -> MInt<M> {
             MInt::new(self)
@@ -340,13 +335,41 @@ pub mod mint_mont {
 pub mod conv {
     use super::algebra::*;
 
-    fn bit_reversal_perm<T>(xs: &mut [T]) {
+    pub struct PreCalc<T> {
+        rs: Vec<T>,
+        irs: Vec<T>,
+    }
+    impl<T: Field> PreCalc<T> {
+        fn new(n_log: usize, proot: T) -> Self {
+            let mut pow = vec![T::one(); n_log + 1];
+            let mut ipow = vec![T::one(); n_log + 1];
+            pow[n_log] = proot.clone();
+            ipow[n_log] = proot.clone().inv();
+            for i in (0..n_log).rev() {
+                pow[i] = pow[i + 1].clone() * pow[i + 1].clone();
+                ipow[i] = ipow[i + 1].clone() * ipow[i + 1].clone();
+            }
+
+            let mut rs = vec![T::one(); n_log];
+            let mut irs = vec![T::one(); n_log];
+            let mut p = T::one();
+            let mut ip = T::one();
+            for i in 0..n_log - 1 {
+                rs[i] = pow[i + 2].clone() * p.clone();
+                irs[i] = ipow[i + 2].clone() * ip.clone();
+                p *= ipow[i + 2].clone();
+                ip *= pow[i + 2].clone();
+            }
+            Self { rs, irs }
+        }
+    }
+
+    pub fn permute_bitrev<T>(xs: &mut [T]) {
         let n = xs.len();
-        let n_log2 = u32::BITS - (n as u32).leading_zeros() - 1;
-        if n == 1 {
+        if n == 0 {
             return;
         }
-
+        let n_log2 = u32::BITS - (n as u32).leading_zeros() - 1;
         for i in 0..n as u32 {
             let rev = i.reverse_bits() >> u32::BITS - n_log2;
             if i < rev {
@@ -354,112 +377,47 @@ pub mod conv {
             }
         }
     }
-    pub fn ntt_naive<T: CommRing>(proot: T, xs: &mut [T]) {
-        let n = xs.len().next_power_of_two();
-        let proot_pow: Vec<T> =
-            std::iter::successors(Some(T::one()), |acc| Some(acc.clone() * &proot))
-                .take(n)
-                .collect();
-        let res: Vec<_> = (0..n)
-            .map(|i| {
-                (0..n)
-                    .map(|j| xs[j].clone() * &proot_pow[(i * j) % n])
-                    .fold(T::zero(), |acc, x| acc + x)
-            })
-            .collect();
-        for (r, x) in res.into_iter().zip(xs) {
-            *x = r;
-        }
+    pub fn bf2<T: CommRing>(x1: &mut T, x2: &mut T, w: T) {
+        let y1 = x1.clone();
+        let y2 = x2.clone() * w;
+        *x1 = y1.clone() + y2.clone();
+        *x2 = y1 - y2;
     }
-    pub fn ntt_radix4<T: CommRing>(proot: T, xs: &mut [T]) {
+    pub fn bf2_t<T: CommRing>(x1: &mut T, x2: &mut T, w: T) {
+        let y1 = x1.clone();
+        let y2 = x2.clone();
+        *x1 = y1.clone() + y2.clone();
+        *x2 = (y1 - y2) * w;
+    }
+    fn chunks2<T>(xs: &mut [T], w: usize) -> impl Iterator<Item = (&mut [T], &mut [T])> {
+        xs.chunks_exact_mut(w * 2).map(move |t| t.split_at_mut(w))
+    }
+    pub fn ntt_radix2<T: Field>(cx: &PreCalc<T>, xs: &mut [T]) {
         let n = xs.len();
         assert!(n.is_power_of_two());
         let n_log = u32::BITS - (n as u32).leading_zeros() - 1;
-        bit_reversal_perm(xs);
-
-        let base: Vec<_> = (0..n_log)
-            .scan(proot.clone(), |acc, _| {
-                let prev = acc.clone();
-                *acc *= acc.clone();
-                Some(prev)
-            })
-            .collect();
-
-        let mut proot_pow: Vec<T> = vec![T::zero(); n];
-        proot_pow[0] = T::one();
-
-        let quartic_root = proot.pow(n as u32 / 4);
-
-        let update_proot_pow = |proot_pow: &mut [T], k: u32| {
-            let step = 1 << k;
-            let base = base[(n_log - k - 1) as usize].clone();
-            for i in (0..step).rev() {
-                proot_pow[i * 2 + 1] = proot_pow[i].clone() * base.clone();
-                proot_pow[i * 2] = proot_pow[i].clone();
+        for e in (0..n_log).rev() {
+            let mut w = T::one();
+            for (it, (t0, t1)) in chunks2(xs, 1 << e).enumerate() {
+                (t0.iter_mut().zip(t1)).for_each(|(x0, x1)| bf2(x0, x1, w.clone()));
+                w *= cx.rs[it.trailing_ones() as usize].clone();
             }
-        };
-
-        let mut k = 0;
-        if n_log % 2 == 1 {
-            let step = 1 << k;
-            // radix-2 butterfly
-            update_proot_pow(&mut proot_pow, k);
-            for t in xs.chunks_exact_mut(step * 2) {
-                let (t0, t1) = t.split_at_mut(step);
-                for (a0, a1) in t0.into_iter().zip(t1) {
-                    let b0 = a0.clone();
-                    let b1 = a1.clone();
-                    *a0 = b0.clone() + b1.clone();
-                    *a1 = b0 - b1;
-                }
-            }
-            k += 1;
-        }
-        while k < n_log {
-            let step = 1 << k;
-            // radix-4 butterfly
-            update_proot_pow(&mut proot_pow, k);
-            update_proot_pow(&mut proot_pow, k + 1);
-
-            for t in xs.chunks_exact_mut(step * 4) {
-                let (t0, rest) = t.split_at_mut(step);
-                let (t1, rest) = rest.split_at_mut(step);
-                let (t2, t3) = rest.split_at_mut(step);
-
-                for ((((a0, a1), a2), a3), pow1) in
-                    t0.into_iter().zip(t1).zip(t2).zip(t3).zip(&proot_pow)
-                {
-                    let pow2 = pow1.clone() * pow1;
-                    let pow1_shift = pow1.clone() * &quartic_root;
-
-                    let b0 = a0.clone();
-                    let b1 = a1.clone() * &pow2;
-                    let b2 = a2.clone();
-                    let b3 = a3.clone() * &pow2;
-
-                    let c0 = b0.clone() + &b1;
-                    let c1 = b0.clone() - &b1;
-                    let c2 = (b2.clone() + &b3) * pow1;
-                    let c3 = (b2 - b3) * pow1_shift;
-
-                    *a0 = c0.clone() + &c2;
-                    *a1 = c1.clone() + &c3;
-                    *a2 = c0.clone() - &c2;
-                    *a3 = c1.clone() - &c3;
-                }
-            }
-            k += 2;
         }
     }
-    pub fn ntt<T: CommRing>(proot: T, xs: &mut [T]) {
-        if xs.len() <= 20 {
-            ntt_naive(proot, xs);
-        } else {
-            ntt_radix4(proot, xs);
+    pub fn intt_radix2<T: Field>(cx: &PreCalc<T>, xs: &mut [T]) {
+        let n = xs.len();
+        assert!(n.is_power_of_two());
+        let n_log = u32::BITS - (n as u32).leading_zeros() - 1;
+        for e in 0..n_log {
+            let mut w = T::one();
+            for (it, (t0, t1)) in chunks2(xs, 1 << e).enumerate() {
+                (t0.iter_mut().zip(t1)).for_each(|(x0, x1)| bf2_t(x0, x1, w.clone()));
+                w *= cx.irs[it.trailing_ones() as usize].clone();
+            }
         }
     }
 
-    const P_GENS_32: &'static [[u32; 2]] = &[
+    const P_GENS_32: [[u32; 2]; 4] = [
         [998244353, 3],
         [167772161, 3],
         [104857601, 3],
@@ -499,6 +457,7 @@ pub mod conv {
         }
         res
     }
+
     fn conv_with_proot<T: Field + From<u32>>(
         mut lhs: Vec<T>,
         mut rhs: Vec<T>,
@@ -514,13 +473,16 @@ pub mod conv {
             Some(proot) => proot,
             None => return Err((lhs, rhs)),
         };
+        let n_log = (u32::BITS - (n_pad as u32).leading_zeros() - 1) as usize;
+
+        let cx = PreCalc::new(n_log, proot.clone());
 
         lhs.resize(n_pad, T::zero());
         rhs.resize(n_pad, T::zero());
-        ntt(proot.clone(), &mut lhs);
-        ntt(proot.clone(), &mut rhs);
+        ntt_radix2(&cx, &mut lhs);
+        ntt_radix2(&cx, &mut rhs);
         lhs.iter_mut().zip(&rhs).for_each(|(x, y)| *x *= y);
-        ntt(proot.clone().inv(), &mut lhs);
+        intt_radix2(&cx, &mut lhs);
         let n_inv = T::from(n_pad as u32).inv();
         lhs.iter_mut().for_each(|x| *x *= n_inv.clone());
         lhs.truncate(n);
@@ -601,7 +563,6 @@ pub mod comb {
     }
     impl<T: crate::algebra::Field + From<u32>> Comb<T> {
         pub fn new(bound: usize) -> Self {
-            // Suggestion: use bound.next_power_of_two
             assert!(bound >= 1);
 
             let mut fc = vec![T::one()];
@@ -849,14 +810,12 @@ pub mod poly {
     impl<T: Conv + Field + From<u32>> Poly<T> {
         pub fn prod(xs: impl IntoIterator<Item = Self>) -> Self {
             let mut factors: VecDeque<_> = xs.into_iter().collect();
-
             while factors.len() >= 2 {
                 let mut lhs = factors.pop_front().unwrap();
                 let rhs = factors.pop_front().unwrap();
                 lhs *= rhs;
                 factors.push_back(lhs);
             }
-
             factors.pop_front().unwrap_or(Self::one())
         }
         pub fn sum_frac(fs: impl IntoIterator<Item = (Self, Self)>) -> (Self, Self) {
@@ -995,8 +954,8 @@ pub mod poly {
             }
             f.mod_xk(k)
         }
-        // sqrt (1 + x f(x)) mod x^k
         pub fn sqrt_1p_mx_mod_xk(&self, k: usize) -> Self {
+            // sqrt (1 + x f(x)) mod x^k
             let mut f = self.clone();
             f = f.mul_xk(1);
             f += &Self::one();
@@ -1032,8 +991,8 @@ pub mod poly {
             }
             p.coeff(0) / q.coeff(0)
         }
+        // Helps kronecker substitution
         fn pad_chunks(&mut self, w_src: usize, w_dest: usize) {
-            // Helper for kronecker substitution
             assert!(w_src <= w_dest);
             let mut res = Poly::new(vec![]);
             for r in self.0.chunks(w_src) {
@@ -1042,6 +1001,7 @@ pub mod poly {
             }
             *self = res
         }
+        // Kinoshita-Li power projection
         // [x^n] g(x)/(1-y f(x)) mod y^{n+1}
         pub fn power_proj(f: &Self, g: &Self, n: usize) -> Self {
             if f.0.is_empty() || g.0.is_empty() || n == 0 {
@@ -1100,7 +1060,6 @@ pub mod poly {
             (p.mod_xk(n + 1) * q.mod_xk(n + 1).inv_mod_xk(n + 1)).mod_xk(n + 1)
         }
         pub fn comp_inv_mod_xk(&self, cx: &Comb<T>, k: usize) -> Self {
-            // Power projection & Lagrange inv.
             assert!(self.0.len() >= 2 && self.0[1] != T::zero());
             assert!(self.0[0] == T::zero(), "Check algebraic generating series");
             if k <= 1 {
@@ -1122,8 +1081,8 @@ pub mod poly {
             p = (p.ln_mod_xk(cx, n) * (-T::from(n as u32).inv())).exp_mod_xk(cx, n);
             (p * self.0[1].inv()).mul_xk(1)
         }
+        // Kinoshita-Li composition
         pub fn comp_mod_xk(&self, other: &Self, k: usize) -> Self {
-            // Kinoshita-Li composition
             todo!()
         }
     }
@@ -1165,8 +1124,6 @@ pub mod linear_rec {
     }
 }
 
-use algebra::CommRing;
-use algebra::Field;
 use poly::Poly;
 
 type M = mint_mont::M32<998244353>;
