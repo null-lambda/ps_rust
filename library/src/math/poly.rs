@@ -1,4 +1,3 @@
-// TODO: cast modint from signed integers
 pub mod algebra {
     use std::ops::*;
     pub trait Unsigned:
@@ -94,274 +93,353 @@ pub mod mint_mont {
     use crate::algebra::*;
     use std::ops::*;
 
-    pub trait ModSpec: Copy + Eq {
-        type U: Unsigned;
-        type D: Unsigned;
-        const MODULUS: Self::U;
-        const M_INV: Self::U;
-        const R2: Self::U;
-        fn to_double(u: Self::U) -> Self::D;
-        fn reduce(value: Self::D) -> Self::U;
-    }
-
-    #[derive(Clone, Copy, PartialEq, Eq)]
-    pub struct MInt<M: ModSpec>(M::U);
-
-    impl<M: ModSpec> MInt<M> {
-        pub const MODULUS: M::U = M::MODULUS;
-        fn new(value: M::U) -> Self {
-            MInt(value) * MInt(M::R2)
-        }
-    }
-
-    macro_rules! impl_modspec {
-        ($wrapper:ident $spec:ident $spec_impl:ident, U = $single:ty, D = $double:ty, EXP = $exp:expr, LOG2_EXP = $log2_exp: expr) => {
-            #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-            pub struct $spec<const M: $single>;
-            impl<const MOD: $single> ModSpec for $spec<MOD> {
-                type U = $single;
-                type D = $double;
-                const MODULUS: $single = MOD;
-                const M_INV: $single = $spec_impl::eval_m_inv(MOD);
-                const R2: $single = $spec_impl::eval_r2(MOD);
-                fn to_double(u: Self::U) -> Self::D {
-                    u as Self::D
-                }
-                fn reduce(x: Self::D) -> Self::U {
-                    debug_assert!(x < (MOD as $double) * (MOD as $double));
-                    let q = (x as $single).wrapping_mul(Self::M_INV);
-                    let a = ((q as $double * Self::MODULUS as $double) >> $exp) as $single;
-                    let mut res = (x >> $exp) as $single + Self::MODULUS - a;
-                    if res >= Self::MODULUS {
-                        res -= Self::MODULUS;
-                    }
-                    res
-                }
-            }
-            mod $spec_impl {
-                pub const fn eval_m_inv(m: $single) -> $single {
-                    debug_assert!(m % 2 == 1, "modulus must be coprime with 2");
-                    let mut m_inv: $single = 1;
-                    let two: $single = 2;
-
-                    let mut iter = 0;
-                    while iter < $log2_exp {
-                        m_inv = m_inv.wrapping_mul(two.wrapping_sub(m.wrapping_mul(m_inv)));
-                        iter += 1;
-                    }
-                    m_inv
-                }
-                pub const fn eval_r2(m: $single) -> $single {
-                    let r = m.wrapping_neg() % m;
-                    (r as $double * r as $double % m as $double) as $single
-                }
-            }
-            pub type $wrapper<const M: $single> = MInt<$spec<M>>;
-        };
-    }
-    impl_modspec!(M32 __ByU32 u32_impl, U = u32, D = u64, EXP = 32, LOG2_EXP = 5);
-    impl_modspec!(M64 __ByU64 u64_impl, U = u64, D = u128, EXP = 64, LOG2_EXP = 6);
-
-    impl<M: ModSpec> AddAssign<&'_ Self> for MInt<M> {
-        fn add_assign(&mut self, rhs: &Self) {
-            self.0 += rhs.0;
-            if self.0 >= M::MODULUS {
-                self.0 -= M::MODULUS;
-            }
-        }
-    }
-    impl<M: ModSpec> SubAssign<&'_ Self> for MInt<M> {
-        fn sub_assign(&mut self, rhs: &Self) {
-            if self.0 < rhs.0 {
-                self.0 += M::MODULUS;
-            }
-            self.0 -= rhs.0;
-        }
-    }
-    impl<M: ModSpec> MulAssign<&'_ Self> for MInt<M> {
-        fn mul_assign(&mut self, rhs: &Self) {
-            self.0 = M::reduce(M::to_double(self.0) * M::to_double(rhs.0));
-        }
-    }
-    impl<M: ModSpec> DivAssign<&'_ Self> for MInt<M> {
-        fn div_assign(&mut self, rhs: &Self) {
-            self.mul_assign(&rhs.inv());
-        }
-    }
-
     macro_rules! forward_binop {
-        ($OpAssign:ident $op_assign:ident, $Op:ident $op:ident) => {
-            impl<M: ModSpec> $OpAssign for MInt<M> {
+        ($mint:ident $U:ty, $OpAssign:ident $op_assign:ident, $Op:ident $op:ident) => {
+            impl<const M: $U> $OpAssign for $mint<M> {
                 fn $op_assign(&mut self, rhs: Self) {
                     self.$op_assign(&rhs);
                 }
             }
-            impl<M: ModSpec> $Op<&'_ Self> for MInt<M> {
+            impl<const M: $U> $Op<&'_ Self> for $mint<M> {
                 type Output = Self;
                 fn $op(mut self, rhs: &Self) -> Self {
                     self.$op_assign(rhs);
                     self
                 }
             }
-            impl<M: ModSpec> $Op for MInt<M> {
-                type Output = MInt<M>;
+            impl<const M: $U> $Op for $mint<M> {
+                type Output = $mint<M>;
                 fn $op(self, rhs: Self) -> Self::Output {
                     self.clone().$op(&rhs)
                 }
             }
         };
     }
-    forward_binop!(AddAssign add_assign, Add add);
-    forward_binop!(SubAssign sub_assign, Sub sub);
-    forward_binop!(MulAssign mul_assign, Mul mul);
-    forward_binop!(DivAssign div_assign, Div div);
 
-    impl<M: ModSpec> Neg for &'_ MInt<M> {
-        type Output = MInt<M>;
-        fn neg(self) -> MInt<M> {
-            let mut res = M::MODULUS - self.0;
-            if res == M::MODULUS {
-                res = 0.into();
-            }
-            MInt(res)
-        }
-    }
-    impl<M: ModSpec> Neg for MInt<M> {
-        type Output = Self;
-        fn neg(self) -> Self::Output {
-            (&self).neg()
-        }
-    }
-    impl<M: ModSpec> Default for MInt<M> {
-        fn default() -> Self {
-            Self(M::U::default())
-        }
-    }
-    impl<M: ModSpec> SemiRing for MInt<M> {
-        fn one() -> Self {
-            Self(1.into()) * Self(M::R2)
-        }
-    }
-    impl<M: ModSpec> CommRing for MInt<M> {}
-    impl<M: ModSpec> Field for MInt<M> {
-        fn inv(&self) -> Self {
-            self.pow(M::MODULUS - M::U::from(2))
-        }
-    }
+    macro_rules! impl_modint {
+        ($mint:ident $m:ident, U = $U:ty, D = $D:ty, EXP = $exp:expr) => {
+            #[derive(Clone, Copy, PartialEq, Eq)]
+            pub struct $mint<const M: $U>($U);
+            impl<const M: $U> $mint<M> {
+                const NEG_M_INV: $U = {
+                    debug_assert!(M % 2 == 1, "modulus must be coprime with 2");
+                    let mut m_inv: $U = 1;
+                    let two: $U = 2;
 
-    pub trait CastImpl<U: Unsigned>: Unsigned {
-        fn cast_into<M: ModSpec<U = U>>(self) -> MInt<M>;
-    }
-    impl<U: Unsigned> CastImpl<U> for U {
-        fn cast_into<M: ModSpec<U = U>>(self) -> MInt<M> {
-            MInt::new(self)
-        }
-    }
-    macro_rules! impl_cast {
-        (@common $src:ident) => {
-            impl<M: ModSpec> From<$src> for MInt<M>
-                where $src: CastImpl<M::U>
-            {
-                fn from(value: $src) -> Self {
-                    value.cast_into()
+                    let mut iter = 0;
+                    let log2_exp = u32::trailing_zeros($exp);
+                    while iter < log2_exp {
+                        m_inv = m_inv.wrapping_mul(two.wrapping_sub(M.wrapping_mul(m_inv)));
+                        iter += 1;
+                    }
+                    m_inv.wrapping_neg()
+                };
+                const R2: $U = {
+                    let r = M.wrapping_neg() % M;
+                    (r as $D * r as $D % M as $D) as $U
+                };
+                pub const fn to_double(u: $U) -> $D {
+                    u as $D
                 }
-            }
-        };
-        (@eq $src:ident $u:ident) => {
-            impl<M: ModSpec<U = $u>> From<MInt<M>> for $u {
-                fn from(x: MInt<M>) -> Self {
-                    M::reduce(M::to_double(x.0))
+                pub const fn reduce(x: $D) -> $U {
+                    debug_assert!(x < (M as $D) * (M as $D));
+                    let q = (x as $U).wrapping_mul(Self::NEG_M_INV);
+                    let mut res = ((q as $D * M as $D + x) >> $exp) as $U;
+                    if res >= M {
+                        res -= M;
+                    }
+                    res
+                }
+                pub const fn new(x: $U) -> Self {
+                    Self(Self::reduce(Self::to_double(x) * Self::to_double(Self::R2)))
+                }
+                pub const fn into_unsigned(self) -> $U {
+                    Self::reduce(Self::to_double(self.0))
                 }
             }
 
-        };
-        (@lt $src:ident $u:ident) => {
-            impl CastImpl<$u> for $src {
-                fn cast_into<M: ModSpec<U = $u>>(self) -> MInt<M> {
-                    (self as $u).cast_into()
+            mod $m {}
+
+            impl<const M: $U> AddAssign<&'_ Self> for $mint<M> {
+                fn add_assign(&mut self, rhs: &Self) {
+                    self.0 += rhs.0;
+                    if self.0 >= M {
+                        self.0 -= M;
+                    }
+                }
+            }
+            impl<const M: $U> SubAssign<&'_ Self> for $mint<M> {
+                fn sub_assign(&mut self, rhs: &Self) {
+                    if self.0 < rhs.0 {
+                        self.0 += M;
+                    }
+                    self.0 -= rhs.0;
+                }
+            }
+            impl<const M: $U> MulAssign<&'_ Self> for $mint<M> {
+                fn mul_assign(&mut self, rhs: &Self) {
+                    self.0 = Self::reduce(Self::to_double(self.0) * Self::to_double(rhs.0));
+                }
+            }
+            impl<const M: $U> DivAssign<&'_ Self> for $mint<M> {
+                fn div_assign(&mut self, rhs: &Self) {
+                    self.mul_assign(&rhs.inv());
+                }
+            }
+            forward_binop!($mint $U, AddAssign add_assign, Add add);
+            forward_binop!($mint $U, SubAssign sub_assign, Sub sub);
+            forward_binop!($mint $U, MulAssign mul_assign, Mul mul);
+            forward_binop!($mint $U, DivAssign div_assign, Div div);
+
+            impl<const M: $U> Neg for &'_ $mint<M> {
+                type Output = $mint<M>;
+                fn neg(self) -> $mint<M> {
+                    let mut res = M - self.0;
+                    if res == M {
+                        res = 0;
+                    }
+                    $mint(res)
+                }
+            }
+            impl<const M: $U> Neg for $mint<M> {
+                type Output = Self;
+                fn neg(self) -> Self::Output {
+                    (&self).neg()
+                }
+            }
+            impl<const M: $U> Default for $mint<M> {
+                fn default() -> Self {
+                    Self::new(0)
+                }
+            }
+            impl<const M: $U> SemiRing for $mint<M> {
+                fn one() -> Self {
+                    Self::new(1)
+                }
+            }
+            impl<const M: $U> CommRing for $mint<M> {}
+            impl<const M: $U> Field for $mint<M> {
+                fn inv(&self) -> Self {
+                    self.pow(M - 2)
+                }
+            }
+
+            impl<const M: $U> std::fmt::Debug for $mint<M> {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    write!(f, "{}", self.into_unsigned())
+                }
+            }
+            impl<const M: $U> std::fmt::Display for $mint<M> {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    write!(f, "{}", self.into_unsigned())
+                }
+            }
+            impl<const M: $U> std::str::FromStr for $mint<M> {
+                type Err = <$U as std::str::FromStr>::Err;
+                fn from_str(s: &str) -> Result<Self, Self::Err> {
+                    s.parse::<$U>().map(|x| $mint::new(x))
                 }
             }
         };
-        (@rt $src:ident $u:ident) => {
-            impl CastImpl<$u> for $src {
-                fn cast_into<M: ModSpec<U = $u>>(self) -> MInt<M> {
-                    ((self % M::MODULUS as $src) as $u).cast_into()
+    }
+    impl_modint!(M32 m32, U = u32, D = u64, EXP = 32);
+    impl_modint!(M64 m64, U = u64, D = u128, EXP = 64);
+
+    macro_rules! impl_ucast {
+        (@eq $mint:ident $U:ident) => {
+            impl<const M: $U> From<$U> for $mint<M> {
+                fn from(x: $U) -> Self {
+                    Self::new(x)
+                }
+            }
+            impl<const M: $U> From<$mint<M>> for $U {
+                fn from(x: $mint<M>) -> Self {
+                    x.into_unsigned()
                 }
             }
         };
-        (@cascade $lower:ident $($upper:ident)*) => {
-            $(
-                impl_cast!(@lt $lower $upper);
-                impl_cast!(@rt $upper $lower);
-            )*
-            impl_cast!(@eq $lower $lower);
+        (@lt $mint:ident $U:ident $src:ident) => {
+            impl<const M: $U> From<$src> for $mint<M> {
+                fn from(x: $src) -> Self {
+                    Self::new(x as $U)
+                }
+            }
         };
-        ($lower:ident $($rest:ident)*) => {
-            impl_cast!(@common $lower);
-            impl_cast!(@cascade $lower $($rest)*);
-            impl_cast!($($rest)*);
+        (@gt $mint:ident $U:ident $src:ident) => {
+            impl<const M: $U> From<$src> for $mint<M> {
+                fn from(x: $src) -> Self {
+                    Self::new((x % M as $src) as $U)
+                }
+            }
+            impl<const M: $U> From<$mint<M>> for $src {
+                fn from(x: $mint<M>) -> Self {
+                    x.into_unsigned() as $src
+                }
+            }
+        };
+        ($mint:ident, $($lower:ident)*, $U:ident, $($upper:ident)*) => {
+            $(impl_ucast!(@lt $mint $U $lower);)*
+            impl_ucast!(@eq $mint $U);
+            $(impl_ucast!(@gt $mint $U $upper);)*
         };
         () => {};
     }
-    impl_cast!(u8 u16 u32 u64 u128);
-
-    impl<M: ModSpec> std::fmt::Debug for MInt<M>
-    where
-        M::U: std::fmt::Debug + From<MInt<M>>,
-    {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            M::U::from(*self).fmt(f)
-        }
+    macro_rules! impl_icast {
+        (@lt $mint:ident $U:ident $I:ident $src:ident) => {
+            impl<const M: $U> From<$src> for $mint<M> {
+                fn from(x: $src) -> Self {
+                    Self::new((x as $I).rem_euclid(M as $I) as $U)
+                }
+            }
+        };
+        (@ge $mint:ident $U:ident $src:ident) => {
+            impl<const M: $U> From<$src> for $mint<M> {
+                fn from(x: $src) -> Self {
+                    Self::new((x.rem_euclid(M as $src)) as $U)
+                }
+            }
+        };
+        ($mint:ident, $($lower:ident)*, $U:ident $I:ident, $($upper:ident)*) => {
+            $(impl_icast!(@lt $mint $U $I $lower);)*
+            impl_icast!(@ge $mint $U $I);
+            $(impl_icast!(@ge $mint $U $upper);)*
+        };
+        () => {};
     }
-    impl<M: ModSpec> std::fmt::Display for MInt<M>
-    where
-        M::U: std::fmt::Display + From<MInt<M>>,
-    {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            M::U::from(*self).fmt(f)
-        }
-    }
-    impl<M: ModSpec> std::str::FromStr for MInt<M>
-    where
-        M::U: std::str::FromStr,
-    {
-        type Err = <M::U as std::str::FromStr>::Err;
-        fn from_str(s: &str) -> Result<Self, Self::Err> {
-            s.parse::<M::U>().map(|x| MInt::new(x))
-        }
-    }
+    impl_ucast!(M32, u8 u16, u32, u64 u128);
+    impl_ucast!(M64, u8 u16 u32, u64, u128);
+    impl_icast!(M32, i8 i16, u32 i32, i64 i128);
+    impl_icast!(M64, i8 i16 i32, u64 i64, i128);
 }
 
 pub mod conv {
+    use crate::mint_mont::M32;
+
     use super::algebra::*;
 
+    const P_GENS_32: [[u32; 2]; 4] = [
+        [998244353, 3],
+        [167772161, 3],
+        [104857601, 3],
+        [13631489, 15],
+    ];
+    pub const fn mod_pow(mut base: u64, mut exp: u64, m: u64) -> u64 {
+        let mut res = 1;
+        while exp > 0 {
+            if exp % 2 == 1 {
+                res = res * base % m;
+            }
+            base = base * base % m;
+            exp >>= 1;
+        }
+        res
+    }
+    pub const fn try_gen_32(p: u32) -> Option<u32> {
+        let mut i = 0;
+        while i < P_GENS_32.len() {
+            if P_GENS_32[i][0] == p {
+                return Some(P_GENS_32[i][1]);
+            }
+            i += 1;
+        }
+        None
+    }
+    // pub fn try_proot_m32<const P: u32>(n: usize) -> Option<crate::mint_mont::M32<P>> {
+    //     let g = try_gen_32(P)?;
+    //     if (P - 1) % n as u32 != 0 {
+    //         return None;
+    //     }
+    //     Some(crate::mint_mont::M32::from(g).pow((P - 1) / n as u32))
+    // }
+    pub const fn crt3_coeff_u32(ps: [u32; 3]) -> (u128, [u128; 3]) {
+        let ps = [ps[0] as u64, ps[1] as u64, ps[2] as u64];
+        let q = ps[0] as u128 * ps[1] as u128 * ps[2] as u128;
+        let qs = [ps[1] * ps[2], ps[0] * ps[2], ps[0] * ps[1]];
+        let rs = [
+            mod_pow(qs[0] % ps[0], ps[0] - 2, ps[0]),
+            mod_pow(qs[1] % ps[1], ps[1] - 2, ps[1]),
+            mod_pow(qs[2] % ps[2], ps[2] - 2, ps[2]),
+        ];
+        let ms = [
+            qs[0] as u128 * rs[0] as u128,
+            qs[1] as u128 * rs[1] as u128,
+            qs[2] as u128 * rs[2] as u128,
+        ];
+        (q, ms)
+    }
+
     pub struct PreCalc<T> {
-        rs: Vec<T>,
-        irs: Vec<T>,
+        rs: [T; 30],
+        irs: [T; 30],
     }
     impl<T: Field> PreCalc<T> {
-        fn new(n_log: usize, proot: T) -> Self {
-            let mut pow = vec![T::one(); n_log + 1];
-            let mut ipow = vec![T::one(); n_log + 1];
-            pow[n_log] = proot.clone();
-            ipow[n_log] = proot.clone().inv();
-            for i in (0..n_log).rev() {
-                pow[i] = pow[i + 1].clone() * pow[i + 1].clone();
-                ipow[i] = ipow[i + 1].clone() * ipow[i + 1].clone();
+        // fn new(n_log: usize, proot: T) -> Self {
+        //     let mut pow = vec![T::one(); 31];
+        //     let mut ipow = vec![T::one(); 31];
+        //     pow[n_log] = proot.clone();
+        //     ipow[n_log] = proot.clone().inv();
+        //     for i in (0..n_log).rev() {
+        //         pow[i] = pow[i + 1].clone() * pow[i + 1].clone();
+        //         ipow[i] = ipow[i + 1].clone() * ipow[i + 1].clone();
+        //     }
+
+        //     let mut rs = std::array::from_fn(|_| T::one());
+        //     let mut irs = std::array::from_fn(|_| T::one());
+        //     let mut p = T::one();
+        //     let mut ip = T::one();
+        //     for i in 0..n_log - 1 {
+        //         rs[i] = pow[i + 2].clone() * p.clone();
+        //         irs[i] = ipow[i + 2].clone() * ip.clone();
+        //         p *= ipow[i + 2].clone();
+        //         ip *= pow[i + 2].clone();
+        //     }
+        //     Self { rs, irs }
+        // }
+    }
+    impl<const P: u32> PreCalc<crate::mint_mont::M32<P>> {
+        const INST: Option<Self> = 'o: {
+            let p64 = P as u64;
+            let mut pow = [1u64; 31];
+            let mut ipow = [1u64; 31];
+            let v2 = (P - 1).trailing_zeros() as usize;
+            let Some(proot) = try_gen_32(P) else {
+                break 'o None;
+            };
+            let base = mod_pow(proot as u64, (p64 - 1) >> v2, p64);
+            pow[v2] = base;
+            ipow[v2] = mod_pow(base, p64 - 2, p64);
+            let mut i = v2;
+            while i > 0 {
+                i -= 1;
+                pow[i] = pow[i + 1] * pow[i + 1] as u64 % p64;
+                ipow[i] = ipow[i + 1] * ipow[i + 1] as u64 % p64;
             }
 
-            let mut rs = vec![T::one(); n_log];
-            let mut irs = vec![T::one(); n_log];
-            let mut p = T::one();
-            let mut ip = T::one();
-            for i in 0..n_log - 1 {
-                rs[i] = pow[i + 2].clone() * p.clone();
-                irs[i] = ipow[i + 2].clone() * ip.clone();
-                p *= ipow[i + 2].clone();
-                ip *= pow[i + 2].clone();
+            let mut rs = [1u64; 30];
+            let mut irs = [1u64; 30];
+            let mut w = 1;
+            let mut iw = 1;
+            let mut i = 0;
+            while i < v2 - 1 {
+                rs[i] = pow[i + 2] * w % p64;
+                irs[i] = ipow[i + 2] * iw % p64;
+                w = w * ipow[i + 2] % p64;
+                iw = iw * pow[i + 2] % p64;
+                i += 1;
             }
-            Self { rs, irs }
-        }
+            const fn trans<const P: u32>(xs: [u64; 30]) -> [M32<P>; 30] {
+                let mut res = [M32::new(0); 30];
+                let mut i = 0;
+                while i < 30 {
+                    res[i] = M32::new(xs[i] as u32);
+                    i += 1;
+                }
+                res
+            }
+            let rs = trans(rs);
+            let irs = trans(irs);
+            Some(Self { rs, irs })
+        };
     }
 
     pub fn permute_bitrev<T>(xs: &mut [T]) {
@@ -417,30 +495,6 @@ pub mod conv {
         }
     }
 
-    const P_GENS_32: [[u32; 2]; 4] = [
-        [998244353, 3],
-        [167772161, 3],
-        [104857601, 3],
-        [13631489, 15],
-    ];
-    pub const fn try_gen_32(p: u32) -> Option<u32> {
-        let mut i = 0;
-        while i < P_GENS_32.len() {
-            if P_GENS_32[i][0] == p {
-                return Some(P_GENS_32[i][1]);
-            }
-            i += 1;
-        }
-        None
-    }
-    pub fn try_proot_m32<const P: u32>(n: usize) -> Option<crate::mint_mont::M32<P>> {
-        let g = try_gen_32(P)?;
-        if (P - 1) % n as u32 != 0 {
-            return None;
-        }
-        Some(crate::mint_mont::M32::from(g).pow((P - 1) / n as u32))
-    }
-
     fn conv_naive<T: SemiRing>(mut lhs: Vec<T>, mut rhs: Vec<T>) -> Vec<T> {
         if lhs.len() == 0 || rhs.len() == 0 {
             return lhs;
@@ -457,65 +511,37 @@ pub mod conv {
         }
         res
     }
-
-    fn conv_with_proot<T: Field + From<u32>>(
-        mut lhs: Vec<T>,
-        mut rhs: Vec<T>,
-        gen_proot: fn(usize) -> Option<T>,
-    ) -> Result<Vec<T>, (Vec<T>, Vec<T>)> {
+    fn conv_with_proot_32<const P: u32>(
+        mut lhs: Vec<M32<P>>,
+        mut rhs: Vec<M32<P>>,
+    ) -> Result<Vec<M32<P>>, (Vec<M32<P>>, Vec<M32<P>>)> {
         if lhs.len().min(rhs.len()) <= 20 {
             return Ok(conv_naive(lhs, rhs));
         }
-
         let n = lhs.len() + rhs.len() - 1;
         let n_pad = n.next_power_of_two();
-        let proot = match gen_proot(n_pad) {
-            Some(proot) => proot,
-            None => return Err((lhs, rhs)),
+        let Some(cx) = &PreCalc::<M32<P>>::INST else {
+            return Err((lhs, rhs));
         };
-        let n_log = (u32::BITS - (n_pad as u32).leading_zeros() - 1) as usize;
+        // let proot = match try_proot_m32(n_pad) {
+        //     Some(proot) => proot,
+        //     None => return Err((lhs, rhs)),
+        // };
+        // let n_log = (u32::BITS - (n_pad as u32).leading_zeros() - 1) as usize;
+        // let cx = PreCalc::new(n_log, proot.clone());
 
-        let cx = PreCalc::new(n_log, proot.clone());
-
-        lhs.resize(n_pad, T::zero());
-        rhs.resize(n_pad, T::zero());
+        lhs.resize(n_pad, M32::zero());
+        rhs.resize(n_pad, M32::zero());
         ntt_radix2(&cx, &mut lhs);
         ntt_radix2(&cx, &mut rhs);
         lhs.iter_mut().zip(&rhs).for_each(|(x, y)| *x *= y);
         intt_radix2(&cx, &mut lhs);
-        let n_inv = T::from(n_pad as u32).inv();
+        let n_inv = M32::from(n_pad as u32).inv();
         lhs.iter_mut().for_each(|x| *x *= n_inv.clone());
         lhs.truncate(n);
         Ok(lhs)
     }
     fn conv_with_crt_32<T: SemiRing + Into<u32> + From<u128>>(lhs: Vec<T>, rhs: Vec<T>) -> Vec<T> {
-        const fn mod_pow(mut base: u64, mut exp: u64, m: u64) -> u64 {
-            let mut res = 1;
-            while exp > 0 {
-                if exp % 2 == 1 {
-                    res = res * base % m;
-                }
-                base = base * base % m;
-                exp >>= 1;
-            }
-            res
-        }
-        const fn crt3_coeff_u32(ps: [u32; 3]) -> (u128, [u128; 3]) {
-            let ps = [ps[0] as u64, ps[1] as u64, ps[2] as u64];
-            let q = ps[0] as u128 * ps[1] as u128 * ps[2] as u128;
-            let qs = [ps[1] * ps[2], ps[0] * ps[2], ps[0] * ps[1]];
-            let rs = [
-                mod_pow(qs[0] % ps[0], ps[0] - 2, ps[0]),
-                mod_pow(qs[1] % ps[1], ps[1] - 2, ps[1]),
-                mod_pow(qs[2] % ps[2], ps[2] - 2, ps[2]),
-            ];
-            let ms = [
-                qs[0] as u128 * rs[0] as u128,
-                qs[1] as u128 * rs[1] as u128,
-                qs[2] as u128 * rs[2] as u128,
-            ];
-            (q, ms)
-        }
         use crate::conv;
         type M<const P: u32> = crate::mint_mont::M32<P>;
         const P0: u32 = conv::P_GENS_32[0][0];
@@ -528,7 +554,7 @@ pub mod conv {
             let c = |x: &T| <M<P> as From<u32>>::from(x.clone().into());
             let lhs = lhs.iter().map(c).collect();
             let rhs = rhs.iter().map(c).collect();
-            conv_with_proot(lhs, rhs, try_proot_m32).unwrap()
+            conv_with_proot_32(lhs, rhs).unwrap()
         }
         let h0: Vec<M<P0>> = forward(&lhs, &rhs);
         let h1: Vec<M<P1>> = forward(&lhs, &rhs);
@@ -548,7 +574,7 @@ pub mod conv {
     }
     impl<const P: u32> Conv for crate::mint_mont::M32<P> {
         fn conv(lhs: Vec<Self>, rhs: Vec<Self>) -> Vec<Self> {
-            match conv_with_proot(lhs, rhs, try_proot_m32) {
+            match conv_with_proot_32(lhs, rhs) {
                 Ok(res) => res,
                 Err((lhs, rhs)) => conv_with_crt_32(lhs, rhs),
             }
