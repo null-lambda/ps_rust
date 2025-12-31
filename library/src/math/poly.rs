@@ -670,552 +670,474 @@ pub mod comb {
  }
 }
 
+#[rustfmt::skip]
 pub mod poly {
-    use crate::{algebra::*, comb::Comb, conv::Conv};
-    use std::{collections::VecDeque, ops::*};
+ use crate::{algebra::*, comb::Comb, conv::Conv};
+ use std::{collections::VecDeque, ops::*};
 
-    #[derive(Debug, Default, Clone, PartialEq, Eq)]
-    pub struct Poly<T>(pub Vec<T>);
+ #[derive(Debug, Default, Clone, PartialEq, Eq)]
+ pub struct Poly<T>(pub Vec<T>);
 
-    impl<T: CommRing> Poly<T> {
-        pub fn new(coeffs: Vec<T>) -> Self {
-            Self(coeffs)
-        }
-        pub fn zero() -> Self {
-            Self(vec![])
-        }
-        pub fn one() -> Self {
-            Self(vec![T::one()])
-        }
-        pub fn pop_zeros(&mut self) {
-            while self.0.last().filter(|&c| c == &T::zero()).is_some() {
-                self.0.pop();
-            }
-        }
-        pub fn len(&self) -> usize {
-            self.0.len()
-        }
-        pub fn is_zero(&mut self) -> bool {
-            self.pop_zeros();
-            self.0.is_empty()
-        }
+ impl<T: CommRing> Poly<T> {
+  pub fn new(coeffs: Vec<T>) -> Self { Self(coeffs) }
+  pub fn zero() -> Self { Self(vec![]) }
+  pub fn one() -> Self { Self(vec![T::one()]) }
+  pub fn pop_zeros(&mut self) {
+   while self.0.last().filter(|&c| c == &T::zero()).is_some() {
+    self.0.pop();
+   }
+  }
+  pub fn len(&self) -> usize { self.0.len() }
+  pub fn is_zero(&mut self) -> bool {
+   self.pop_zeros();
+   self.0.is_empty()
+  }
 
-        pub fn degree(&mut self) -> usize {
-            self.pop_zeros();
-            self.0.len().saturating_sub(1)
-        }
-        pub fn leading_coeff(&self) -> T {
-            self.0.last().cloned().unwrap_or(T::zero())
-        }
-        pub fn coeff(&self, i: usize) -> T {
-            self.0.get(i).cloned().unwrap_or_default()
-        }
-        pub fn eval(&self, x: T) -> T {
-            let mut res = T::zero();
-            for c in self.0.iter().rev() {
-                res *= &x;
-                res += c;
-            }
-            res
-        }
-        pub fn reverse(&mut self) {
-            self.0.reverse()
-        }
-        pub fn mod_xk(mut self, k: usize) -> Self {
-            if self.degree() >= k {
-                self.0.truncate(k);
-            }
-            self
-        }
-        pub fn clone_mod_xk(&self, k: usize) -> Self {
-            Self(self.0[..self.0.len().min(k)].to_vec())
-        }
-        pub fn mul_xk(mut self, k: usize) -> Self {
-            ((0..k).map(|_| T::zero()))
-                .chain(std::mem::take(&mut self.0))
-                .collect()
-        }
-        pub fn div_xk(&self, k: usize) -> Self {
-            Self(self.0[k.min(self.0.len())..].to_vec())
-        }
-        pub fn factor_out_xk(&self) -> (usize, Self) {
-            if let Some(k) = self.0.iter().position(|x| x != &T::zero()) {
-                let q = self.0[k..].to_vec();
-                (k, Self::new(q))
-            } else {
-                (0, Self::zero())
-            }
-        }
+  pub fn degree(&mut self) -> usize {
+   self.pop_zeros();
+   self.0.len().saturating_sub(1)
+  }
+  pub fn leading_coeff(&self) -> T { self.0.last().cloned().unwrap_or(T::zero()) }
+  pub fn coeff(&self, i: usize) -> T { self.0.get(i).cloned().unwrap_or_default() }
+  pub fn eval(&self, x: T) -> T {
+   let mut res = T::zero();
+   for c in self.0.iter().rev() {
+    res *= &x;
+    res += c;
+   }
+   res
+  }
+  pub fn reverse(&mut self) { self.0.reverse() }
+  pub fn mod_xk(mut self, k: usize) -> Self {
+   if self.degree() >= k {
+    self.0.truncate(k);
+   }
+   self
+  }
+  pub fn clone_mod_xk(&self, k: usize) -> Self { Self(self.0[..self.0.len().min(k)].to_vec()) }
+  pub fn mul_xk(mut self, k: usize) -> Self { ((0..k).map(|_| T::zero())).chain(std::mem::take(&mut self.0)).collect() }
+  pub fn div_xk(&self, k: usize) -> Self { Self(self.0[k.min(self.0.len())..].to_vec()) }
+  pub fn factor_out_xk(&self) -> (usize, Self) {
+   if let Some(k) = self.0.iter().position(|x| x != &T::zero()) {
+    let q = self.0[k..].to_vec();
+    (k, Self::new(q))
+   } else {
+    (0, Self::zero())
+   }
+  }
+ }
+ impl<T> FromIterator<T> for Poly<T> {
+  fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self { Self(iter.into_iter().collect()) }
+ }
+ impl<T: CommRing + From<u32>> Poly<T> {
+  pub fn deriv(&self) -> Self { Self(((1u32..).zip(&self.0[1..])).map(|(i, x)| T::from(i) * x).collect()) }
+ }
+ impl<T: CommRing> From<T> for Poly<T> {
+  fn from(c: T) -> Self { Self(vec![c]) }
+ }
+ impl<T: CommRing> MulAssign<T> for Poly<T> {
+  fn mul_assign(&mut self, rhs: T) { self.0.iter_mut().for_each(|c| c.mul_assign(rhs.clone())); }
+ }
+ impl<T: CommRing> Mul<T> for Poly<T> {
+  type Output = Self;
+  fn mul(mut self, rhs: T) -> Self::Output {
+   self *= rhs;
+   self
+  }
+ }
+ impl<T: CommRing> AddAssign<&'_ Self> for Poly<T> {
+  fn add_assign(&mut self, rhs: &Self) {
+   self.0.resize(self.len().max(rhs.len()), T::zero());
+   self.0.iter_mut().zip(&rhs.0).for_each(|(a, b)| a.add_assign(b));
+  }
+ }
+ impl<T: CommRing> Add<&'_ Self> for Poly<T> {
+  type Output = Self;
+  fn add(mut self, rhs: &Self) -> Self {
+   self += rhs;
+   self
+  }
+ }
+ impl<T: CommRing> Add<Self> for Poly<T> {
+  type Output = Self;
+  fn add(mut self, mut rhs: Self) -> Self {
+   if self.len() < rhs.len() {
+    std::mem::swap(&mut self, &mut rhs);
+   }
+   self += &rhs;
+   self
+  }
+ }
+ impl<T: CommRing> SubAssign<&'_ Self> for Poly<T> {
+  fn sub_assign(&mut self, rhs: &Self) {
+   self.0.resize(self.len().max(rhs.len()), T::zero());
+   self.0.iter_mut().zip(&rhs.0).for_each(|(x, y)| *x -= y);
+  }
+ }
+ impl<T: CommRing> Sub<&'_ Self> for Poly<T> {
+  type Output = Self;
+  fn sub(mut self, rhs: &Self) -> Self {
+   self -= rhs;
+   self
+  }
+ }
+ impl<T: CommRing> Sub<Self> for Poly<T> {
+  type Output = Self;
+  fn sub(mut self, mut rhs: Self) -> Self {
+   if self.len() >= rhs.len() {
+    self.0.iter_mut().zip(&rhs.0).for_each(|(x, y)| *x -= y);
+    self
+   } else {
+    std::mem::swap(&mut self, &mut rhs);
+    self.0.iter_mut().zip(&rhs.0).for_each(|(x, y)| *x -= y);
+    -self
+   }
+  }
+ }
+ impl<T: Conv> Mul<Self> for Poly<T> {
+  type Output = Self;
+  fn mul(self, rhs: Self) -> Self { Self(Conv::conv(self.0, rhs.0)) }
+ }
+ impl<T: Conv> MulAssign<Self> for Poly<T> {
+  fn mul_assign(&mut self, rhs: Self) {
+   let lhs = std::mem::take(self);
+   *self = lhs * rhs;
+  }
+ }
+ impl<T: Conv + Field + From<u32>> DivAssign<Self> for Poly<T> {
+  fn div_assign(&mut self, mut rhs: Self) {
+   assert!(!rhs.is_zero());
+   self.pop_zeros();
+   rhs.pop_zeros();
+   if self.degree() < rhs.degree() {
+    self.0.clear();
+    return;
+   }
+
+   let n = self.degree();
+   let m = rhs.degree();
+   let l = n - m + 1;
+
+   self.reverse();
+   *self = std::mem::take(self).mod_xk(l);
+   rhs.reverse();
+   rhs = rhs.mod_xk(l);
+
+   *self *= rhs.inv_mod_xk(l);
+   self.0.resize(l, T::zero());
+   self.reverse();
+  }
+ }
+ impl<T: Conv + Field + From<u32>> RemAssign<Self> for Poly<T> {
+  fn rem_assign(&mut self, rhs: Self) {
+   let mut q = self.clone();
+   q /= rhs.clone();
+   q *= rhs;
+   *self -= &q;
+   self.pop_zeros();
+  }
+ }
+ impl<T: CommRing> Neg for &Poly<T> {
+  type Output = Poly<T>;
+  fn neg(self) -> Poly<T> { Poly(self.0.iter().map(|c| -c.clone()).collect()) }
+ }
+ impl<T: CommRing> Neg for Poly<T> {
+  type Output = Self;
+  fn neg(self) -> Self { -&self }
+ }
+ impl<T: Conv + CommRing + From<u32>> Poly<T> {
+  pub fn prod(xs: impl IntoIterator<Item = Self>) -> Self {
+   let mut factors: VecDeque<_> = xs.into_iter().collect();
+   while factors.len() >= 2 {
+    let mut lhs = factors.pop_front().unwrap();
+    let rhs = factors.pop_front().unwrap();
+    lhs *= rhs;
+    factors.push_back(lhs);
+   }
+   factors.pop_front().unwrap_or(Self::one())
+  }
+  pub fn sum_frac(fs: impl IntoIterator<Item = (Self, Self)>) -> (Self, Self) {
+   let mut factors: VecDeque<_> = fs.into_iter().collect();
+
+   while factors.len() >= 2 {
+    let (n0, d0) = factors.pop_front().unwrap();
+    let (n1, d1) = factors.pop_front().unwrap();
+    factors.push_back((n0 * d1.clone() + n1 * d0.clone(), d0 * d1));
+   }
+
+   factors.pop_front().unwrap_or((Self::zero(), Self::one()))
+  }
+  // Transposed version of mul(Rev[f], -) (Tellegen's principle)
+  pub fn mul_rev_t(self, rhs: Self) -> Self {
+   let shift = self.len().saturating_sub(1);
+   let old = rhs.len();
+   let mut prod = self * rhs;
+   prod.0.truncate(old);
+   prod = prod.div_xk(shift);
+   prod
+  }
+  // Transposed version of mul(f, -) (Tellegen's principle)
+  pub fn mul_t(mut self, rhs: Self) -> Self {
+   self.reverse();
+   self.mul_rev_t(rhs)
+  }
+  pub fn pow_mod_xk(&self, mut exp: u64, k: usize) -> Self {
+   let mut res = Self::one().mod_xk(k);
+   let mut base = self.clone().mod_xk(k);
+   while exp > 0 {
+    if exp & 1 == 1 {
+     res *= base.clone();
+     res = res.mod_xk(k);
     }
-    impl<T> FromIterator<T> for Poly<T> {
-        fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
-            Self(iter.into_iter().collect())
-        }
-    }
-    impl<T: CommRing + From<u32>> Poly<T> {
-        pub fn deriv(&self) -> Self {
-            Self(
-                ((1u32..).zip(&self.0[1..]))
-                    .map(|(i, x)| T::from(i) * x)
-                    .collect(),
-            )
-        }
-    }
-    impl<T: CommRing> From<T> for Poly<T> {
-        fn from(c: T) -> Self {
-            Self(vec![c])
-        }
-    }
-    impl<T: CommRing> MulAssign<T> for Poly<T> {
-        fn mul_assign(&mut self, rhs: T) {
-            self.0.iter_mut().for_each(|c| c.mul_assign(rhs.clone()));
-        }
-    }
-    impl<T: CommRing> Mul<T> for Poly<T> {
-        type Output = Self;
-        fn mul(mut self, rhs: T) -> Self::Output {
-            self *= rhs;
-            self
-        }
-    }
-    impl<T: CommRing> AddAssign<&'_ Self> for Poly<T> {
-        fn add_assign(&mut self, rhs: &Self) {
-            self.0.resize(self.len().max(rhs.len()), T::zero());
-            self.0
-                .iter_mut()
-                .zip(&rhs.0)
-                .for_each(|(a, b)| a.add_assign(b));
-        }
-    }
-    impl<T: CommRing> Add<&'_ Self> for Poly<T> {
-        type Output = Self;
-        fn add(mut self, rhs: &Self) -> Self {
-            self += rhs;
-            self
-        }
-    }
-    impl<T: CommRing> Add<Self> for Poly<T> {
-        type Output = Self;
-        fn add(mut self, mut rhs: Self) -> Self {
-            if self.len() < rhs.len() {
-                std::mem::swap(&mut self, &mut rhs);
-            }
-            self += &rhs;
-            self
-        }
-    }
-    impl<T: CommRing> SubAssign<&'_ Self> for Poly<T> {
-        fn sub_assign(&mut self, rhs: &Self) {
-            self.0.resize(self.len().max(rhs.len()), T::zero());
-            self.0.iter_mut().zip(&rhs.0).for_each(|(x, y)| *x -= y);
-        }
-    }
-    impl<T: CommRing> Sub<&'_ Self> for Poly<T> {
-        type Output = Self;
-        fn sub(mut self, rhs: &Self) -> Self {
-            self -= rhs;
-            self
-        }
-    }
-    impl<T: CommRing> Sub<Self> for Poly<T> {
-        type Output = Self;
-        fn sub(mut self, mut rhs: Self) -> Self {
-            if self.len() >= rhs.len() {
-                self.0.iter_mut().zip(&rhs.0).for_each(|(x, y)| *x -= y);
-                self
-            } else {
-                std::mem::swap(&mut self, &mut rhs);
-                self.0.iter_mut().zip(&rhs.0).for_each(|(x, y)| *x -= y);
-                -self
-            }
-        }
-    }
-    impl<T: Conv> Mul<Self> for Poly<T> {
-        type Output = Self;
-        fn mul(self, rhs: Self) -> Self {
-            Self(Conv::conv(self.0, rhs.0))
-        }
-    }
-    impl<T: Conv> MulAssign<Self> for Poly<T> {
-        fn mul_assign(&mut self, rhs: Self) {
-            let lhs = std::mem::take(self);
-            *self = lhs * rhs;
-        }
-    }
-    impl<T: Conv + Field + From<u32>> DivAssign<Self> for Poly<T> {
-        fn div_assign(&mut self, mut rhs: Self) {
-            assert!(!rhs.is_zero());
-            self.pop_zeros();
-            rhs.pop_zeros();
-            if self.degree() < rhs.degree() {
-                self.0.clear();
-                return;
-            }
+    base *= base.clone();
+    base = base.mod_xk(k);
+    exp >>= 1;
+   }
+   res.mod_xk(k)
+  }
+ }
+ impl<T: Conv + Field + From<u32>> Poly<T> {
+  pub fn inv_mod_xk(&self, k: usize) -> Self {
+   assert!(self.0[0] != T::zero(), "");
+   let mut res = Poly::from(self.0[0].inv());
+   let mut i = 1;
+   let two = Poly::from(T::from(2u32));
+   while i < k {
+    i = (i << 1).min(k);
+    res *= two.clone() - res.clone() * self.clone_mod_xk(i);
+    res = res.mod_xk(i);
+   }
+   res.mod_xk(k)
+  }
+  pub fn interp(ps: impl IntoIterator<Item = (T, T)>) -> Self {
+   // Potential optimization: Reduce redundant computation of the polynomial tree of `f`
+   // from three times to once - one in multipoint_eval, and the other in sum_frac.
+   let ps: Vec<_> = ps.into_iter().collect();
+   let f = Self::prod(ps.iter().map(|(x, _)| Poly::new(vec![-x.clone(), T::one()])));
+   let df_dx = f.deriv().multipoint_eval(ps.iter().map(|(x, _)| x.clone()));
+   let (d, _n) = Poly::sum_frac(ps.into_iter().zip(df_dx).map(|((x, y), m)| (Poly::from(y * m.inv()), Poly::new(vec![-x.clone(), T::one()]))));
+   d
+  }
+  pub fn multipoint_eval(&self, ps: impl IntoIterator<Item = T>) -> Vec<T> {
+   let ps = ps.into_iter().collect::<Vec<_>>();
+   let mut divisors: Vec<_> = ps.iter().map(|p| Poly::new(vec![-p.clone(), T::one()])).collect();
+   if divisors.is_empty() {
+    return vec![];
+   }
 
-            let n = self.degree();
-            let m = rhs.degree();
-            let l = n - m + 1;
+   let n = divisors.len();
+   for i in 0..n - 1 {
+    divisors.push(divisors[i << 1].clone() * divisors[i << 1 | 1].clone());
+   }
 
-            self.reverse();
-            *self = std::mem::take(self).mod_xk(l);
-            rhs.reverse();
-            rhs = rhs.mod_xk(l);
+   // Transposed version of $\sum_i c_i/(1-a_i x)$ (Tellegen's principle)
+   let mut remainders = vec![Poly::zero(); 2 * n - 1];
 
-            *self *= rhs.inv_mod_xk(l);
-            self.0.resize(l, T::zero());
-            self.reverse();
-        }
+   let mut f = self.clone();
+   let k = f.len();
+
+   let mut d = std::mem::take(&mut divisors[2 * n - 2]);
+   d.reverse();
+   d = d.inv_mod_xk(k);
+   d.0.resize(k, T::zero());
+
+   f.0.resize(n + k - 1, T::zero());
+   f = d.mul_t(f);
+   f.0.resize(n, T::zero());
+   remainders[2 * n - 2] = f;
+
+   for i in (0..n - 1).rev() {
+    let old = std::mem::take(&mut remainders[i + n]);
+    let mut l = std::mem::take(&mut divisors[i << 1]);
+    let mut r = std::mem::take(&mut divisors[i << 1 | 1]);
+
+    l = l.mul_rev_t(old.clone());
+    r = r.mul_rev_t(old);
+
+    remainders[i << 1] = r;
+    remainders[i << 1 | 1] = l;
+   }
+   (0..n).map(|i| remainders[i].coeff(0)).collect()
+  }
+  pub fn integrate(&self, cx: &Comb<T>) -> Self { std::iter::once(T::zero()).chain(self.0.iter().enumerate().map(|(i, x)| cx.inv(i + 1) * x)).collect() }
+  pub fn ln_mod_xk(&self, cx: &Comb<T>, k: usize) -> Self {
+   assert!(self.0[0] != T::zero(), "");
+   let mut q = self.deriv();
+   q *= self.clone().inv_mod_xk(k);
+   q.mod_xk(k.saturating_sub(1)).integrate(cx)
+  }
+  pub fn exp_mod_xk(&self, cx: &Comb<T>, k: usize) -> Self {
+   assert!(self.0.is_empty() || self.0[0] == T::zero(), "");
+   let mut f = Poly::one();
+   let mut i = 1;
+   while i < k {
+    i = (i << 1).min(k);
+    let inv_f = f.clone().inv_mod_xk(i - 1);
+    f *= Poly::one() + self.clone_mod_xk(i) - (f.deriv() * inv_f.clone()).mod_xk(i - 1).integrate(cx);
+    f = f.mod_xk(i);
+   }
+   f.mod_xk(k)
+  }
+  pub fn sqrt_1p_mx_mod_xk(&self, k: usize) -> Self {
+   // sqrt (1 + x f(x)) mod x^k
+   let mut f = self.clone();
+   f = f.mul_xk(1);
+   f += &Self::one();
+
+   let mut res = Self::one();
+   let mut i = 1;
+   let inv2 = T::from(2u32).inv();
+   while i < k {
+    i = (i << 1).min(k);
+    let q = res.inv_mod_xk(i);
+    res = (res + (f.clone_mod_xk(i) * q).mod_xk(i)) * inv2.clone();
+   }
+   res.mod_xk(k)
+  }
+  pub fn taylor_shift(&self, cx: &Comb<T>, k: usize) -> Self { todo!() }
+  // Bostan-Mori, O(L log L log N)
+  pub fn nth_of_frac(numer: Self, denom: Self, mut n: u64) -> T {
+   let mut p = numer.mod_xk(n as usize + 1);
+   let mut q = denom.mod_xk(n as usize + 1);
+   while n > 0 {
+    let mut q_neg = q.clone();
+    for i in (1..q_neg.0.len()).step_by(2) {
+     q_neg.0[i] = -q_neg.0[i].clone();
     }
-    impl<T: Conv + Field + From<u32>> RemAssign<Self> for Poly<T> {
-        fn rem_assign(&mut self, rhs: Self) {
-            let mut q = self.clone();
-            q /= rhs.clone();
-            q *= rhs;
-            *self -= &q;
-            self.pop_zeros();
-        }
+
+    let u = p * q_neg.clone();
+    let v = q * q_neg;
+    p = u.0.into_iter().skip((n % 2) as usize).step_by(2).collect();
+    q = v.0.into_iter().step_by(2).collect();
+    n /= 2;
+   }
+   p.coeff(0) / q.coeff(0)
+  }
+  // Helps kronecker substitution
+  fn resize_chunks(&mut self, w_src: usize, w_dest: usize) {
+   let mut res = Poly::new(vec![]);
+   if w_src <= w_dest {
+    for r in self.0.chunks(w_src) {
+     res.0.extend(r.iter().cloned());
+     res.0.extend((0..w_dest - r.len()).map(|_| T::zero()))
     }
-    impl<T: CommRing> Neg for &Poly<T> {
-        type Output = Poly<T>;
-        fn neg(self) -> Poly<T> {
-            Poly(self.0.iter().map(|c| -c.clone()).collect())
-        }
+   } else {
+    for r in self.0.chunks(w_src) {
+     res.0.extend(r.iter().cloned().take(w_dest));
     }
-    impl<T: CommRing> Neg for Poly<T> {
-        type Output = Self;
-        fn neg(self) -> Self {
-            -&self
-        }
+   }
+   *self = res
+  }
+  // Kinoshita-Li power projection
+  // [x^n] g(x)/(1-y f(x)) mod y^{n+1}
+  pub fn power_proj(f: &Self, g: &Self, n: usize) -> Self {
+   if f.0.is_empty() || g.0.is_empty() || n == 0 {
+    return Poly::zero();
+   };
+   let f0 = f.0[0].clone();
+   if f0 != T::zero() {
+    unimplemented!("f(0) != 0. Do shift yourself")
+   }
+
+   let mut nc = n;
+   let mut w = 2;
+   let mut p = Poly::new(vec![T::zero(); (n + 1) * w]);
+   let mut q = Poly::new(vec![T::zero(); (n + 1) * w]);
+   for i in 0..(n + 1).min(g.0.len()) {
+    p.0[i * w + 0] = g.0[i].clone();
+   }
+   q.0[0 * w + 0] = T::one();
+   for i in 0..(n + 1).min(f.0.len()) {
+    q.0[i * w + 1] = -f.0[i].clone();
+   }
+   while nc > 0 {
+    let w_prev = w;
+    w = w_prev * 2 - 1;
+    p.resize_chunks(w_prev, w);
+    q.resize_chunks(w_prev, w);
+    let mut q_nx = q.clone();
+    for r in q_nx.0.chunks_mut(w).skip(1).step_by(2) {
+     for x in r {
+      *x = -x.clone();
+     }
     }
-    impl<T: Conv + CommRing + From<u32>> Poly<T> {
-        pub fn prod(xs: impl IntoIterator<Item = Self>) -> Self {
-            let mut factors: VecDeque<_> = xs.into_iter().collect();
-            while factors.len() >= 2 {
-                let mut lhs = factors.pop_front().unwrap();
-                let rhs = factors.pop_front().unwrap();
-                lhs *= rhs;
-                factors.push_back(lhs);
-            }
-            factors.pop_front().unwrap_or(Self::one())
-        }
-        pub fn sum_frac(fs: impl IntoIterator<Item = (Self, Self)>) -> (Self, Self) {
-            let mut factors: VecDeque<_> = fs.into_iter().collect();
+    let u = p * q_nx.clone();
+    let v = q * q_nx;
+    p = u.0.chunks(w).skip(nc % 2).step_by(2).take(nc / 2 + 1).flatten().cloned().collect();
+    q = v.0.chunks(w).step_by(2).take(nc / 2 + 1).flatten().cloned().collect();
+    nc /= 2;
+   }
+   (p.mod_xk(n + 1) * q.mod_xk(n + 1).inv_mod_xk(n + 1)).mod_xk(n + 1)
+  }
+  pub fn comp_inv_mod_xk(&self, cx: &Comb<T>, k: usize) -> Self {
+   assert!(self.0.len() >= 2 && self.0[1] != T::zero());
+   assert!(self.0[0] == T::zero(), "Check algebraic generating series");
+   if k <= 1 {
+    return Poly::zero();
+   } else if k == 2 {
+    return Poly::new(vec![T::zero(), self.0[1].inv()]);
+   }
+   let n = k - 1;
+   let mut p = Poly::power_proj(self, &Poly::one(), n);
+   p.0.resize(n + 1, T::zero());
 
-            while factors.len() >= 2 {
-                let (n0, d0) = factors.pop_front().unwrap();
-                let (n1, d1) = factors.pop_front().unwrap();
-                factors.push_back((n0 * d1.clone() + n1 * d0.clone(), d0 * d1));
-            }
+   for i in 1..n + 1 {
+    p.0[i] *= cx.inv(i);
+   }
+   p.reverse();
+   p *= p.0[0].inv();
 
-            factors.pop_front().unwrap_or((Self::zero(), Self::one()))
-        }
-        // Transposed version of mul(Rev[f], -) (Tellegen's principle)
-        pub fn mul_rev_t(self, rhs: Self) -> Self {
-            let shift = self.len().saturating_sub(1);
-            let old = rhs.len();
-            let mut prod = self * rhs;
-            prod.0.truncate(old);
-            prod = prod.div_xk(shift);
-            prod
-        }
-        // Transposed version of mul(f, -) (Tellegen's principle)
-        pub fn mul_t(mut self, rhs: Self) -> Self {
-            self.reverse();
-            self.mul_rev_t(rhs)
-        }
-        pub fn pow_mod_xk(&self, mut exp: u64, k: usize) -> Self {
-            let mut res = Self::one().mod_xk(k);
-            let mut base = self.clone().mod_xk(k);
-            while exp > 0 {
-                if exp & 1 == 1 {
-                    res *= base.clone();
-                    res = res.mod_xk(k);
-                }
-                base *= base.clone();
-                base = base.mod_xk(k);
-                exp >>= 1;
-            }
-            res.mod_xk(k)
-        }
+   p = (p.ln_mod_xk(cx, n) * (-T::from(n as u32).inv())).exp_mod_xk(cx, n);
+   (p * self.0[1].inv()).mul_xk(1)
+  }
+  // \sum_{i=0...m-d} y^i [y^{d+i}] p(y)/q(x,y) mod x^k
+  fn comp_rec(p: Self, mut q: Self, qw: usize, k: usize, d: usize, m: usize) -> Self {
+   if k == 1 {
+    let u = p * q.inv_mod_xk(m);
+    return Poly::new(u.0[d.min(u.0.len())..m.min(u.0.len())].to_vec());
+   }
+   let qw_next = qw * 2 - 1;
+   q.resize_chunks(qw, qw_next);
+   let mut q_nx = q.clone();
+   for r in q_nx.0.chunks_mut(qw_next).skip(1).step_by(2) {
+    for x in r {
+     *x = -x.clone();
     }
-    impl<T: Conv + Field + From<u32>> Poly<T> {
-        pub fn inv_mod_xk(&self, k: usize) -> Self {
-            assert!(self.0[0] != T::zero(), "");
-            let mut res = Poly::from(self.0[0].inv());
-            let mut i = 1;
-            let two = Poly::from(T::from(2u32));
-            while i < k {
-                i = (i << 1).min(k);
-                res *= two.clone() - res.clone() * self.clone_mod_xk(i);
-                res = res.mod_xk(i);
-            }
-            res.mod_xk(k)
-        }
-        pub fn interp(ps: impl IntoIterator<Item = (T, T)>) -> Self {
-            // Potential optimization: Reduce redundant computation of the polynomial tree of `f`
-            // from three times to once - one in multipoint_eval, and the other in sum_frac.
-            let ps: Vec<_> = ps.into_iter().collect();
-            let f = Self::prod(
-                ps.iter()
-                    .map(|(x, _)| Poly::new(vec![-x.clone(), T::one()])),
-            );
-            let df_dx = f.deriv().multipoint_eval(ps.iter().map(|(x, _)| x.clone()));
-            let (d, _n) = Poly::sum_frac(ps.into_iter().zip(df_dx).map(|((x, y), m)| {
-                (
-                    Poly::from(y * m.inv()),
-                    Poly::new(vec![-x.clone(), T::one()]),
-                )
-            }));
-            d
-        }
-        pub fn multipoint_eval(&self, ps: impl IntoIterator<Item = T>) -> Vec<T> {
-            let ps = ps.into_iter().collect::<Vec<_>>();
-            let mut divisors: Vec<_> = ps
-                .iter()
-                .map(|p| Poly::new(vec![-p.clone(), T::one()]))
-                .collect();
-            if divisors.is_empty() {
-                return vec![];
-            }
-
-            let n = divisors.len();
-            for i in 0..n - 1 {
-                divisors.push(divisors[i << 1].clone() * divisors[i << 1 | 1].clone());
-            }
-
-            // Transposed version of $\sum_i c_i/(1-a_i x)$ (Tellegen's principle)
-            let mut remainders = vec![Poly::zero(); 2 * n - 1];
-
-            let mut f = self.clone();
-            let k = f.len();
-
-            let mut d = std::mem::take(&mut divisors[2 * n - 2]);
-            d.reverse();
-            d = d.inv_mod_xk(k);
-            d.0.resize(k, T::zero());
-
-            f.0.resize(n + k - 1, T::zero());
-            f = d.mul_t(f);
-            f.0.resize(n, T::zero());
-            remainders[2 * n - 2] = f;
-
-            for i in (0..n - 1).rev() {
-                let old = std::mem::take(&mut remainders[i + n]);
-                let mut l = std::mem::take(&mut divisors[i << 1]);
-                let mut r = std::mem::take(&mut divisors[i << 1 | 1]);
-
-                l = l.mul_rev_t(old.clone());
-                r = r.mul_rev_t(old);
-
-                remainders[i << 1] = r;
-                remainders[i << 1 | 1] = l;
-            }
-            (0..n).map(|i| remainders[i].coeff(0)).collect()
-        }
-        pub fn integrate(&self, cx: &Comb<T>) -> Self {
-            std::iter::once(T::zero())
-                .chain(self.0.iter().enumerate().map(|(i, x)| cx.inv(i + 1) * x))
-                .collect()
-        }
-        pub fn ln_mod_xk(&self, cx: &Comb<T>, k: usize) -> Self {
-            assert!(self.0[0] != T::zero(), "");
-            let mut q = self.deriv();
-            q *= self.clone().inv_mod_xk(k);
-            q.mod_xk(k.saturating_sub(1)).integrate(cx)
-        }
-        pub fn exp_mod_xk(&self, cx: &Comb<T>, k: usize) -> Self {
-            assert!(self.0.is_empty() || self.0[0] == T::zero(), "");
-            let mut f = Poly::one();
-            let mut i = 1;
-            while i < k {
-                i = (i << 1).min(k);
-                let inv_f = f.clone().inv_mod_xk(i - 1);
-                f *= Poly::one() + self.clone_mod_xk(i)
-                    - (f.deriv() * inv_f.clone()).mod_xk(i - 1).integrate(cx);
-                f = f.mod_xk(i);
-            }
-            f.mod_xk(k)
-        }
-        pub fn sqrt_1p_mx_mod_xk(&self, k: usize) -> Self {
-            // sqrt (1 + x f(x)) mod x^k
-            let mut f = self.clone();
-            f = f.mul_xk(1);
-            f += &Self::one();
-
-            let mut res = Self::one();
-            let mut i = 1;
-            let inv2 = T::from(2u32).inv();
-            while i < k {
-                i = (i << 1).min(k);
-                let q = res.inv_mod_xk(i);
-                res = (res + (f.clone_mod_xk(i) * q).mod_xk(i)) * inv2.clone();
-            }
-            res.mod_xk(k)
-        }
-        pub fn taylor_shift(&self, cx: &Comb<T>, k: usize) -> Self {
-            todo!()
-        }
-        // Bostan-Mori, O(L log L log N)
-        pub fn nth_of_frac(numer: Self, denom: Self, mut n: u64) -> T {
-            let mut p = numer.mod_xk(n as usize + 1);
-            let mut q = denom.mod_xk(n as usize + 1);
-            while n > 0 {
-                let mut q_neg = q.clone();
-                for i in (1..q_neg.0.len()).step_by(2) {
-                    q_neg.0[i] = -q_neg.0[i].clone();
-                }
-
-                let u = p * q_neg.clone();
-                let v = q * q_neg;
-                p = u.0.into_iter().skip((n % 2) as usize).step_by(2).collect();
-                q = v.0.into_iter().step_by(2).collect();
-                n /= 2;
-            }
-            p.coeff(0) / q.coeff(0)
-        }
-        // Helps kronecker substitution
-        fn resize_chunks(&mut self, w_src: usize, w_dest: usize) {
-            let mut res = Poly::new(vec![]);
-            if w_src <= w_dest {
-                for r in self.0.chunks(w_src) {
-                    res.0.extend(r.iter().cloned());
-                    res.0.extend((0..w_dest - r.len()).map(|_| T::zero()))
-                }
-            } else {
-                for r in self.0.chunks(w_src) {
-                    res.0.extend(r.iter().cloned().take(w_dest));
-                }
-            }
-            *self = res
-        }
-        // Kinoshita-Li power projection
-        // [x^n] g(x)/(1-y f(x)) mod y^{n+1}
-        pub fn power_proj(f: &Self, g: &Self, n: usize) -> Self {
-            if f.0.is_empty() || g.0.is_empty() || n == 0 {
-                return Poly::zero();
-            };
-            let f0 = f.0[0].clone();
-            if f0 != T::zero() {
-                unimplemented!("f(0) != 0. Do shift yourself")
-            }
-
-            let mut nc = n;
-            let mut w = 2;
-            let mut p = Poly::new(vec![T::zero(); (n + 1) * w]);
-            let mut q = Poly::new(vec![T::zero(); (n + 1) * w]);
-            for i in 0..(n + 1).min(g.0.len()) {
-                p.0[i * w + 0] = g.0[i].clone();
-            }
-            q.0[0 * w + 0] = T::one();
-            for i in 0..(n + 1).min(f.0.len()) {
-                q.0[i * w + 1] = -f.0[i].clone();
-            }
-            while nc > 0 {
-                let w_prev = w;
-                w = w_prev * 2 - 1;
-                p.resize_chunks(w_prev, w);
-                q.resize_chunks(w_prev, w);
-                let mut q_nx = q.clone();
-                for r in q_nx.0.chunks_mut(w).skip(1).step_by(2) {
-                    for x in r {
-                        *x = -x.clone();
-                    }
-                }
-                let u = p * q_nx.clone();
-                let v = q * q_nx;
-                p =
-                    u.0.chunks(w)
-                        .skip(nc % 2)
-                        .step_by(2)
-                        .take(nc / 2 + 1)
-                        .flatten()
-                        .cloned()
-                        .collect();
-                q =
-                    v.0.chunks(w)
-                        .step_by(2)
-                        .take(nc / 2 + 1)
-                        .flatten()
-                        .cloned()
-                        .collect();
-                nc /= 2;
-            }
-            (p.mod_xk(n + 1) * q.mod_xk(n + 1).inv_mod_xk(n + 1)).mod_xk(n + 1)
-        }
-        pub fn comp_inv_mod_xk(&self, cx: &Comb<T>, k: usize) -> Self {
-            assert!(self.0.len() >= 2 && self.0[1] != T::zero());
-            assert!(self.0[0] == T::zero(), "Check algebraic generating series");
-            if k <= 1 {
-                return Poly::zero();
-            } else if k == 2 {
-                return Poly::new(vec![T::zero(), self.0[1].inv()]);
-            }
-            let n = k - 1;
-            let mut p = Poly::power_proj(self, &Poly::one(), n);
-            p.0.resize(n + 1, T::zero());
-
-            for i in 1..n + 1 {
-                p.0[i] *= cx.inv(i);
-            }
-            p.reverse();
-            p *= p.0[0].inv();
-
-            p = (p.ln_mod_xk(cx, n) * (-T::from(n as u32).inv())).exp_mod_xk(cx, n);
-            (p * self.0[1].inv()).mul_xk(1)
-        }
-        // \sum_{i=0...m-d} y^i [y^{d+i}] p(y)/q(x,y) mod x^k
-        fn comp_rec(p: Self, mut q: Self, qw: usize, k: usize, d: usize, m: usize) -> Self {
-            if k == 1 {
-                let u = p * q.inv_mod_xk(m);
-                return Poly::new(u.0[d.min(u.0.len())..m.min(u.0.len())].to_vec());
-            }
-            let qw_next = qw * 2 - 1;
-            q.resize_chunks(qw, qw_next);
-            let mut q_nx = q.clone();
-            for r in q_nx.0.chunks_mut(qw_next).skip(1).step_by(2) {
-                for x in r {
-                    *x = -x.clone();
-                }
-            }
-            let mut v = q * q_nx.clone();
-            v =
-                v.0.chunks(qw_next)
-                    .step_by(2)
-                    .take((k + 1) / 2)
-                    .flatten()
-                    .cloned()
-                    .collect();
-            let e = (d + 1).saturating_sub(qw);
-            let mut b = Self::comp_rec(p, v, qw_next, (k + 1) / 2, e, m);
-            let bw = m - e;
-            let cw = bw + qw - 1;
-            b.resize_chunks(bw, cw * 2);
-            q_nx.resize_chunks(qw_next, cw);
-            b = b * q_nx;
-            b.0.chunks(cw)
-                .take(k)
-                .flat_map(|r| &r[(d - e).min(r.len())..(m - e).min(r.len())])
-                .cloned()
-                .collect()
-        }
-        // Kinoshita-Li composition
-        // [y^{m-1}] Rev_{m}[g](y)/(1-y f(x)) mod x^k
-        pub fn comp_mod_xk(&self, other: &Self, k: usize) -> Self {
-            if k == 0 || self.0.is_empty() {
-                return Poly::zero();
-            }
-            let qw = 2;
-            let mut p = Poly::new(vec![T::zero(); k]);
-            let m = p.0.len().min(k);
-            for i in 0..m {
-                p.0[i] = self.coeff(m - 1 - i);
-            }
-            let mut q = Poly::new(vec![T::zero(); k * qw]);
-            q.0[0 * qw + 0] = T::one();
-            for i in 0..k.min(other.0.len()) {
-                q.0[i * qw + 1] = -other.0[i].clone();
-            }
-            Self::comp_rec(p, q, qw, k, m - 1, m).mod_xk(k)
-        }
-    }
+   }
+   let mut v = q * q_nx.clone();
+   v = v.0.chunks(qw_next).step_by(2).take((k + 1) / 2).flatten().cloned().collect();
+   let e = (d + 1).saturating_sub(qw);
+   let mut b = Self::comp_rec(p, v, qw_next, (k + 1) / 2, e, m);
+   let bw = m - e;
+   let cw = bw + qw - 1;
+   b.resize_chunks(bw, cw * 2);
+   q_nx.resize_chunks(qw_next, cw);
+   b = b * q_nx;
+   b.0.chunks(cw).take(k).flat_map(|r| &r[(d - e).min(r.len())..(m - e).min(r.len())]).cloned().collect()
+  }
+  // Kinoshita-Li composition
+  // [y^{m-1}] Rev_{m}[g](y)/(1-y f(x)) mod x^k
+  pub fn comp_mod_xk(&self, other: &Self, k: usize) -> Self {
+   if k == 0 || self.0.is_empty() {
+    return Poly::zero();
+   }
+   let qw = 2;
+   let mut p = Poly::new(vec![T::zero(); k]);
+   let m = p.0.len().min(k);
+   for i in 0..m {
+    p.0[i] = self.coeff(m - 1 - i);
+   }
+   let mut q = Poly::new(vec![T::zero(); k * qw]);
+   q.0[0 * qw + 0] = T::one();
+   for i in 0..k.min(other.0.len()) {
+    q.0[i * qw + 1] = -other.0[i].clone();
+   }
+   Self::comp_rec(p, q, qw, k, m - 1, m).mod_xk(k)
+  }
+ }
 }
+
+use algebra::{Field, SemiRing};
+use poly::Poly;
+type M = mint_mont::M32<998244353>;
+// type M = mint_mont::M32<1000000007>;
