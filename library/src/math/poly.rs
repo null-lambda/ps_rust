@@ -424,6 +424,7 @@ pub mod conv {
  }
  fn conv_naive<T: SemiRing>(mut lhs: Vec<T>, mut rhs: Vec<T>) -> Vec<T> {
   if lhs.len() == 0 || rhs.len() == 0 {
+   lhs.clear();
    return lhs;
   }
   if lhs.len() > rhs.len() {
@@ -1207,5 +1208,6 @@ pub mod linear_rec {
 
 use poly::Poly;
 
+use crate::algebra::{Field, SemiRing};
 type M = mint_mont::M32<998244353>;
 // type M = mint_mont::M32<1000000007>;
