@@ -630,8 +630,11 @@ pub mod conv {
  }
  impl<const P: u32> Conv for crate::mint_mont::M32<P> {
   fn conv(lhs: Vec<Self>, rhs: Vec<Self>) -> Vec<Self> {
-   // match conv_with_proot_32(lhs, rhs) {
-   match unsafe { simd::conv_with_proot_32_avx2(lhs, rhs) } {
+   #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+   let res = conv_with_proot_32(lhs, rhs);
+   #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+   let res = if std::is_x86_feature_detected!("avx2") { unsafe { simd::conv_with_proot_32_avx2(lhs, rhs) } } else { conv_with_proot_32(lhs, rhs) };
+   match res {
     Ok(res) => res,
     Err((lhs, rhs)) => conv_with_crt_32(lhs, rhs),
    }
@@ -668,9 +671,8 @@ pub mod comb {
 }
 
 pub mod poly {
-    use std::{collections::VecDeque, ops::*};
-
     use crate::{algebra::*, comb::Comb, conv::Conv};
+    use std::{collections::VecDeque, ops::*};
 
     #[derive(Debug, Default, Clone, PartialEq, Eq)]
     pub struct Poly<T>(pub Vec<T>);
@@ -1072,12 +1074,17 @@ pub mod poly {
             p.coeff(0) / q.coeff(0)
         }
         // Helps kronecker substitution
-        fn pad_chunks(&mut self, w_src: usize, w_dest: usize) {
-            assert!(w_src <= w_dest);
+        fn resize_chunks(&mut self, w_src: usize, w_dest: usize) {
             let mut res = Poly::new(vec![]);
-            for r in self.0.chunks(w_src) {
-                res.0.extend(r.iter().cloned());
-                res.0.extend((0..w_dest - r.len()).map(|_| T::zero()))
+            if w_src <= w_dest {
+                for r in self.0.chunks(w_src) {
+                    res.0.extend(r.iter().cloned());
+                    res.0.extend((0..w_dest - r.len()).map(|_| T::zero()))
+                }
+            } else {
+                for r in self.0.chunks(w_src) {
+                    res.0.extend(r.iter().cloned().take(w_dest));
+                }
             }
             *self = res
         }
@@ -1087,37 +1094,33 @@ pub mod poly {
             if f.0.is_empty() || g.0.is_empty() || n == 0 {
                 return Poly::zero();
             };
-
             let f0 = f.0[0].clone();
             if f0 != T::zero() {
                 unimplemented!("f(0) != 0. Do shift yourself")
             }
 
             let mut nc = n;
-            let np = n + 1;
             let mut w = 2;
-            let mut p = Poly::new(vec![T::zero(); np * w]);
-            let mut q = Poly::new(vec![T::zero(); np * w]);
-            for i in 0..np.min(g.0.len()) {
+            let mut p = Poly::new(vec![T::zero(); (n + 1) * w]);
+            let mut q = Poly::new(vec![T::zero(); (n + 1) * w]);
+            for i in 0..(n + 1).min(g.0.len()) {
                 p.0[i * w + 0] = g.0[i].clone();
             }
             q.0[0 * w + 0] = T::one();
-            for i in 0..np.min(f.0.len()) {
+            for i in 0..(n + 1).min(f.0.len()) {
                 q.0[i * w + 1] = -f.0[i].clone();
             }
             while nc > 0 {
                 let w_prev = w;
                 w = w_prev * 2 - 1;
-                p.pad_chunks(w_prev, w);
-                q.pad_chunks(w_prev, w);
-
+                p.resize_chunks(w_prev, w);
+                q.resize_chunks(w_prev, w);
                 let mut q_nx = q.clone();
                 for r in q_nx.0.chunks_mut(w).skip(1).step_by(2) {
                     for x in r {
                         *x = -x.clone();
                     }
                 }
-
                 let u = p * q_nx.clone();
                 let v = q * q_nx;
                 p =
@@ -1147,7 +1150,6 @@ pub mod poly {
             } else if k == 2 {
                 return Poly::new(vec![T::zero(), self.0[1].inv()]);
             }
-
             let n = k - 1;
             let mut p = Poly::power_proj(self, &Poly::one(), n);
             p.0.resize(n + 1, T::zero());
@@ -1161,53 +1163,59 @@ pub mod poly {
             p = (p.ln_mod_xk(cx, n) * (-T::from(n as u32).inv())).exp_mod_xk(cx, n);
             (p * self.0[1].inv()).mul_xk(1)
         }
+        // \sum_{i=0...m-d} y^i [y^{d+i}] p(y)/q(x,y) mod x^k
+        fn comp_rec(p: Self, mut q: Self, qw: usize, k: usize, d: usize, m: usize) -> Self {
+            if k == 1 {
+                let u = p * q.inv_mod_xk(m);
+                return Poly::new(u.0[d.min(u.0.len())..m.min(u.0.len())].to_vec());
+            }
+            let qw_next = qw * 2 - 1;
+            q.resize_chunks(qw, qw_next);
+            let mut q_nx = q.clone();
+            for r in q_nx.0.chunks_mut(qw_next).skip(1).step_by(2) {
+                for x in r {
+                    *x = -x.clone();
+                }
+            }
+            let mut v = q * q_nx.clone();
+            v =
+                v.0.chunks(qw_next)
+                    .step_by(2)
+                    .take((k + 1) / 2)
+                    .flatten()
+                    .cloned()
+                    .collect();
+            let e = (d + 1).saturating_sub(qw);
+            let mut b = Self::comp_rec(p, v, qw_next, (k + 1) / 2, e, m);
+            let bw = m - e;
+            let cw = bw + qw - 1;
+            b.resize_chunks(bw, cw * 2);
+            q_nx.resize_chunks(qw_next, cw);
+            b = b * q_nx;
+            b.0.chunks(cw)
+                .take(k)
+                .flat_map(|r| &r[(d - e).min(r.len())..(m - e).min(r.len())])
+                .cloned()
+                .collect()
+        }
         // Kinoshita-Li composition
+        // [y^{m-1}] Rev_{m}[g](y)/(1-y f(x)) mod x^k
         pub fn comp_mod_xk(&self, other: &Self, k: usize) -> Self {
-            todo!()
+            if k == 0 || self.0.is_empty() {
+                return Poly::zero();
+            }
+            let qw = 2;
+            let mut p = Poly::new(vec![T::zero(); k]);
+            let m = p.0.len().min(k);
+            for i in 0..m {
+                p.0[i] = self.coeff(m - 1 - i);
+            }
+            let mut q = Poly::new(vec![T::zero(); k * qw]);
+            q.0[0 * qw + 0] = T::one();
+            for i in 0..k.min(other.0.len()) {
+                q.0[i * qw + 1] = -other.0[i].clone();
+            }
+            Self::comp_rec(p, q, qw, k, m - 1, m).mod_xk(k)
         }
     }
 }
-
-pub mod linear_rec {
-    use super::poly::Poly;
-    use crate::{
-        algebra::{CommRing, Field},
-        conv::Conv,
-    };
-
-    pub fn berlekamp_massey<T: CommRing>(_seq: &[T]) -> Vec<T> {
-        unimplemented!()
-    }
-
-    pub fn next<T: CommRing>(recurrence: &[T], init: &[T]) -> T {
-        let l = recurrence.len();
-        let n = init.len();
-        assert!(n >= l);
-        let mut value = recurrence[0].clone() * init[n - 1].clone();
-        for i in 1..l {
-            value += recurrence[i].clone() * init[n - 1 - i].clone();
-        }
-        value
-    }
-
-    pub fn nth_by_ntt<T: Conv + Field + From<u32>>(recurrence: &[T], init: &[T], n: u64) -> T {
-        let l = recurrence.len();
-        assert!(l >= 1 && l == init.len());
-
-        let mut q = Vec::with_capacity(l + 1);
-        q.push(T::one());
-        for c in recurrence.iter().cloned() {
-            q.push(-c);
-        }
-        let q = Poly::new(q);
-        let p = (Poly::new(init.to_vec()) * q.clone()).mod_xk(l);
-
-        Poly::nth_of_frac(p, q, n)
-    }
-}
-
-use poly::Poly;
-
-use crate::algebra::{Field, SemiRing};
-type M = mint_mont::M32<998244353>;
-// type M = mint_mont::M32<1000000007>;
