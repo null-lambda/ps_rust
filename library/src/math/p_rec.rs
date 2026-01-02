@@ -196,7 +196,7 @@ mod p_rec {
         todo!()
     }
 
-    pub fn step<M: SemiRing + Field + Copy>(init: &[M], n: M, coeff: &[Vec<M>]) -> M {
+    pub fn step<M: SemiRing + Field + PartialEq + Copy>(init: &[M], n: M, coeff: &[Vec<M>]) -> M {
         debug_assert!(coeff.len() >= 1);
         let r = coeff.len() - 1;
         let d_p1 = coeff[0].len();
@@ -214,10 +214,11 @@ mod p_rec {
         }
         for a in 1..=r {
             for (b, c) in coeff[a].iter().enumerate() {
-                numer -= *c * n_pow[b] * init[r - a];
+                numer += *c * n_pow[b] * init[init.len() - a];
             }
         }
+        assert!(denom != M::zero());
 
-        numer / denom
+        -numer / denom
     }
 }

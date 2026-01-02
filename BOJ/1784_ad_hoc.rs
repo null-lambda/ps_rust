@@ -1,3 +1,39 @@
+use std::io::Write;
+
+mod simple_io {
+    pub struct InputAtOnce {
+        iter: std::str::SplitAsciiWhitespace<'static>,
+    }
+
+    impl InputAtOnce {
+        pub fn token(&mut self) -> &'static str {
+            self.iter.next().unwrap_or_default()
+        }
+
+        pub fn try_value<T: std::str::FromStr>(&mut self) -> Option<T> {
+            self.token().parse().ok()
+        }
+
+        pub fn value<T: std::str::FromStr>(&mut self) -> T
+        where
+            T::Err: std::fmt::Debug,
+        {
+            self.try_value().unwrap()
+        }
+    }
+
+    pub fn stdin() -> InputAtOnce {
+        let buf = std::io::read_to_string(std::io::stdin()).unwrap();
+        let buf = Box::leak(Box::new(buf));
+        let iter = buf.split_ascii_whitespace();
+        InputAtOnce { iter }
+    }
+
+    pub fn stdout() -> std::io::BufWriter<std::io::Stdout> {
+        std::io::BufWriter::new(std::io::stdout())
+    }
+}
+
 fn group_indices_by<'a, T>(
     xs: &'a [T],
     mut pred: impl 'a + FnMut(&T, &T) -> bool,
@@ -57,4 +93,28 @@ fn partition_in_place<T>(xs: &mut [T], mut pred: impl FnMut(&T) -> bool) -> (&mu
         }
     }
     xs.split_at_mut(i)
+}
+
+fn main() {
+    let mut input = simple_io::stdin();
+    let mut output = simple_io::stdout();
+
+    let mut s = input.token().as_bytes().to_vec();
+
+    let mut ans = s.len();
+    {
+        let mut it = group_indices(&s).enumerate();
+        while let Some((k, [i, j])) = it.next() {
+            if j - i >= 2 && k >= 1 {
+                drop(it);
+                s.truncate(i + 1);
+                break;
+            }
+        }
+    }
+
+    s.dedup();
+    ans = ans.min(s.len());
+
+    writeln!(output, "{}", ans).unwrap();
 }
