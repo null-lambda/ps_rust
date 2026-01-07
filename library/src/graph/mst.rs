@@ -73,7 +73,7 @@ pub mod mst {
                 return;
             }
             let (u, v, w) = *mid;
-            if dset.merge(u as usize, v as usize) {
+            if dset.merge(u, v) {
                 yield_mst_edge(u, v, w);
                 *remained_edges -= 1;
             }

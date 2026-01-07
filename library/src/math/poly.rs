@@ -730,7 +730,7 @@ pub mod poly {
   fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self { Self(iter.into_iter().collect()) }
  }
  impl<T: CommRing + From<u32>> Poly<T> {
-  pub fn deriv(&self) -> Self { Self(((1u32..).zip(&self.0[1..])).map(|(i, x)| T::from(i) * x).collect()) }
+  pub fn deriv(&self) -> Self { Self(((1u32..).zip(self.0.iter().skip(1))).map(|(i, x)| T::from(i) * x).collect()) }
  }
  impl<T: CommRing> From<T> for Poly<T> {
   fn from(c: T) -> Self { Self(vec![c]) }
