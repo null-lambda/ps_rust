@@ -996,9 +996,9 @@ pub mod poly {
   }
   pub fn taylor_shift(&self, cx: &Comb<T>, k: usize) -> Self { todo!() }
   // Bostan-Mori, O(L log L log N)
-  pub fn nth_of_frac(numer: Self, denom: Self, mut n: u64) -> T {
-   let mut p = numer.mod_xk(n as usize + 1);
-   let mut q = denom.mod_xk(n as usize + 1);
+  pub fn nth_of_frac(mut p: Self, mut q: Self, mut n: u64) -> T {
+   p = p.mod_xk(n.min(usize::MAX as u64) as usize + 1);
+   q = q.mod_xk(n.min(usize::MAX as u64) as usize + 1);
    while n > 0 {
     let mut q_neg = q.clone();
     for i in (1..q_neg.0.len()).step_by(2) {
@@ -1014,7 +1014,7 @@ pub mod poly {
    p.coeff(0) / q.coeff(0)
   }
   // Helps kronecker substitution
-  fn resize_chunks(&mut self, w_src: usize, w_dest: usize) {
+  pub fn resize_chunks(&mut self, w_src: usize, w_dest: usize) {
    let mut res = Poly::new(vec![]);
    if w_src <= w_dest {
     for r in self.0.chunks(w_src) {
@@ -1028,28 +1028,13 @@ pub mod poly {
    }
    *self = res
   }
-  // Kinoshita-Li power projection
-  // [x^n] g(x)/(1-y f(x)) mod y^{n+1}
-  pub fn power_proj(f: &Self, g: &Self, n: usize) -> Self {
-   if f.0.is_empty() || g.0.is_empty() || n == 0 {
-    return Poly::zero();
-   };
-   let f0 = f.0[0].clone();
-   if f0 != T::zero() {
-    unimplemented!("f(0) != 0. Do shift yourself")
-   }
+  // 2D Bostan-Mori (Kinoshita-Li)
+  // [x^n] p(x,y)/q(x,y) mod y^{n+1} where q(0,0) != 0
+  pub fn nth_of_frac_2d(mut p: Self, mut q: Self, mut w: usize, n: usize) -> Self {
+   assert!(w >= 1);
+   assert!(q.coeff(0) != T::zero());
 
    let mut nc = n;
-   let mut w = 2;
-   let mut p = Poly::new(vec![T::zero(); (n + 1) * w]);
-   let mut q = Poly::new(vec![T::zero(); (n + 1) * w]);
-   for i in 0..(n + 1).min(g.0.len()) {
-    p.0[i * w + 0] = g.0[i].clone();
-   }
-   q.0[0 * w + 0] = T::one();
-   for i in 0..(n + 1).min(f.0.len()) {
-    q.0[i * w + 1] = -f.0[i].clone();
-   }
    while nc > 0 {
     let w_prev = w;
     w = w_prev * 2 - 1;
@@ -1063,11 +1048,31 @@ pub mod poly {
     }
     let u = p * q_nx.clone();
     let v = q * q_nx;
-    p = u.0.chunks(w).skip(nc % 2).step_by(2).take(nc / 2 + 1).flatten().cloned().collect();
-    q = v.0.chunks(w).step_by(2).take(nc / 2 + 1).flatten().cloned().collect();
+    let w_trunc = w.min(n + 1);
+    p = u.0.chunks(w).skip(nc % 2).step_by(2).take(nc / 2 + 1).map(|r| r.iter().cloned().take(w_trunc)).flatten().collect();
+    q = v.0.chunks(w).step_by(2).take(nc / 2 + 1).map(|r| r.iter().cloned().take(w_trunc)).flatten().collect();
+    w = w_trunc;
     nc /= 2;
    }
    (p.mod_xk(n + 1) * q.mod_xk(n + 1).inv_mod_xk(n + 1)).mod_xk(n + 1)
+  }
+  // [x^n] g(x)/(1-y f(x)) mod y^{n+1}
+  pub fn power_proj(f: &Self, g: &Self, n: usize) -> Self {
+   if f.0.is_empty() || g.0.is_empty() || n == 0 {
+    return Poly::zero();
+   };
+
+   let w = 2;
+   let mut p = Poly::new(vec![T::zero(); (n + 1) * w]);
+   let mut q = Poly::new(vec![T::zero(); (n + 1) * w]);
+   for i in 0..(n + 1).min(g.0.len()) {
+    p.0[i * w + 0] = g.0[i].clone();
+   }
+   q.0[0 * w + 0] = T::one();
+   for i in 0..(n + 1).min(f.0.len()) {
+    q.0[i * w + 1] = -f.0[i].clone();
+   }
+   Self::nth_of_frac_2d(p, q, w, n)
   }
   pub fn comp_inv_mod_xk(&self, cx: &Comb<T>, k: usize) -> Self {
    assert!(self.0.len() >= 2 && self.0[1] != T::zero());
@@ -1090,11 +1095,11 @@ pub mod poly {
    p = (p.ln_mod_xk(cx, n) * (-T::from(n as u32).inv())).exp_mod_xk(cx, n);
    (p * self.0[1].inv()).mul_xk(1)
   }
-  // \sum_{i=0...m-d} y^i [y^{d+i}] p(y)/q(x,y) mod x^k
-  fn comp_rec(p: Self, mut q: Self, qw: usize, k: usize, d: usize, m: usize) -> Self {
+  // \sum_{i=0...m1-m0} y^i [y^{m0+i}] p(y)/q(x,y) mod x^k
+  fn comp_rec(p: Self, mut q: Self, qw: usize, k: usize, m0: usize, m1: usize) -> Self {
    if k == 1 {
-    let u = p * q.inv_mod_xk(m);
-    return Poly::new(u.0[d.min(u.0.len())..m.min(u.0.len())].to_vec());
+    let u = p * q.inv_mod_xk(m1);
+    return Poly::new(u.0[m0.min(u.0.len())..m1.min(u.0.len())].to_vec());
    }
    let qw_next = qw * 2 - 1;
    q.resize_chunks(qw, qw_next);
@@ -1106,14 +1111,14 @@ pub mod poly {
    }
    let mut v = q * q_nx.clone();
    v = v.0.chunks(qw_next).step_by(2).take((k + 1) / 2).flatten().cloned().collect();
-   let e = (d + 1).saturating_sub(qw);
-   let mut b = Self::comp_rec(p, v, qw_next, (k + 1) / 2, e, m);
-   let bw = m - e;
+   let e = (m0 + 1).saturating_sub(qw);
+   let mut b = Self::comp_rec(p, v, qw_next, (k + 1) / 2, e, m1);
+   let bw = m1 - e;
    let cw = bw + qw - 1;
    b.resize_chunks(bw, cw * 2);
    q_nx.resize_chunks(qw_next, cw);
    b = b * q_nx;
-   b.0.chunks(cw).take(k).flat_map(|r| &r[(d - e).min(r.len())..(m - e).min(r.len())]).cloned().collect()
+   b.0.chunks(cw).take(k).flat_map(|r| &r[(m0 - e).min(r.len())..(m1 - e).min(r.len())]).cloned().collect()
   }
   // Kinoshita-Li composition
   // [y^{m-1}] Rev_{m}[g](y)/(1-y f(x)) mod x^k
