@@ -1,5 +1,5 @@
 pub mod set_power_series {
-    use crate::algebra::CommRing;
+    use crate::algebra::{CommRing, Field};
     use std::ops::*;
 
     pub trait CommGroup: Default + AddAssign + SubAssign + Clone {}
@@ -97,4 +97,56 @@ pub mod set_power_series {
         }
         unsafe { inner(xs, ys) }
     }
+    fn subset_inv_inner<T: CommRing>(xs: &[T], inv_xs0: T) -> Vec<T> {
+        assert!(xs.len().is_power_of_two());
+        let n = xs.len().ilog2() as usize;
+
+        let mut res = vec![T::zero(); 1 << n];
+        res[0] = inv_xs0;
+        let mut i = 1;
+        while i < 1 << n {
+            let mut ext = subset_conv(&xs[i..i * 2], &subset_conv(&res[..i], &res[..i]));
+            ext.iter_mut().for_each(|x| *x = -x.clone());
+            res[i..i * 2].clone_from_slice(&ext);
+            i *= 2;
+        }
+        res
+    }
+    pub fn subset_inv1<T: CommRing>(xs: &[T]) -> Vec<T> {
+        assert!(xs[0] == T::one());
+        subset_inv_inner(xs, T::one())
+    }
+    pub fn subset_inv<T: Field>(xs: &[T]) -> Vec<T> {
+        assert!(xs[0] != T::zero());
+        subset_inv_inner(xs, xs[0].inv())
+    }
+    pub fn subset_exp<T: CommRing>(xs: &[T]) -> Vec<T> {
+        assert!(xs.len().is_power_of_two());
+        assert!(xs[0] == T::zero());
+        let n = xs.len().ilog2() as usize;
+
+        let mut res = vec![T::one(); 1 << n];
+        let mut i = 1;
+        while i < 1 << n {
+            let ext = subset_conv(&xs[i..i * 2], &res[..i]);
+            res[i..i * 2].clone_from_slice(&ext);
+            i *= 2;
+        }
+        res
+    }
+    pub fn subset_ln<T: CommRing>(xs: &[T]) -> Vec<T> {
+        assert!(xs.len().is_power_of_two());
+        assert!(xs[0] == T::one());
+        let n = xs.len().ilog2() as usize;
+
+        let mut res = vec![T::zero(); 1 << n];
+        let mut i = 1;
+        while i < 1 << n {
+            let ext = subset_conv(&xs[i..i * 2], &subset_inv1(&xs[..i]));
+            res[i..i * 2].clone_from_slice(&ext);
+            i *= 2;
+        }
+        res
+    }
+    // todo: power projection, subset comp inv, subset comp
 }
