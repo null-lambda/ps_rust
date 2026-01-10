@@ -69,6 +69,7 @@ pub mod set_power_series {
         #[target_feature(enable = "avx", enable = "avx2")]
         unsafe fn inner<T: CommRing>(xs: &[T], ys: &[T]) -> Vec<T> {
             assert!(xs.len().is_power_of_two());
+            assert_eq!(xs.len(), ys.len());
             let n = xs.len().ilog2() as usize;
 
             let mut xs = chop(&xs);
@@ -103,12 +104,12 @@ pub mod set_power_series {
 
         let mut res = vec![T::zero(); 1 << n];
         res[0] = inv_xs0;
-        let mut i = 1;
-        while i < 1 << n {
-            let mut ext = subset_conv(&xs[i..i * 2], &subset_conv(&res[..i], &res[..i]));
+        let mut w = 1;
+        while w < 1 << n {
+            let mut ext = subset_conv(&xs[w..w * 2], &subset_conv(&res[..w], &res[..w]));
             ext.iter_mut().for_each(|x| *x = -x.clone());
-            res[i..i * 2].clone_from_slice(&ext);
-            i *= 2;
+            res[w..w * 2].clone_from_slice(&ext);
+            w *= 2;
         }
         res
     }
@@ -126,11 +127,11 @@ pub mod set_power_series {
         let n = xs.len().ilog2() as usize;
 
         let mut res = vec![T::one(); 1 << n];
-        let mut i = 1;
-        while i < 1 << n {
-            let ext = subset_conv(&xs[i..i * 2], &res[..i]);
-            res[i..i * 2].clone_from_slice(&ext);
-            i *= 2;
+        let mut w = 1;
+        while w < 1 << n {
+            let ext = subset_conv(&xs[w..w * 2], &res[..w]);
+            res[w..w * 2].clone_from_slice(&ext);
+            w *= 2;
         }
         res
     }
@@ -140,13 +141,52 @@ pub mod set_power_series {
         let n = xs.len().ilog2() as usize;
 
         let mut res = vec![T::zero(); 1 << n];
-        let mut i = 1;
-        while i < 1 << n {
-            let ext = subset_conv(&xs[i..i * 2], &subset_inv1(&xs[..i]));
-            res[i..i * 2].clone_from_slice(&ext);
-            i *= 2;
+        let mut w = 1;
+        while w < 1 << n {
+            let ext = subset_conv(&xs[w..w * 2], &subset_inv1(&xs[..w]));
+            res[w..w * 2].clone_from_slice(&ext);
+            w *= 2;
         }
         res
     }
-    // todo: power projection, subset comp inv, subset comp
+    pub fn subset_comp<T: CommRing + From<u32> + std::fmt::Debug>(f: &[T], xs: &[T]) -> Vec<T> {
+        assert!(xs.len().is_power_of_two());
+        let n = xs.len().ilog2() as usize;
+
+        if f.is_empty() {
+            return vec![T::zero(); 1 << n];
+        }
+
+        // $(d^k f) \circ xs$
+        let mut layers = vec![T::zero(); (n + 1) * 1];
+        {
+            let mut dk_f = f.to_vec();
+            for k in 0..n + 1 {
+                if k >= 1 {
+                    dk_f = dk_f.into_iter().skip(1).collect();
+                    for i in 0..dk_f.len() {
+                        dk_f[i] *= T::from(i as u32 + 1);
+                    }
+                }
+                let mut pow = T::one();
+                for i in 0..dk_f.len() {
+                    layers[k] += dk_f[i].clone() * pow.clone();
+                    pow *= &xs[0];
+                }
+            }
+        }
+        for b in 1..=n {
+            let w = 1 << b - 1;
+            let prev = layers;
+            layers = vec![T::zero(); (n - b + 1) * (w * 2)];
+            for c in 0..=n - b {
+                let p0 = &prev[c * w..][..w];
+                let p1 = &prev[c * w + w..][..w];
+                layers[c * w * 2..][..w].clone_from_slice(p0);
+                layers[c * w * 2 + w..][..w].clone_from_slice(&subset_conv(p1, &xs[w..w * 2]));
+            }
+        }
+        layers
+    }
+    // todo: power projection
 }
