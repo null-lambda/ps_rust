@@ -1,7 +1,6 @@
 pub mod sps {
     // Variants of R[x_1, ..., x_n]/(q(x_1), ..., q(x_n)),
     // including Set Power Series (q(x) = x^2)
-
     use crate::algebra::{CommRing, Field};
     use std::ops::*;
 
