@@ -978,8 +978,8 @@ pub mod poly {
    }
    f.mod_xk(k)
   }
+  // sqrt (1 + x f(x)) mod x^k
   pub fn sqrt_1p_mx_mod_xk(&self, k: usize) -> Self {
-   // sqrt (1 + x f(x)) mod x^k
    let mut f = self.clone();
    f = f.mul_xk(1);
    f += &Self::one();
@@ -994,7 +994,23 @@ pub mod poly {
    }
    res.mod_xk(k)
   }
-  pub fn taylor_shift(&self, cx: &Comb<T>, k: usize) -> Self { todo!() }
+  // f(x+a)
+  pub fn taylor_shift(&self, cx: &Comb<T>, a: T) -> Self {
+   let k = self.0.len();
+   let p: Self = (self.0.iter().cloned().zip(&cx.fc[..k])).map(|(x, y)| x * y).rev().collect();
+   let mut q = Poly::new(cx.ifc[..k].to_vec());
+   let mut pow = T::one();
+   for i in 0..k {
+    q.0[i] *= &pow;
+    pow *= &a;
+   }
+   let mut r = (p * q).mod_xk(k);
+   r.reverse();
+   for (x, y) in r.0.iter_mut().zip(&cx.ifc[..k]) {
+    *x *= y;
+   }
+   r
+  }
   // Bostan-Mori, O(L log L log N)
   pub fn nth_of_frac(mut p: Self, mut q: Self, mut n: u64) -> T {
    p = p.mod_xk(n.min(usize::MAX as u64) as usize + 1);
