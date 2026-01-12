@@ -68,6 +68,34 @@ pub mod sps {
         res
     }
     pub fn conv<T: CommRing>(f: &[T], g: &[T]) -> Vec<T> {
+        if f.len() <= 1 << 12 {
+            conv_naive(f, g)
+        } else {
+            conv_with_ranked_zeta(f, g)
+        }
+    }
+    pub fn conv_naive<T: CommRing>(fs: &[T], gs: &[T]) -> Vec<T> {
+        // O(3^N)
+        assert!(fs.len().is_power_of_two());
+        assert_eq!(fs.len(), gs.len());
+        let n = fs.len().ilog2() as usize;
+        let mut hs = vec![T::default(); 1 << n];
+        for a in 0..1 << n {
+            let a_comp = ((1 << n) - 1) ^ a;
+            let mut b = a_comp;
+            loop {
+                hs[a ^ b] += fs[a].clone() * gs[b].clone();
+
+                if b == 0 {
+                    break;
+                }
+                b = (b - 1) & a_comp;
+            }
+        }
+        hs
+    }
+    pub fn conv_with_ranked_zeta<T: CommRing>(f: &[T], g: &[T]) -> Vec<T> {
+        // O(N^2 2^N)
         #[target_feature(enable = "avx", enable = "avx2")]
         unsafe fn inner<T: CommRing>(f: &[T], g: &[T]) -> Vec<T> {
             assert!(f.len().is_power_of_two());
@@ -104,16 +132,24 @@ pub mod sps {
         assert!(f.len().is_power_of_two());
         let n = f.len().ilog2() as usize;
 
-        let mut res = vec![T::zero(); 1 << n];
-        res[0] = inv_f0;
+        let mut inv = vec![T::zero(); 1 << n];
+        inv[0] = inv_f0;
+        let mut neg_inv_sq = vec![T::zero(); 1 << n - 1];
+        neg_inv_sq[0] = -inv[0].clone() * inv[0].clone();
+
         let mut w = 1;
         while w < 1 << n {
-            let mut ext = conv(&f[w..w * 2], &conv(&res[..w], &res[..w]));
-            ext.iter_mut().for_each(|x| *x = -x.clone());
-            res[w..w * 2].clone_from_slice(&ext);
+            if w >= 2 {
+                let cross = conv(&inv[..w / 2], &inv[w / 2..w]);
+                for (x, y) in neg_inv_sq[w / 2..w].iter_mut().zip(cross) {
+                    *x = -y.clone() - y;
+                }
+            }
+            let ext = conv(&f[w..w * 2], &neg_inv_sq[..w]);
+            inv[w..w * 2].clone_from_slice(&ext);
             w *= 2;
         }
-        res
+        inv
     }
     pub fn inv1<T: CommRing>(f: &[T]) -> Vec<T> {
         assert!(f[0] == T::one());
