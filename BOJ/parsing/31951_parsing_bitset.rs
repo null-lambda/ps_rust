@@ -1,3 +1,86 @@
+use std::io::Write;
+
+use buffered_io::BufReadExt;
+
+use crate::bitset::BitVec;
+
+mod buffered_io {
+    use std::io::{BufRead, BufReader, BufWriter, Stdin, Stdout};
+    use std::str::FromStr;
+
+    pub trait BufReadExt: BufRead {
+        fn line(&mut self) -> String {
+            let mut buf = String::new();
+            self.read_line(&mut buf).unwrap();
+            buf
+        }
+
+        fn skip_line(&mut self) {
+            self.line();
+        }
+
+        fn token(&mut self) -> String {
+            loop {
+                let buf = self.fill_buf().unwrap();
+                if buf.is_empty() {
+                    return String::new();
+                }
+
+                let mut i = 0;
+                while i < buf.len() && buf[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+
+                let should_break = i < buf.len();
+                self.consume(i);
+                if should_break {
+                    break;
+                }
+            }
+
+            let mut res = vec![];
+            loop {
+                let buf = self.fill_buf().unwrap();
+                if buf.is_empty() {
+                    break;
+                }
+
+                let mut i = 0;
+                while i < buf.len() && !buf[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+                res.extend_from_slice(&buf[..i]);
+
+                let should_break = i < buf.len();
+                self.consume(i);
+                if should_break {
+                    break;
+                }
+            }
+
+            String::from_utf8(res).unwrap()
+        }
+
+        fn try_value<T: FromStr>(&mut self) -> Option<T> {
+            self.token().parse().ok()
+        }
+
+        fn value<T: FromStr>(&mut self) -> T {
+            self.try_value().unwrap()
+        }
+    }
+
+    impl<R: BufRead> BufReadExt for R {}
+
+    pub fn stdin() -> BufReader<Stdin> {
+        BufReader::new(std::io::stdin())
+    }
+
+    pub fn stdout() -> BufWriter<Stdout> {
+        BufWriter::new(std::io::stdout())
+    }
+}
+
 #[macro_use]
 pub mod parser {
     use std::{cell::RefCell, mem, rc::Rc};
@@ -339,8 +422,8 @@ pub mod parser {
         // macro to quick define a 0-ary parser
         #[macro_export]
         macro_rules! parser_fn {
-            (let $name:ident: $T:ty = $body:expr) => {
-                fn $name<'a, S: U8Stream>(s: S) -> ParseResult<S, $T> {
+            ($name:ident: $T:ty = $body:expr) => {
+                fn $name<'a>(s: &'a [u8]) -> ParseResult<&'a [u8], $T> {
                     $body.run(s)
                 }
             };
@@ -389,4 +472,292 @@ pub mod parser {
             Some((result * sign, s))
         }
     }
+}
+
+pub mod bitset {
+    // TODO: avx2
+    // TODO: forward
+    // TODO: empiricial test
+
+    use std::ops::*;
+
+    pub type B = u64;
+    pub const BW: usize = 64;
+
+    #[derive(Clone)]
+    pub struct BitVec(pub Vec<B>);
+
+    impl BitVec {
+        pub fn zero_bits(n: usize) -> Self {
+            Self(vec![0; n.div_ceil(BW)])
+        }
+
+        pub fn one_bits(n: usize) -> Self {
+            let mut res = Self(vec![!0; n.div_ceil(BW)]);
+            if n % BW != 0 {
+                res.0[n / BW] = (1 << n % BW) - 1;
+            }
+            res
+        }
+
+        pub fn bitlen(&self) -> usize {
+            self.0.len() * BW
+        }
+
+        pub fn bit_trunc(&mut self, n: usize) {
+            let q = n.div_ceil(BW);
+            if q > self.0.len() {
+                return;
+            }
+            self.0.truncate(q);
+            if n % BW != 0 {
+                self.0[q - 1] &= (1 << n % BW) - 1;
+            }
+        }
+
+        pub fn get(&self, i: usize) -> bool {
+            let (b, s) = (i / BW, i % BW);
+            (self.0[b] >> s) & 1 != 0
+        }
+        #[inline]
+        pub fn set(&mut self, i: usize, value: bool) {
+            if !value {
+                self.0[i / BW] &= !(1 << i % BW);
+            } else {
+                self.0[i / BW] |= 1 << i % BW;
+            }
+        }
+        #[inline]
+        pub fn toggle(&mut self, i: usize) {
+            self.0[i / BW] ^= 1 << i % BW;
+        }
+
+        pub fn count_ones(&self) -> u32 {
+            self.0.iter().map(|&m| m.count_ones()).sum()
+        }
+    }
+
+    impl Neg for BitVec {
+        type Output = Self;
+        fn neg(mut self) -> Self::Output {
+            for x in &mut self.0 {
+                *x = !*x;
+            }
+            self
+        }
+    }
+    impl BitAndAssign<&'_ Self> for BitVec {
+        fn bitand_assign(&mut self, rhs: &'_ Self) {
+            assert_eq!(self.0.len(), rhs.0.len());
+            for (x, y) in self.0.iter_mut().zip(&rhs.0) {
+                x.bitand_assign(y);
+            }
+        }
+    }
+    impl BitOrAssign<&'_ Self> for BitVec {
+        fn bitor_assign(&mut self, rhs: &'_ Self) {
+            assert_eq!(self.0.len(), rhs.0.len());
+            for (x, y) in self.0.iter_mut().zip(&rhs.0) {
+                x.bitor_assign(y);
+            }
+        }
+    }
+    impl BitXorAssign<&'_ Self> for BitVec {
+        fn bitxor_assign(&mut self, rhs: &'_ Self) {
+            assert_eq!(self.0.len(), rhs.0.len());
+            for (x, y) in self.0.iter_mut().zip(&rhs.0) {
+                x.bitxor_assign(y);
+            }
+        }
+    }
+    impl ShlAssign<usize> for BitVec {
+        fn shl_assign(&mut self, shift: usize) {
+            if shift == 0 {
+                return;
+            }
+
+            let n = self.bitlen();
+            if shift >= n {
+                self.0.fill(0);
+                return;
+            }
+
+            let q = self.0.len();
+            let q_shift = shift / BW;
+            let r_shift = shift % BW;
+
+            if r_shift == 0 {
+                for n in (q_shift..q).rev() {
+                    self.0[n] = self.0[n - q_shift];
+                }
+            } else {
+                let sub_shift = (BW - r_shift) as u32;
+                for n in ((q_shift + 1)..q).rev() {
+                    self.0[n] =
+                        (self.0[n - q_shift] << r_shift) | (self.0[n - q_shift - 1] >> sub_shift);
+                }
+                self.0[q_shift] = self.0[0] << r_shift;
+            }
+            self.0[..q_shift].fill(0);
+        }
+    }
+    impl ShrAssign<usize> for BitVec {
+        fn shr_assign(&mut self, shift: usize) {
+            if shift == 0 {
+                return;
+            }
+
+            let nbits = self.bitlen();
+            if shift >= nbits {
+                self.0.fill(0);
+                return;
+            }
+
+            let q = self.0.len();
+            let q_shift = shift / BW;
+            let r_shift = shift % BW;
+
+            if r_shift == 0 {
+                for n in 0..q - q_shift {
+                    self.0[n] = self.0[n + q_shift];
+                }
+            } else {
+                let sub_shift = (BW - r_shift) as u32;
+                for n in 0..q - q_shift - 1 {
+                    self.0[n] =
+                        (self.0[n + q_shift] >> r_shift) | (self.0[n + q_shift + 1] << sub_shift);
+                }
+                self.0[q - q_shift - 1] = self.0[q - 1] >> r_shift;
+            }
+            self.0[q.saturating_sub(q_shift)..q].fill(0);
+        }
+    }
+
+    impl std::fmt::Debug for BitVec {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "BitVec(")?;
+            for i in 0..self.0.len() {
+                for j in 0..BW {
+                    write!(f, "{}", ((self.0[i] >> j) & 1) as u8)?;
+                }
+            }
+            write!(f, ")")?;
+            Ok(())
+        }
+    }
+}
+
+fn parse_expr(s: &[u8]) -> Option<u8> {
+    use parser::*;
+
+    parser_fn!(atom: u8 = single.map_option(|x| match x {
+        b'0' => Some(0),
+        b'1' => Some(0b1111),
+        b'x' => Some(0b1010),
+        b'y' => Some(0b1100),
+        _ => None
+    }));
+    parser_fn!(parens: u8 = between(lit_single(b'('), expr, lit_single(b')')));
+    parser_fn!(term0: u8 = atom.or(parens));
+    parser_fn!(term1: u8 = unary_prefix(lit_single(b'!').map(|_| |x| x ^ 0b1111), term0));
+    parser_fn!(term2: u8 = binary_lassoc(lit_single(b'=').map(|_| |x, y| x ^ y ^ 0b1111), term1));
+    parser_fn!(term3: u8 = binary_lassoc(lit_single(b'&').map(|_| |x, y| x & y), term2));
+    parser_fn!(term4: u8 = binary_lassoc(lit_single(b'|').map(|_| |x, y| x | y), term3));
+    parser_fn!(term5: u8 = binary_lassoc(lit_single(b'^').map(|_| |x, y| x ^ y), term4));
+    parser_fn!(expr: u8 = term5);
+
+    Some((expr, eof).run(s)?.0.0)
+}
+
+fn main() {
+    let mut input = buffered_io::stdin();
+    let mut output = buffered_io::stdout();
+
+    let n: usize = input.value();
+    let k: usize = input.value();
+    const KB: usize = 10;
+
+    let mut marker = vec![[[false; 4]; KB]; KB];
+    let mut ops = vec![];
+    for _ in 0..n {
+        let a = input.value::<usize>() - 1;
+        let b = input.value::<usize>() - 1;
+        let s = parse_expr(input.token().as_bytes()).unwrap();
+        let r = input.token() == "1";
+        for i in 0..4 {
+            if !marker[a][b][i] && s & (1 << i) != 0 {
+                marker[a][b][i] = true;
+                ops.push((a, b, i, r));
+            }
+        }
+    }
+    let base = input.token() == "1";
+
+    let mut rel = BitVec::zero_bits(1 << 2 * KB);
+    if base {
+        for u in 0..1 << k {
+            for v in 0..1 << k {
+                rel.set((u << k) | v, true);
+            }
+        }
+    }
+    for (a, b, i, r) in ops.into_iter().rev() {
+        let i0 = ((i >> 0) & 1) << a;
+        let i1 = ((i >> 1) & 1) << b;
+        for u in 0..1 << k {
+            if u & (1 << a) != i0 {
+                continue;
+            }
+            for v in 0..1 << k {
+                if v & (1 << b) != i1 {
+                    continue;
+                }
+                rel.set((u << k) | v, r);
+            }
+        }
+    }
+
+    let mut trel = BitVec::zero_bits(1 << 2 * KB);
+    for u in 0..1 << k {
+        for v in 0..1 << k {
+            trel.set((u << k) | v, rel.get((v << k) | u));
+        }
+    }
+
+    let mut loops = 0;
+    let mut asym = 0;
+    let mut no_trans = 0;
+    for u in 0..1 << k {
+        if rel.get((u << k) | u) {
+            loops += 1;
+        }
+    }
+
+    for (p, q) in rel.0.iter().zip(&trel.0) {
+        asym += (p & q).count_ones();
+    }
+
+    for u in 0..1 << k {
+        for w in 0..1 << k {
+            if rel.get((u << k) | w) {
+                continue;
+            }
+            if k <= 6 {
+                for v in 0..1 << k {
+                    if rel.get((u << k) | v) && trel.get((w << k) | v) {
+                        no_trans += 1;
+                    }
+                }
+            } else {
+                for (p, q) in rel.0[u << k - 6..][..1 << k - 6]
+                    .iter()
+                    .zip(&trel.0[w << k - 6..][..1 << k - 6])
+                {
+                    no_trans += (p & q).count_ones();
+                }
+            }
+        }
+    }
+
+    writeln!(output, "{} {} {}", loops, asym, no_trans).unwrap();
 }
